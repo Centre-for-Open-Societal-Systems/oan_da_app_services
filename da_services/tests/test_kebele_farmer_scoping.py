@@ -60,6 +60,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 			user="da@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da_id},
+			unrestricted=False,
 		)
 
 	def tearDown(self):
@@ -113,6 +114,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 			user="da-no-assign@test.com",
 			roles={"Development Agent"},
 			da_ids={"DA-NO-ASSIGN"},
+			unrestricted=False,
 		)
 
 		farmers, total = svc.list_farmers(ctx_no_assignment)
@@ -126,6 +128,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 			user="supervisor@test.com",
 			roles={"Supervisor"},
 			woreda_scopes={self.woreda},
+			unrestricted=False,
 		)
 
 		farmers, total = svc.list_farmers(ctx_supervisor)

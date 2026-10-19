@@ -29,12 +29,14 @@ class TestScheduleBlocking(IntegrationTestCase):
 			user="da-crop@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da_crop},
+			unrestricted=False,
 		)
 
 		self.ctx_livestock = ScopeContext(
 			user="da-livestock@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da_livestock},
+			unrestricted=False,
 		)
 
 	def tearDown(self):
@@ -309,6 +311,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			user="da-other@test.com",
 			roles={"Development Agent"},
 			da_ids={"DA-OTHER-CROP"},
+			unrestricted=False,
 		)
 
 		with self.assertRaises(frappe.ValidationError) as cm:

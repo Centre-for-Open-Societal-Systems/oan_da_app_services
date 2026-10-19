@@ -42,6 +42,7 @@ class TestFarmerLinks(IntegrationTestCase):
 			user=self.supervisor_user,
 			roles={"Supervisor"},
 			woreda_scopes={self.woreda},
+			unrestricted=False,
 		)
 
 	def tearDown(self):
@@ -144,6 +145,7 @@ class TestFarmerLinks(IntegrationTestCase):
 			user=self.supervisor_user,
 			roles={"Supervisor"},
 			woreda_scopes={"ET03-W02"},  # Different Woreda
+			unrestricted=False,
 		)
 
 		with self.assertRaises(frappe.PermissionError) as cm:

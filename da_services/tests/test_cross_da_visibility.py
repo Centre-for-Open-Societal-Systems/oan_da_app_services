@@ -55,18 +55,21 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			user="da1@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da1},
+			unrestricted=False,
 		)
 
 		self.ctx_da2 = ScopeContext(
 			user="da2@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da2},
+			unrestricted=False,
 		)
 
 		self.ctx_da3 = ScopeContext(
 			user="da3@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da3},
+			unrestricted=False,
 		)
 
 	def tearDown(self):
@@ -194,6 +197,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			user="da-no-assign@test.com",
 			roles={"Development Agent"},
 			da_ids={"DA-NO-ASSIGN"},
+			unrestricted=False,
 		)
 
 		visits, total = svc.list_visits(ctx=ctx_no_assignment)

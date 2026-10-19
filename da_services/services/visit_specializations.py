@@ -70,7 +70,8 @@ def _get_da_specialization(da_id: str) -> str | None:
 	try:
 		client = get_client()
 		da_profile = client.get_da(da_id)
-		return da_profile.specialisation
+		# Normalize the specialization from DA Registry
+		return normalize_specialization(da_profile.specialisation)
 	except DANotFound:
 		frappe.log_error(
 			title="DA Not Found",
@@ -98,14 +99,19 @@ def normalize_specialization(spec: str) -> str:
 		return SPEC_OTHER
 
 	# Normalize to title case and trim
+	spec_upper = spec.strip().upper()
 	spec_normalized = spec.strip().title()
+
+	# Handle abbreviations first (before title case)
+	if spec_upper == "NRM":
+		return SPEC_NATURAL_RESOURCES
 
 	# Map variations to standard values
 	if spec_normalized in ("Crop Production", "Crop", "Crops"):
 		return SPEC_CROP_PRODUCTION
 	elif spec_normalized in ("Livestock", "Animal Husbandry"):
 		return SPEC_LIVESTOCK
-	elif spec_normalized in ("Natural Resources", "Natural Resource", "NRM"):
+	elif spec_normalized in ("Natural Resources", "Natural Resource"):
 		return SPEC_NATURAL_RESOURCES
 	elif spec_normalized in ("Services", "Service"):
 		return SPEC_SERVICES

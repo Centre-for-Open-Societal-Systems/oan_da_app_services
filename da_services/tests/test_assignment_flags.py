@@ -57,6 +57,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			user="da@test.com",
 			roles={"Development Agent"},
 			da_ids={self.da_id},
+			unrestricted=False,
 		)
 
 	def tearDown(self):
