@@ -63,7 +63,7 @@ def _user(email: str, roles: list[str] | None = None) -> str:
 		u.email = email
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	if roles:
 		existing = set(frappe.get_roles(email))
 		for role in roles:
@@ -79,7 +79,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = kw.pop("effective_from", today())
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 

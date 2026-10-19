@@ -9,6 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
 from da_services.services import visit_specializations as spec_svc
+from da_services.tests.fixtures import create_administrative_areas
 from da_services.utils.permissions import ScopeContext
 
 
@@ -17,6 +18,9 @@ class TestAssignmentFlags(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
+		# Create administrative areas first
+		create_administrative_areas()
+
 		self.da_id = "DA-TEST-FLAGS-001"
 		self.farmer_id = "FARMER-FLAGS-001"
 		self.kebele = "ET04-W01-K03"
@@ -38,19 +42,19 @@ class TestAssignmentFlags(IntegrationTestCase):
 				"effective_date": "2026-10-01",
 				"woreda": self.woreda,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create farmer
 		frappe.get_doc(
 			{
 				"doctype": "DA Farmer Reference",
 				"farmer_id": self.farmer_id,
-				"full_name": "Test Farmer",
+				"farmer_name": "Test Farmer",
 				"kebele": self.kebele,
 				"woreda": self.woreda,
-				"state": "Verified",
+				"registration_state": "APPROVED",
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create DA context
 		self.ctx = ScopeContext(
@@ -88,7 +92,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 
@@ -109,7 +113,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Livestock"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 
@@ -129,7 +133,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production", "Livestock"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 
@@ -146,12 +150,13 @@ class TestAssignmentFlags(IntegrationTestCase):
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
-				"physical_status": "Completed",  # Terminal status
+				"physical_status": "Physical Visit Complete",  # Terminal status for testing
 				"scheduled_at": datetime.now() - timedelta(days=1),
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		visit.flags.ignore_validate = True  # Bypass status validation for testing
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 
@@ -166,12 +171,13 @@ class TestAssignmentFlags(IntegrationTestCase):
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
-				"physical_status": "Missed",  # Terminal status
+				"physical_status": "Missed",  # Terminal status for testing
 				"scheduled_at": datetime.now() - timedelta(days=1),
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Livestock"])
-		visit.insert(ignore_permissions=True)
+		visit.flags.ignore_validate = True  # Bypass status validation for testing
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 
@@ -190,12 +196,12 @@ class TestAssignmentFlags(IntegrationTestCase):
 				{
 					"doctype": "DA Farmer Reference",
 					"farmer_id": fid,
-					"full_name": f"Farmer {i}",
+					"farmer_name": f"Farmer {i}",
 					"kebele": self.kebele,
 					"woreda": self.woreda,
-					"state": "Verified",
+					"registration_state": "APPROVED",
 				}
-			).insert(ignore_permissions=True)
+			).insert(ignore_permissions=True, ignore_links=True)
 
 			# Create visit for each
 			visit = frappe.get_doc(
@@ -209,7 +215,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 				}
 			)
 			spec_svc.set_visit_specializations(visit, ["Crop Production"])
-			visit.insert(ignore_permissions=True)
+			visit.insert(ignore_permissions=True, ignore_links=True)
 
 		# List farmers - should use batch query
 		farmers, _ = svc.list_farmers(self.ctx)
@@ -237,7 +243,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 				}
 			)
 			spec_svc.set_visit_specializations(visit, ["Crop Production"])
-			visit.insert(ignore_permissions=True)
+			visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 
@@ -258,7 +264,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Livestock", "Crop Production"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		farmers, _ = svc.list_farmers(self.ctx)
 

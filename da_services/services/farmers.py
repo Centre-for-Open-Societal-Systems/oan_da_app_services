@@ -7,6 +7,7 @@ with DA Visit history, pending actions (DA-39), and permission checks.
 import frappe
 from frappe import _
 
+from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.mapper import (
 	farmer_to_reference_dict,
@@ -168,6 +169,16 @@ def list_farmers(
 			filters["woreda"] = woreda
 
 	if kebele:
+		# A requested Kebele may only narrow the caller's scope.
+		# Replacing the DA's assigned-Kebele filter would let them read another Kebele.
+		assigned = filters.get("kebele")
+		if (
+			not ctx.unrestricted
+			and ctx.has_any_role(C.ROLE_DA)
+			and isinstance(assigned, tuple)
+			and kebele not in assigned[1]
+		):
+			return [], 0
 		filters["kebele"] = kebele
 	if state:
 		filters["registration_state"] = state
@@ -570,8 +581,8 @@ def _get_farmer_assigned_specializations_batch(farmer_ids: list[str]) -> dict[st
 	if not farmer_ids:
 		return {}
 
-	# Active visit statuses that block scheduling
-	active_statuses = ["Planned", "In progress", "Physical Visit Complete"]
+	# Only open visits mark a specialization as assigned. A completed visit does not.
+	active_statuses = list(OPEN_STATES)
 
 	# Query active visits and their specializations
 	results = frappe.db.sql(

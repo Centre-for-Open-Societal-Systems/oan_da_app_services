@@ -14,6 +14,7 @@ from werkzeug.wrappers import Request
 from da_services.api.v1 import visits as api
 from da_services.services import constants as C
 from da_services.services import visits as svc
+from da_services.tests.fixtures import ensure_kebele_assignment
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "vapi-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -28,7 +29,7 @@ def _user(email, roles):
 		u.email = email
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	u = frappe.get_doc("User", email)
 	for r in roles:
 		if r not in frappe.get_roles(email):
@@ -70,7 +71,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = today()
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 
@@ -87,6 +88,7 @@ class TestVisitAPI(IntegrationTestCase):
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
 		_grant(COMMS, C.ROLE_COMMS)
+		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		frappe.local.request = None  # API helpers then read kwargs, as the form would send them
 
@@ -94,6 +96,7 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
 			frappe.db.delete(dt)
+		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _plan(self, **kw):
@@ -164,7 +167,7 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.set_user(DA1)
 		self._plan(date=today(), time="08:00")
 		self._plan(date=today(), time="14:00", farmer_id="FRM-000102")
-		self._plan(date=add_days(today(), 2))
+		self._plan(date=add_days(today(), 2), farmer_id="FRM-000103")
 		out = api.list_visits(date=today())
 		self.assertEqual(out["meta"]["total"], 2)
 		self.assertEqual([r["farmer_id"] for r in out["data"]], ["FRM-000101", "FRM-000102"])
@@ -179,7 +182,7 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.set_user(DA1)
 		mine = self._plan()["data"]
 		frappe.set_user("Administrator")
-		self._plan(da_id="DA-000003")
+		self._plan(da_id="DA-000003", farmer_id="FRM-000199")
 		frappe.set_user(EXEC)
 		out = api.list_visits()
 		self.assertEqual([r["da_id"] for r in out["data"]], ["DA-000001"])
@@ -196,7 +199,7 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertTrue(tl[0]["when"])
 		# a Supervisor-planned visit names the Supervisor as the planner
 		frappe.set_user(SUP)
-		v2 = self._plan(da_id="DA-000001")["data"]
+		v2 = self._plan(da_id="DA-000001", farmer_id="FRM-000102")["data"]
 		self.assertEqual(api.get_visit(v2["name"])["data"]["timeline"][0]["by"], SUP)
 
 	# -- reschedule / cancel ---------------------------------------------------------
@@ -222,7 +225,7 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.set_user(DA1)
 		v = self._plan()["data"]
 		frappe.set_user("Administrator")
-		other = self._plan(da_id="DA-000003")["data"]
+		other = self._plan(da_id="DA-000003", farmer_id="FRM-000199")["data"]
 		frappe.db.commit()  # nosemgrep: an API error below rolls back uncommitted rows
 		frappe.set_user(DA1)
 		self.assertEqual(api.cancel(other["name"], reason="not mine")["status"], "error")

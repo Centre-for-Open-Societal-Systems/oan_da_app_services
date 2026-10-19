@@ -29,7 +29,7 @@ def _user(email: str) -> str:
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
 		u.enabled = 1
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	return email
 
 
@@ -40,7 +40,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = kw.pop("effective_from", today())
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 

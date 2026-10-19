@@ -9,6 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
+from da_services.tests.fixtures import create_administrative_areas
 from da_services.utils.permissions import ScopeContext
 
 
@@ -17,6 +18,9 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
+		# Create administrative areas first
+		create_administrative_areas()
+
 		self.kebele_a = "ET04-W01-K05"
 		self.kebele_b = "ET04-W01-K06"
 		self.woreda = "ET04-W01"
@@ -48,7 +52,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 					"effective_date": "2026-10-01",
 					"woreda": self.woreda,
 				}
-			).insert(ignore_permissions=True)
+			).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create contexts
 		self.ctx_da1 = ScopeContext(
@@ -92,7 +96,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit1, ["Crop Production"])
-		visit1.insert(ignore_permissions=True)
+		visit1.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA1 lists visits
 		visits, total = svc.list_visits(ctx=self.ctx_da1)
@@ -110,13 +114,14 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
-				"physical_status": "Completed",
+				"physical_status": "Physical Visit Complete",
 				"scheduled_at": datetime.now() - timedelta(days=1),
 				"kebele": self.kebele_a,
 			}
 		)
 		spec_svc.set_visit_specializations(visit1, ["Crop Production"])
-		visit1.insert(ignore_permissions=True)
+		visit1.flags.ignore_validate = True
+		visit1.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA2 (same Kebele) lists visits
 		visits, _total = svc.list_visits(ctx=self.ctx_da2)
@@ -139,7 +144,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit1, ["Crop Production"])
-		visit1.insert(ignore_permissions=True)
+		visit1.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA3 (Kebele B) lists visits
 		visits, _total = svc.list_visits(ctx=self.ctx_da3)
@@ -162,7 +167,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit1, ["Crop Production"])
-		visit1.insert(ignore_permissions=True)
+		visit1.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA2 creates visit
 		visit2 = frappe.get_doc(
@@ -177,7 +182,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit2, ["Livestock"])
-		visit2.insert(ignore_permissions=True)
+		visit2.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA1 should see both visits
 		visits1, _ = svc.list_visits(ctx=self.ctx_da1)
@@ -221,7 +226,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit1, ["Crop Production"])
-		visit1.insert(ignore_permissions=True)
+		visit1.insert(ignore_permissions=True, ignore_links=True)
 
 		visit2 = frappe.get_doc(
 			{
@@ -236,7 +241,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit2, ["Livestock"])
-		visit2.insert(ignore_permissions=True)
+		visit2.insert(ignore_permissions=True, ignore_links=True)
 
 		# Supervisor context
 		ctx_supervisor = ScopeContext(
@@ -268,7 +273,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit1, ["Crop Production"])
-		visit1.insert(ignore_permissions=True)
+		visit1.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA2 (same Kebele) filters by this farmer
 		visits, _ = svc.list_visits(ctx=self.ctx_da2, farmer_id=self.farmer_kebele_a)
@@ -291,13 +296,14 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
-				"physical_status": "Completed",
+				"physical_status": "Physical Visit Complete",
 				"scheduled_at": datetime.now() - timedelta(days=1),
 				"kebele": self.kebele_a,
 			}
 		)
 		spec_svc.set_visit_specializations(visit_completed, ["Crop Production"])
-		visit_completed.insert(ignore_permissions=True)
+		visit_completed.flags.ignore_validate = True
+		visit_completed.insert(ignore_permissions=True, ignore_links=True)
 
 		visit_planned = frappe.get_doc(
 			{
@@ -311,7 +317,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit_planned, ["Livestock"])
-		visit_planned.insert(ignore_permissions=True)
+		visit_planned.insert(ignore_permissions=True, ignore_links=True)
 
 		# DA2 filters for completed visits
 		completed_visits, _ = svc.list_visits(ctx=self.ctx_da2, status="Completed")

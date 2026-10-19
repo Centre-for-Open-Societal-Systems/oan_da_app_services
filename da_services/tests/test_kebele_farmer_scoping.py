@@ -6,6 +6,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
+from da_services.tests.fixtures import create_administrative_areas
 from da_services.utils.permissions import ScopeContext
 
 
@@ -14,6 +15,9 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
+		# Create administrative areas first
+		create_administrative_areas()
+
 		self.da_id = "DA-TEST-SCOPE-001"
 		self.da_id_other = "DA-TEST-SCOPE-002"
 		self.kebele_a = "ET04-W01-K03"
@@ -35,7 +39,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 				"effective_date": "2026-10-01",
 				"woreda": self.woreda,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create DA Kebele Assignment for Kebele B (different DA)
 		frappe.get_doc(
@@ -48,7 +52,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 				"effective_date": "2026-10-01",
 				"woreda": self.woreda,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create farmers in different Kebeles
 		self.farmer_kebele_a_1 = self._create_farmer("FARMER-A-001", self.kebele_a)
@@ -76,12 +80,12 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 			{
 				"doctype": "DA Farmer Reference",
 				"farmer_id": farmer_id,
-				"full_name": f"Test Farmer {farmer_id}",
+				"farmer_name": f"Test Farmer {farmer_id}",
 				"kebele": kebele,
 				"woreda": self.woreda,
-				"state": "Verified",
+				"registration_state": "APPROVED",
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 		return farmer_id
 
 	def test_da_sees_farmers_in_assigned_kebele(self):

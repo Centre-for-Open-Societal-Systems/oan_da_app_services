@@ -44,7 +44,7 @@ def _user(email, roles):
 		u.email = email
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	u = frappe.get_doc("User", email)
 	for r in roles:
 		if r not in frappe.get_roles(email):
@@ -59,7 +59,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = today()
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 
@@ -107,7 +107,7 @@ class TestAssignments(IntegrationTestCase):
 			doc.code, doc.level, doc.parent_area, doc.name_en = code, level, parent, name_en
 			if code == "ET04-W01-K03":
 				doc.boundary_geojson = json.dumps(BOX)
-			doc.insert(ignore_permissions=True)
+			doc.insert(ignore_permissions=True, ignore_links=True)
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
@@ -132,7 +132,7 @@ class TestAssignments(IntegrationTestCase):
 		bad = frappe.new_doc("DA Administrative Area")
 		bad.code, bad.level, bad.parent_area, bad.name_en = "ET04-W01-K99", "Kebele", "ET04", "wrong parent"
 		with self.assertRaises(frappe.ValidationError):
-			bad.insert(ignore_permissions=True)
+			bad.insert(ignore_permissions=True, ignore_links=True)
 		tree = frappe.get_doc("DA Administrative Area", "ET04-W01-K03").ancestors()
 		self.assertEqual(
 			tree, {"region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01", "kebele": "ET04-W01-K03"}
@@ -315,7 +315,7 @@ class TestAssignments(IntegrationTestCase):
 			}
 		)
 		with self.assertRaises(frappe.DuplicateEntryError):
-			doc.insert(ignore_permissions=True)
+			doc.insert(ignore_permissions=True, ignore_links=True)
 		self.assertEqual(
 			frappe.db.get_value("DA Kebele Assignment", {"client_op_id": "kas-db-1"}, "name"), a["name"]
 		)

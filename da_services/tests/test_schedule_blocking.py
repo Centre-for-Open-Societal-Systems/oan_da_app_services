@@ -102,21 +102,30 @@ class TestScheduleBlocking(IntegrationTestCase):
 		self.assertIsNotNone(result)
 		self.assertEqual(result["visit_type"], "Livestock Survey")
 
-	def test_completed_visit_does_not_block(self):
-		"""Test completed visit does not block new visit."""
-		# Create and complete a visit
+	def _insert_terminal_visit(self, status: str):
+		"""Insert a visit already in a terminal status.
+
+		A new visit may only start as Planned, Confirmed, or In progress.
+		These cases need the stored status itself, so validation is skipped.
+		"""
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
-				"physical_status": "Completed",  # Terminal status
+				"physical_status": status,
 				"scheduled_at": datetime.now() - timedelta(days=1),
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		visit.flags.ignore_validate = True
+		visit.insert(ignore_permissions=True, ignore_links=True)
+		return visit
+
+	def test_completed_visit_does_not_block(self):
+		"""Test completed visit does not block new visit."""
+		self._insert_terminal_visit("Physical Visit Complete")
 
 		# Should be able to schedule new Crop visit
 		result = svc.plan_visit(
@@ -131,18 +140,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 	def test_missed_visit_does_not_block(self):
 		"""Test missed visit does not block new visit."""
-		visit = frappe.get_doc(
-			{
-				"doctype": "DA Visit",
-				"da_id": self.da_crop,
-				"farmer_id": self.farmer_id,
-				"visit_type": "Crop Survey",
-				"physical_status": "Missed",
-				"scheduled_at": datetime.now() - timedelta(days=1),
-			}
-		)
-		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		self._insert_terminal_visit("Missed")
 
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
@@ -156,18 +154,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 	def test_cancelled_visit_does_not_block(self):
 		"""Test cancelled visit does not block."""
-		visit = frappe.get_doc(
-			{
-				"doctype": "DA Visit",
-				"da_id": self.da_crop,
-				"farmer_id": self.farmer_id,
-				"visit_type": "Crop Survey",
-				"physical_status": "Cancelled",
-				"scheduled_at": datetime.now() - timedelta(days=1),
-			}
-		)
-		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		self._insert_terminal_visit("Cancelled")
 
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
@@ -192,7 +179,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
@@ -205,29 +192,19 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 		self.assertIn("Crop Production", str(cm.exception))
 
-	def test_physical_visit_complete_blocks(self):
-		"""Test physical visit complete status blocks."""
-		visit = frappe.get_doc(
-			{
-				"doctype": "DA Visit",
-				"da_id": self.da_crop,
-				"farmer_id": self.farmer_id,
-				"visit_type": "Crop Survey",
-				"physical_status": "Physical Visit Complete",
-				"scheduled_at": datetime.now(),
-			}
-		)
-		spec_svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+	def test_physical_visit_complete_does_not_block(self):
+		"""A finished physical visit does not block the next survey."""
+		self._insert_terminal_visit("Physical Visit Complete")
 
-		with self.assertRaises(frappe.ValidationError):
-			svc.plan_visit(
-				farmer_id=self.farmer_id,
-				scheduled_at=datetime.now() + timedelta(days=1),
-				visit_type="Crop Survey",
-				da_id=self.da_crop,
-				ctx=self.ctx_crop,
-			)
+		result = svc.plan_visit(
+			farmer_id=self.farmer_id,
+			scheduled_at=datetime.now() + timedelta(days=1),
+			visit_type="Crop Survey",
+			da_id=self.da_crop,
+			ctx=self.ctx_crop,
+		)
+
+		self.assertIsNotNone(result)
 
 	def test_combined_visit_blocks_all_specializations(self):
 		"""Test combined visit blocks all its specializations."""
@@ -243,7 +220,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production", "Livestock"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		# Try Crop visit (should fail)
 		with self.assertRaises(frappe.ValidationError) as cm:

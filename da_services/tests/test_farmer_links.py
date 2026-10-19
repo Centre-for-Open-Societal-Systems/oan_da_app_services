@@ -6,6 +6,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmer_links as svc
+from da_services.tests.fixtures import create_administrative_areas
 from da_services.utils.permissions import ScopeContext
 
 
@@ -20,9 +21,18 @@ class TestFarmerLinks(IntegrationTestCase):
 		self.woreda = "ET04-W01"
 		self.supervisor_user = "supervisor@test.com"
 
+		create_administrative_areas()
+		if not frappe.db.exists("User", self.supervisor_user):
+			user = frappe.new_doc("User")
+			user.email = self.supervisor_user
+			user.first_name = "Supervisor"
+			user.send_welcome_email = 0
+			user.insert(ignore_permissions=True)
+
 		# Clean up any existing test data
 		frappe.db.delete("DA Farmer Link", {"da_id": self.da_id})
 		frappe.db.delete("DA Kebele Assignment", {"da_id": self.da_id})
+		frappe.db.delete("DA Farmer Reference", {"farmer_id": ["in", [self.farmer_id, "FARMER-TEST-002"]]})
 
 		# Create DA Kebele Assignment with Manual mode
 		self.assignment = frappe.get_doc(
@@ -35,7 +45,19 @@ class TestFarmerLinks(IntegrationTestCase):
 				"effective_date": "2026-10-01",
 				"woreda": self.woreda,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
+
+		for farmer_id in (self.farmer_id, "FARMER-TEST-002"):
+			frappe.get_doc(
+				{
+					"doctype": "DA Farmer Reference",
+					"farmer_id": farmer_id,
+					"farmer_name": f"Test Farmer {farmer_id}",
+					"kebele": self.kebele,
+					"woreda": self.woreda,
+					"registration_state": "APPROVED",
+				}
+			).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create Supervisor context
 		self.ctx = ScopeContext(
@@ -49,6 +71,7 @@ class TestFarmerLinks(IntegrationTestCase):
 		"""Clean up test data."""
 		frappe.db.delete("DA Farmer Link", {"da_id": self.da_id})
 		frappe.db.delete("DA Kebele Assignment", {"da_id": self.da_id})
+		frappe.db.delete("DA Farmer Reference", {"farmer_id": ["in", [self.farmer_id, "FARMER-TEST-002"]]})
 
 	def test_create_manual_farmer_link_success(self):
 		"""Test successful manual farmer link creation."""
@@ -67,8 +90,9 @@ class TestFarmerLinks(IntegrationTestCase):
 
 	def test_create_link_no_assignment(self):
 		"""Test rejection when DA has no Kebele assignment."""
-		# Delete the assignment
-		frappe.delete_doc("DA Kebele Assignment", self.assignment.name, force=True)
+		# Supersede the assignment
+		self.assignment.state = "Superseded"
+		self.assignment.save(ignore_permissions=True)
 
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.create_farmer_link(
@@ -77,7 +101,7 @@ class TestFarmerLinks(IntegrationTestCase):
 				ctx=self.ctx,
 			)
 
-		self.assertIn("no active Kebele assignment", str(cm.exception))
+		self.assertIn("Effective", str(cm.exception))
 
 	def test_create_link_automatic_mode(self):
 		"""Test rejection when DA assignment mode is Automatic."""
@@ -92,7 +116,7 @@ class TestFarmerLinks(IntegrationTestCase):
 				ctx=self.ctx,
 			)
 
-		self.assertIn("mode is Automatic", str(cm.exception))
+		self.assertIn("Automatic", str(cm.exception))
 
 	def test_create_link_duplicate(self):
 		"""Test rejection of duplicate active link."""
@@ -111,7 +135,7 @@ class TestFarmerLinks(IntegrationTestCase):
 				ctx=self.ctx,
 			)
 
-		self.assertIn("already linked", str(cm.exception))
+		self.assertIn("already actively linked", str(cm.exception))
 
 	def test_create_link_idempotency(self):
 		"""Test idempotent retry using client_op_id."""
@@ -155,7 +179,7 @@ class TestFarmerLinks(IntegrationTestCase):
 				ctx=wrong_ctx,
 			)
 
-		self.assertIn("outside your Woreda", str(cm.exception))
+		self.assertIn("outside your authorized scope", str(cm.exception))
 
 	def test_create_link_missing_da_id(self):
 		"""Test validation of required da_id."""

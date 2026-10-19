@@ -8,6 +8,11 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import now_datetime, today
 
 from da_services.services import constants as C
+from da_services.tests.fixtures import (
+	create_administrative_areas,
+	ensure_administrative_area,
+	ensure_kebele_assignment,
+)
 from da_services.utils.permissions import get_scope_context
 
 # Test users
@@ -23,7 +28,7 @@ def _user(email, roles):
 		u.email = email
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	u = frappe.get_doc("User", email)
 	for r in roles:
 		if r not in frappe.get_roles(email):
@@ -39,7 +44,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = today()
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 
@@ -97,8 +102,12 @@ class TestFarmersAPI(IntegrationTestCase):
 			"Kebele 03",
 		)
 
-		# Link farmer1 to DA1
+		# Link farmer1 to DA1, and post the DA to that farmer's Kebele.
+		# Listing and edit rights for a DA follow the Effective Kebele assignment.
 		self._create_farmer_link(DA1, "DA-000001", self.farmer1_id, "Automatic")
+		create_administrative_areas()
+		ensure_administrative_area("Bako 01", "Kebele", "ET04-W01", "Bako 01")
+		ensure_kebele_assignment("DA-000001", "Bako 01")
 
 		# Create some visits for farmer1
 		self._create_visit("DA-000001", self.farmer1_id, "Physical Visit Complete")
@@ -106,6 +115,11 @@ class TestFarmersAPI(IntegrationTestCase):
 		# Create task for farmer1
 		self._create_task("DA-000001", self.farmer1_id)
 
+		frappe.db.commit()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
 		frappe.db.commit()
 
 	def _create_farmer_reference(self, farmer_id, reg_id, name, region, woreda, kebele):
@@ -128,7 +142,7 @@ class TestFarmersAPI(IntegrationTestCase):
 				"land_ownership_type": "OWNER",
 			}
 		)
-		doc.insert(ignore_permissions=True)
+		doc.insert(ignore_permissions=True, ignore_links=True)
 		return doc
 
 	def _create_farmer_link(self, user, da_id, farmer_id, link_type):
@@ -142,7 +156,7 @@ class TestFarmersAPI(IntegrationTestCase):
 				"is_active": 1,
 			}
 		)
-		doc.insert(ignore_permissions=True)
+		doc.insert(ignore_permissions=True, ignore_links=True)
 		return doc
 
 	def _create_visit(self, da_id, farmer_id, status):
@@ -163,7 +177,7 @@ class TestFarmersAPI(IntegrationTestCase):
 				"kebele": "Bako 01",
 			}
 		)
-		doc.insert(ignore_permissions=True)
+		doc.insert(ignore_permissions=True, ignore_links=True)
 
 		# If target status is "Physical Visit Complete", follow state machine: Planned → In progress → Complete
 		if status == "Physical Visit Complete":
@@ -200,7 +214,7 @@ class TestFarmersAPI(IntegrationTestCase):
 				"woreda": "ET04-W01",
 			}
 		)
-		doc.insert(ignore_permissions=True)
+		doc.insert(ignore_permissions=True, ignore_links=True)
 		return doc
 
 	def test_list_farmers_as_da(self):
@@ -430,7 +444,3 @@ class TestFarmersAPI(IntegrationTestCase):
 		result = list_farmers()
 		# Should see farmer1 and farmer2 (both in ET04-W01)
 		self.assertGreaterEqual(len(result["data"]["farmers"]), 2)
-
-	def tearDown(self):
-		"""Clean up."""
-		frappe.set_user("Administrator")

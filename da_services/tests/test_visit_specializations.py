@@ -165,7 +165,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 			}
 		)
 		svc.set_visit_specializations(visit, ["Crop Production"])
-		visit.insert(ignore_permissions=True)
+		visit.insert(ignore_permissions=True, ignore_links=True)
 
 		# Retrieve specializations
 		specs = svc.get_visit_specializations(visit.name)

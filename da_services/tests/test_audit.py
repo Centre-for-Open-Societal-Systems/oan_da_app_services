@@ -18,7 +18,7 @@ def _user(email):
 		u.email = email
 		u.first_name = "Audit Sup"
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	return email
 
 

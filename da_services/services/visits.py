@@ -31,8 +31,9 @@ from da_services.utils.permissions import ScopeContext, require_roles
 WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 
-# Active visit statuses that block scheduling (DA-211 Phase 5)
-BLOCKING_STATUSES = ["Planned", "In progress", "Physical Visit Complete"]
+# Open visits block another visit that covers the same specialization.
+# Completed, missed, and cancelled visits do not.
+BLOCKING_STATUSES = list(OPEN_STATES)
 
 FIELDS = [
 	"name",

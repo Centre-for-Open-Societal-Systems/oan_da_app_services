@@ -20,7 +20,7 @@ def _user(email, roles):
 		u.email = email
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	u = frappe.get_doc("User", email)
 	for r in roles:
 		if r not in frappe.get_roles(email):
@@ -35,7 +35,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = today()
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 
@@ -57,11 +57,13 @@ class TestDashboard(IntegrationTestCase):
 		admin = _ctx("Administrator")
 		t = today()
 		# 3 visits in range: 2 complete, 1 still open today; 1 outside range (40 days ago)
+		# Finish earlier visits before leaving one open. An open Crop Survey
+		# blocks another Crop Survey for the same farmer.
 		for op, when, complete in (
+			("d-v4", f"{add_days(t, -40)} 09:00:00", True),
 			("d-v1", f"{add_days(t, -10)} 09:00:00", True),
 			("d-v2", f"{add_days(t, -3)} 11:00:00", True),
 			("d-v3", f"{t} 23:30:00", False),  # late enough to stay "Upcoming" during a test run
-			("d-v4", f"{add_days(t, -40)} 09:00:00", True),
 		):
 			v = visits.plan_visit(
 				farmer_id="FRM-1", scheduled_at=when, da_id="DA-000001", client_op_id=op, ctx=admin
