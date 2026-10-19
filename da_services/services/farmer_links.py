@@ -51,10 +51,18 @@ def create_farmer_link(
 	ctx = ctx or require_roles(*WRITE_ROLES)
 
 	if not ctx.unrestricted and not ctx.has_any_role(*WRITE_ROLES):
-		frappe.throw(_("Only a Supervisor or Administrator can manually assign farmers."), frappe.PermissionError)
+		frappe.throw(
+			_(
+				"Permission denied. Only users with 'Supervisor' or 'Administrator' role can manually assign farmers to DAs."
+			),
+			frappe.PermissionError,
+		)
 
 	if not da_id or not farmer_id:
-		frappe.throw(_("da_id and farmer_id are required."), frappe.ValidationError)
+		frappe.throw(
+			_("Missing required fields. Both 'da_id' and 'farmer_id' must be provided."),
+			frappe.ValidationError,
+		)
 
 	da_id = da_id.strip()
 	farmer_id = farmer_id.strip()
@@ -87,15 +95,35 @@ def create_farmer_link(
 	)
 
 	if not assignment:
-		frappe.throw(
-			_("DA {0} has no active Kebele assignment.").format(da_id),
-			frappe.ValidationError,
+		# Check if DA exists in any state
+		any_assignment = frappe.db.get_value(
+			"DA Kebele Assignment",
+			{"da_id": da_id},
+			["da_id", "state", "kebele"],
+			as_dict=True,
 		)
+
+		if any_assignment:
+			frappe.throw(
+				_(
+					"DA {0} has Kebele assignment in state '{1}', but 'Effective' state is required for manual farmer linking."
+				).format(da_id, any_assignment["state"]),
+				frappe.ValidationError,
+			)
+		else:
+			frappe.throw(
+				_("DA {0} not found. Please ensure the DA exists with an active Kebele assignment.").format(
+					da_id
+				),
+				frappe.ValidationError,
+			)
 
 	# Validate assignment mode is Manual
 	if assignment["mode"] != "Manual":
 		frappe.throw(
-			_("DA {0} assignment mode is Automatic - manual farmer links are not required.").format(da_id),
+			_(
+				"DA {0} has assignment mode '{1}'. Manual farmer linking is only allowed for DAs with mode 'Manual'. Automatic mode DAs use Kebele-based scoping."
+			).format(da_id, assignment["mode"]),
 			frappe.ValidationError,
 		)
 
@@ -103,26 +131,45 @@ def create_farmer_link(
 	if not ctx.unrestricted:
 		if not ctx.covers(woreda=assignment["woreda"]):
 			frappe.throw(
-				_("Kebele {0} is outside your Woreda scope.").format(assignment["kebele"]),
+				_(
+					"Permission denied. DA {0} is assigned to Kebele {1} in Woreda {2}, which is outside your authorized scope."
+				).format(da_id, assignment["kebele"], assignment["woreda"]),
 				frappe.PermissionError,
 			)
 
-	# Get farmer details from Farmer Registry
-	# TODO: Replace with actual Farmer Registry API call when available
-	# For now, we'll validate farmer exists by checking if they appear in any context
-	farmer_exists = frappe.db.exists("DA Farmer Link", {"farmer_id": farmer_id})
-	if not farmer_exists:
-		# Try to get from external registry (mock for now)
-		# In production, this would call: farmer_registry.get_farmer(farmer_id)
-		# Simplified: assume farmer exists if they have any prior links
-		pass  # Accept any farmer_id for now until Farmer Registry integration exists
+	# Get farmer details from DA Farmer Reference
+	farmer = frappe.db.get_value(
+		"DA Farmer Reference",
+		{"farmer_id": farmer_id},
+		["farmer_id", "kebele", "registration_state"],
+		as_dict=True,
+	)
 
-	# Validate farmer is in the same Kebele as DA's assignment
-	# TODO: This validation requires Farmer Registry API to get farmer's Kebele
-	# For now, we'll trust the Supervisor's assignment
-	# In production: farmer_kebele = farmer_registry.get_farmer(farmer_id).kebele
-	# if farmer_kebele != assignment["kebele"]:
-	#     frappe.throw(_("Farmer {0} is in Kebele {1}, but DA is assigned to Kebele {2}."))
+	if not farmer:
+		frappe.throw(
+			_(
+				"Farmer {0} not found. Please verify the farmer ID is correct and the farmer exists in the Farmer Reference."
+			).format(farmer_id),
+			frappe.ValidationError,
+		)
+
+	# Validate farmer is in APPROVED state
+	if farmer["registration_state"] != "APPROVED":
+		frappe.throw(
+			_(
+				"Farmer {0} has registration state '{1}'. Only farmers with 'APPROVED' state can be linked to DAs."
+			).format(farmer_id, farmer["registration_state"]),
+			frappe.ValidationError,
+		)
+
+	# Validate farmer is in the same Kebele as DA's assignment (DA-211 Phase 2 requirement)
+	if farmer["kebele"] != assignment["kebele"]:
+		frappe.throw(
+			_(
+				"Kebele mismatch: Farmer {0} is in Kebele '{1}', but DA {2} is assigned to Kebele '{3}'. Manual linking requires both DA and Farmer to be in the same Kebele."
+			).format(farmer_id, farmer["kebele"], da_id, assignment["kebele"]),
+			frappe.ValidationError,
+		)
 
 	# Check for duplicate active link
 	duplicate = frappe.db.exists(
@@ -132,7 +179,9 @@ def create_farmer_link(
 
 	if duplicate:
 		frappe.throw(
-			_("Farmer {0} is already linked to DA {1}.").format(farmer_id, da_id),
+			_(
+				"Duplicate link: Farmer {0} is already actively linked to DA {1}. Use the existing link or deactivate it before creating a new one."
+			).format(farmer_id, da_id),
 			frappe.ValidationError,
 		)
 
