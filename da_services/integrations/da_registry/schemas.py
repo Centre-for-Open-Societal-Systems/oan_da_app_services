@@ -32,6 +32,9 @@ class DAReference:
 	specialisation: str | None = None
 	joined_at: str | None = None  # ISO date the DA joined service
 	farmer_count: int | None = None  # farmers linked to the DA's Kebele(s)
+	email: str | None = None
+	language: str | None = None  # en / am / om / ti
+	photo_url: str | None = None
 	source_version: str | None = None  # registry record version, for optimistic checks
 	fetched_at: datetime | None = None
 
@@ -55,6 +58,16 @@ class LifecycleOutcome:
 	approver: str
 	reference: str  # our Lifecycle Transition name, for idempotency and audit
 	target_kebele: str | None = None  # Transfer only
+
+
+@dataclass(frozen=True)
+class ProfileUpdate:
+	"""A Supervisor-approved change to a DA's own profile fields (FSD 3.7)."""
+
+	da_id: str
+	changes: dict  # registry field name -> new value
+	approver: str
+	reference: str  # our DA Profile Change Request name, for idempotency and audit
 
 
 @dataclass(frozen=True)

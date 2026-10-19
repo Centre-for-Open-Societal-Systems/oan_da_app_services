@@ -190,6 +190,16 @@ approval before they reach the registry (FSD 3.7).
 
 ---
 
+**Implemented (DA self-service profile):** `DA Profile Change Request` (`DA-PCR-{YYYY}-{#######}`)
+with `section` Contact / Qualifications, `changes` `{field: {from, to}}`, `status`
+Pending / Approved / Rejected / Changes requested / Applied / Cancelled, `region` / `woreda`
+copied from the DA's registry posting for scope, `approver`, `decided_at`, `decision_note`,
+`registry_sync_state` / `registry_reference` / `registry_error`, `applied_at`, unique
+`client_op_id`. Editable: mobile, email, language, photo, education tier, specialisation;
+Fayda-verified identity fields are locked. Approval is applied with
+`DARegistryClient.push_profile_update` (mock until the registry contract lands). The
+approval states follow 6.1 but are enforced in the controller, not a Frappe Workflow.
+
 ### 4.5 DA Farmer Change Request *(UI)*
 
 Farmer profile → "Request update". The Farmer Registry record is read-only here; the DA

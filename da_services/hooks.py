@@ -147,6 +147,7 @@ permission_query_conditions = {
 	"DA Visit": "da_services.permissions.da_visit_query_conditions",
 	"DA Notification": "da_services.permissions.da_notification_query_conditions",
 	"DA Kebele Assignment": "da_services.permissions.da_kebele_assignment_query_conditions",
+	"DA Profile Change Request": "da_services.permissions.da_profile_change_request_query_conditions",
 	"DA Farmer Link": "da_services.permissions.da_farmer_link_query_conditions",
 	"DA Farmer Reference": "da_services.permissions.da_farmer_reference_query_conditions",
 }
@@ -157,6 +158,7 @@ has_permission = {
 	"DA Visit": "da_services.permissions.has_da_visit_permission",
 	"DA Notification": "da_services.permissions.has_da_notification_permission",
 	"DA Kebele Assignment": "da_services.permissions.has_da_kebele_assignment_permission",
+	"DA Profile Change Request": "da_services.permissions.has_da_profile_change_request_permission",
 	"DA Farmer Link": "da_services.permissions.has_da_farmer_link_permission",
 	"DA Farmer Reference": "da_services.permissions.has_da_farmer_reference_permission",
 }

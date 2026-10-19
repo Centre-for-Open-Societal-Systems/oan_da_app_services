@@ -28,6 +28,9 @@ def to_da_reference(payload: dict) -> DAReference:
 		specialisation=payload.get("specialisation"),
 		joined_at=payload.get("joined_at") or payload.get("joined_on"),
 		farmer_count=int(payload["farmer_count"]) if payload.get("farmer_count") is not None else None,
+		email=payload.get("email"),
+		language=payload.get("language"),
+		photo_url=payload.get("photo_url"),
 		source_version=str(payload["version"]) if payload.get("version") is not None else None,
 		fetched_at=datetime.now(UTC),
 	)

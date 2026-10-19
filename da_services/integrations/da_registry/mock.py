@@ -13,7 +13,7 @@ from da_services.services import constants as C
 
 from .client import DANotFound, DARegistryClient
 from .mapper import to_da_reference
-from .schemas import DAReference, IntegrationResult, LifecycleOutcome
+from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
 
 FIXTURE_DAS: dict[str, dict] = {
 	"DA-000001": {
@@ -121,6 +121,23 @@ class MockDARegistryClient(DARegistryClient):
 				continue
 			rows.append(to_da_reference(payload))
 		return sorted(rows, key=lambda r: r.da_id)
+
+	def push_profile_update(self, update: ProfileUpdate) -> IntegrationResult:
+		if update.reference in self._outcomes:
+			return self._outcomes[update.reference]  # idempotent replay
+		payload = self._records.get(update.da_id)
+		if not payload:
+			raise DANotFound(update.da_id)
+		payload.update(update.changes)
+		payload["version"] = int(payload.get("version") or 0) + 1
+		result = IntegrationResult(
+			accepted=True,
+			external_reference=f"MOCK-{update.reference}",
+			message="accepted by mock registry",
+			raw={"applied_at": datetime.now(UTC).isoformat(), "version": payload["version"]},
+		)
+		self._outcomes[update.reference] = result
+		return result
 
 	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
 		if outcome.reference in self._outcomes:

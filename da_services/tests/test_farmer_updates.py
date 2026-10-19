@@ -90,6 +90,11 @@ class TestFarmerUpdates(IntegrationTestCase):
 	def tearDown(self):
 		"""Clean up after each test."""
 		frappe.set_user("Administrator")
+		# The tests assign a plain dict to frappe.form_dict, which replaces Frappe's module-level
+		# LocalProxy for the rest of the process; later tests then break (File.validate reads
+		# frappe.form_dict.file_size as an attribute). Restore the proxy and an empty form.
+		frappe.form_dict = frappe.local("form_dict")
+		frappe.local.form_dict = frappe._dict()
 
 		# Clean up integration events
 		frappe.db.delete("DA Integration Event", {"event_type": "Farmer Update"})

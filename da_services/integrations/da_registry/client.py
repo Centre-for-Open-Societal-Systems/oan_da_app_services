@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 
 import frappe
 
-from .schemas import DAReference, IntegrationResult, LifecycleOutcome
+from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
 
 
 class DARegistryError(Exception):
@@ -64,6 +64,13 @@ class DARegistryClient(ABC):
 		"""
 
 	@abstractmethod
+	def push_profile_update(self, update: ProfileUpdate) -> IntegrationResult:
+		"""Apply a Supervisor-approved change to the DA's own profile fields.
+
+		Must be idempotent on ``update.reference``.
+		"""
+
+	@abstractmethod
 	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
 		"""Tell the registry an approved lifecycle decision (status change, transfer).
 
@@ -83,6 +90,11 @@ class HttpDARegistryClient(DARegistryClient):
 		)
 
 	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
+		raise DARegistryContractPending(
+			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
+		)
+
+	def push_profile_update(self, update: ProfileUpdate) -> IntegrationResult:
 		raise DARegistryContractPending(
 			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
 		)

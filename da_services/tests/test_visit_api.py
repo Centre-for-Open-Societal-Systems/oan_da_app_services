@@ -379,9 +379,15 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(ping(), "ok")  # no HTTP request: never limited
 		frappe.local.request = Request(EnvironBuilder(path="/api/v1/da-services/x").get_environ())
 		try:
-			frappe.cache.delete_value(
-				frappe.cache.make_key(f"rl:da:{ping.__module__}.{ping.__name__}:{DA1}:60")
-			)
+			# Both users' buckets: counters live 60 s in Redis, so back-to-back suite runs
+			# would otherwise start the second user already near the limit.
+			# The limiter stores the already-prefixed key, so delete it as-is (make_keys=False);
+			# delete_value would otherwise prefix it a second time and miss.
+			for who in (DA1, SUP):
+				frappe.cache.delete_value(
+					frappe.cache.make_key(f"rl:da:{ping.__module__}.{ping.__name__}:{who}:60"),
+					make_keys=False,
+				)
 			self.assertEqual(ping(), "ok")
 			self.assertEqual(ping(), "ok")
 			with self.assertRaises(frappe.RateLimitExceededError):

@@ -75,6 +75,7 @@ def _register() -> None:
 		farmers_update,
 		me,
 		notifications,
+		profile_self,
 		rbac,
 		visits,
 	)
