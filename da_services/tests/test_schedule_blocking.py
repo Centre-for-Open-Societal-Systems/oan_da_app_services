@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from da_services.services import visits as svc
 from da_services.services import visit_specializations as spec_svc
+from da_services.services import visits as svc
 from da_services.utils.permissions import ScopeContext
 
 

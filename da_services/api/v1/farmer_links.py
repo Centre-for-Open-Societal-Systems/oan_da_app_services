@@ -15,8 +15,8 @@ from oan_auth_service.api.utils import error_response, handle_api_errors, succes
 
 from da_services.api.router import route
 from da_services.api.v1.common import request_fields
-from da_services.services import farmer_links as svc
 from da_services.services import constants as C
+from da_services.services import farmer_links as svc
 from da_services.utils.permissions import require_roles
 
 

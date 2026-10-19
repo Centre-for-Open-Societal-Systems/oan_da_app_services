@@ -10,7 +10,6 @@ import frappe
 
 from da_services.integrations.da_registry.client import DANotFound, DARegistryUnavailable, get_client
 
-
 # Specialization constants (matching DA Registry values)
 SPEC_CROP_PRODUCTION = "Crop Production"
 SPEC_LIVESTOCK = "Livestock"
@@ -81,7 +80,7 @@ def _get_da_specialization(da_id: str) -> str | None:
 	except (DARegistryUnavailable, Exception) as e:
 		frappe.log_error(
 			title="DA Registry Unavailable",
-			message=f"Could not fetch DA {da_id} specialization: {str(e)}",
+			message=f"Could not fetch DA {da_id} specialization: {e!s}",
 		)
 		return None
 

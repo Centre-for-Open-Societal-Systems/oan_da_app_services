@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from da_services.services import visits as svc
 from da_services.services import visit_specializations as spec_svc
+from da_services.services import visits as svc
 from da_services.utils.permissions import ScopeContext
 
 
@@ -116,7 +116,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1.insert(ignore_permissions=True)
 
 		# DA2 (same Kebele) lists visits
-		visits, total = svc.list_visits(ctx=self.ctx_da2)
+		visits, _total = svc.list_visits(ctx=self.ctx_da2)
 
 		visit_ids = [v["name"] for v in visits]
 		self.assertIn(visit1.name, visit_ids)  # Should see DA1's visit
@@ -139,7 +139,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1.insert(ignore_permissions=True)
 
 		# DA3 (Kebele B) lists visits
-		visits, total = svc.list_visits(ctx=self.ctx_da3)
+		visits, _total = svc.list_visits(ctx=self.ctx_da3)
 
 		visit_ids = [v["name"] for v in visits]
 		self.assertNotIn(visit1.name, visit_ids)  # Should NOT see DA1's visit

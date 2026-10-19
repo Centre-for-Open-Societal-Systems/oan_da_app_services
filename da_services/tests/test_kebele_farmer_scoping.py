@@ -141,19 +141,13 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 	def test_can_edit_farmer_in_assigned_kebele(self):
 		"""Test DA can edit farmers in assigned Kebele."""
-		can_edit = svc._is_farmer_in_da_kebele(
-			self.farmer_kebele_a_1,
-			[self.da_id]
-		)
+		can_edit = svc._is_farmer_in_da_kebele(self.farmer_kebele_a_1, [self.da_id])
 
 		self.assertTrue(can_edit)
 
 	def test_cannot_edit_farmer_in_other_kebele(self):
 		"""Test DA cannot edit farmers in other Kebele."""
-		can_edit = svc._is_farmer_in_da_kebele(
-			self.farmer_kebele_b_1,
-			[self.da_id]
-		)
+		can_edit = svc._is_farmer_in_da_kebele(self.farmer_kebele_b_1, [self.da_id])
 
 		self.assertFalse(can_edit)
 
@@ -189,7 +183,4 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 		self.assertEqual(total, 2)
 		self.assertEqual(len(farmers_page1), 1)
 		self.assertEqual(len(farmers_page2), 1)
-		self.assertNotEqual(
-			farmers_page1[0]["farmer_id"],
-			farmers_page2[0]["farmer_id"]
-		)
+		self.assertNotEqual(farmers_page1[0]["farmer_id"], farmers_page2[0]["farmer_id"])

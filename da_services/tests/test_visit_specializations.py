@@ -5,8 +5,8 @@ from __future__ import annotations
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from da_services.services import visit_specializations as svc
 from da_services.integrations.da_registry.mock import MockDARegistryClient
+from da_services.services import visit_specializations as svc
 
 
 class TestVisitSpecializations(IntegrationTestCase):
