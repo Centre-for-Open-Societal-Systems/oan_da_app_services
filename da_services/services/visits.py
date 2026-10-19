@@ -31,6 +31,9 @@ from da_services.utils.permissions import ScopeContext, require_roles
 WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 
+# Active visit statuses that block scheduling (DA-211 Phase 5)
+BLOCKING_STATUSES = ["Planned", "In progress", "Physical Visit Complete"]
+
 FIELDS = [
 	"name",
 	"da_id",
@@ -113,6 +116,74 @@ def serialize(doc) -> dict:
 	return out
 
 
+def _check_specialization_conflict(farmer_id: str, new_specializations: list[str]) -> dict | None:
+	"""Check if farmer has active visit with overlapping specializations (DA-211 Phase 5).
+
+	Args:
+		farmer_id: Farmer identifier
+		new_specializations: Specializations for the new visit being scheduled
+
+	Returns:
+		Conflict dict if overlap found, None if no conflict
+		Conflict dict: {
+			"blocked": True,
+			"reason": "...",
+			"blocked_specializations": [...],
+			"conflicting_visit_id": "..."
+		}
+	"""
+	if not farmer_id or not new_specializations:
+		return None
+
+	# Lock the farmer's visit records to prevent race conditions
+	# Use SELECT FOR UPDATE to ensure no concurrent scheduling for same farmer
+	active_visits = frappe.db.sql(
+		"""
+		SELECT
+			v.name,
+			v.visit_type,
+			v.physical_status,
+			v.scheduled_at
+		FROM `tabDA Visit` v
+		WHERE
+			v.farmer_id = %(farmer_id)s
+			AND v.physical_status IN %(blocking_statuses)s
+		FOR UPDATE
+		""",
+		{"farmer_id": farmer_id, "blocking_statuses": BLOCKING_STATUSES},
+		as_dict=True,
+	)
+
+	if not active_visits:
+		return None
+
+	# Check each active visit for specialization overlap
+	for visit in active_visits:
+		# Get visit specializations
+		visit_specs = frappe.get_all(
+			"DA Visit Specialization",
+			filters={"parent": visit["name"]},
+			pluck="specialization",
+		)
+
+		if not visit_specs:
+			continue
+
+		# Check for overlap
+		overlap = set(new_specializations) & set(visit_specs)
+
+		if overlap:
+			return {
+				"blocked": True,
+				"reason": f"Farmer already has an active {visit['visit_type']} visit covering: {', '.join(sorted(overlap))}",
+				"blocked_specializations": sorted(list(overlap)),
+				"conflicting_visit_id": visit["name"],
+				"conflicting_visit_status": visit["physical_status"],
+			}
+
+	return None
+
+
 def _resolve_da_for_write(da_id: str | None, ctx: ScopeContext) -> tuple[str, str | None]:
 	"""(da_id, assigned_by). A DA acts on their own DA-ID; an officer names a DA in scope."""
 	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
@@ -154,6 +225,17 @@ def plan_visit(
 		existing = frappe.db.get_value("DA Visit", {"client_op_id": client_op_id}, "name")
 		if existing:
 			return serialize(frappe.get_doc("DA Visit", existing))
+
+	# DA-211 Phase 5: Check for specialization conflicts before creating visit
+	new_specializations = spec_svc.derive_visit_specializations(visit_type or "Crop Survey", da_id)
+	conflict = _check_specialization_conflict(farmer_id, new_specializations)
+
+	if conflict:
+		frappe.throw(
+			_(conflict["reason"]),
+			frappe.ValidationError,
+			title=_("Visit Scheduling Conflict"),
+		)
 
 	location = location or {}
 	doc = frappe.get_doc(
@@ -485,8 +567,12 @@ def list_visits(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Visits the caller may see (scope via permission_query_conditions). `status` may be a
-	physical_status or a UI chip (Planned / Confirmed / Completed / Missed)."""
+	"""Visits the caller may see (DA-211 Phase 6: Kebele-scoped for DAs).
+
+	DAs see all visits in their assigned Kebele (departmental data), not just own visits.
+	Supervisors/Executives see their Woreda/Region scope.
+	`status` may be a physical_status or a UI chip (Planned / Confirmed / Completed / Missed).
+	"""
 	ctx = ctx or require_roles(*READ_ROLES)
 	filters: dict = {}
 	if date:
@@ -499,8 +585,27 @@ def list_visits(
 		)
 	if farmer_id:
 		filters["farmer_id"] = farmer_id
-	if da_id:
+
+	# DA-211 Phase 6: Kebele-based visit visibility for DAs
+	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
+		# DAs see visits in their assigned Kebele (not just own visits)
+		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
+		if da_ids_list:
+			# Get DA's assigned Kebeles
+			from da_services.services.farmers import _get_da_assigned_kebeles
+
+			assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
+			if assigned_kebeles:
+				filters["kebele"] = ("in", assigned_kebeles)
+			else:
+				# DA has no Kebele assignment - empty list
+				return [], 0
+		else:
+			return [], 0
+	elif da_id:
+		# Explicit DA filter (for Supervisors/Executives filtering by DA)
 		filters["da_id"] = da_id
+
 	if status == "Completed":
 		filters["physical_status"] = COMPLETE
 	elif status == "Planned":
