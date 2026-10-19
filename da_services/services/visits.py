@@ -24,6 +24,7 @@ from da_services.da_services.doctype.da_visit.da_visit import (
 	PLANNED_STATES,
 )
 from da_services.services import constants as C
+from da_services.services import visit_specializations as spec_svc
 from da_services.services.da_lookup import get_da_reference
 from da_services.utils.permissions import ScopeContext, require_roles
 
@@ -107,6 +108,8 @@ def serialize(doc) -> dict:
 			}
 			for r in (doc.get("attachments") or [])
 		]
+		# DA-211 Phase 3: Include specializations in response
+		out["specializations"] = [r.specialization for r in (doc.get("specializations") or [])]
 	return out
 
 
@@ -180,6 +183,11 @@ def plan_visit(
 					"advisory_qa",
 					{"question": row["question"].strip(), "answer": (row.get("answer") or "").strip()},
 				)
+
+	# DA-211 Phase 3: Derive and set visit specializations
+	specializations = spec_svc.derive_visit_specializations(visit_type or "Crop Survey", da_id)
+	spec_svc.set_visit_specializations(doc, specializations)
+
 	doc.insert(ignore_permissions=True)
 	return serialize(doc)
 
