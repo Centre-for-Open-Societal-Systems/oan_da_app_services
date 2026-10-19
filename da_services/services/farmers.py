@@ -228,6 +228,7 @@ def list_farmers(
 		pending_actions = derive_pending_actions_batch(farmer_ids)
 		visit_counts = _get_farmer_visit_counts_batch(farmer_ids)
 		last_visits = _get_last_visit_dates_batch(farmer_ids)
+		assigned_specs = _get_farmer_assigned_specializations_batch(farmer_ids)  # DA-211 Phase 4
 
 		# Add visit counts and pending actions to each farmer
 		for farmer in farmers:
@@ -248,6 +249,9 @@ def list_farmers(
 				# Fallback if derivation failed
 				farmer["pending_action"] = "No action due"
 				farmer["pending_action_priority"] = "low"
+
+			# DA-211 Phase 4: Assignment flags (which specializations have active visits)
+			farmer["assigned_specializations"] = assigned_specs.get(farmer_id, [])
 
 	return farmers, total
 
@@ -552,6 +556,53 @@ def _get_linked_farmer_ids(da_ids: list) -> list:
 		filters={"da_id": ("in", da_ids), "is_active": 1},
 		pluck="farmer_id",
 	)
+
+
+def _get_farmer_assigned_specializations_batch(farmer_ids: list[str]) -> dict[str, list[str]]:
+	"""Get specializations with active visits for each farmer (DA-211 Phase 4).
+
+	Args:
+		farmer_ids: List of farmer identifiers
+
+	Returns:
+		Dict mapping farmer_id to list of specializations with active visits
+	"""
+	if not farmer_ids:
+		return {}
+
+	# Active visit statuses that block scheduling
+	active_statuses = ["Planned", "In progress", "Physical Visit Complete"]
+
+	# Query active visits and their specializations
+	results = frappe.db.sql(
+		"""
+		SELECT
+			v.farmer_id,
+			vs.specialization
+		FROM `tabDA Visit` v
+		INNER JOIN `tabDA Visit Specialization` vs ON vs.parent = v.name
+		WHERE
+			v.farmer_id IN %(farmer_ids)s
+			AND v.physical_status IN %(statuses)s
+		""",
+		{"farmer_ids": farmer_ids, "statuses": active_statuses},
+		as_dict=True,
+	)
+
+	# Group by farmer_id and deduplicate specializations
+	farmer_specs = {}
+	for row in results:
+		farmer_id = row["farmer_id"]
+		spec = row["specialization"]
+
+		if farmer_id not in farmer_specs:
+			farmer_specs[farmer_id] = set()
+
+		if spec:
+			farmer_specs[farmer_id].add(spec)
+
+	# Convert sets to sorted lists
+	return {fid: sorted(list(specs)) for fid, specs in farmer_specs.items()}
 
 
 def _get_da_assigned_kebeles(da_ids: list) -> list:
