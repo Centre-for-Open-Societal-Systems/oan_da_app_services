@@ -50,9 +50,16 @@ at that level (a DA without a Zone checked against a Zone grant, or without a Wo
 against a Woreda grant), access is **denied, not widened** to the Region: widening would
 hand a Zone Supervisor the whole Region whenever registry data is incomplete. The audit
 row carries `reason = scope unresolved` (instead of `out of scope`) so operators can see
-missing registry data rather than a wrong grant. Operational rule until the registry
-populates Zone for every DA: issue Region + Woreda grants, not Zone grants. Follow-up:
-derive the Zone from the Woreda through `DA Administrative Area` once master data exists.
+missing registry data rather than a wrong grant.
+
+Zone grants are fully usable: `DA Visit`, `DA Task`, `DA Farmer Link`, `DA Farmer Reference`
+and `DA Profile Change Request` carry a `zone` column stamped from the DA's registry
+posting (or the farmer's reference) on insert, and the list hooks filter on it
+(`permissions._officer_scope_clause`). A user holding both a Woreda and a Zone grant sees
+the union of the two; a Region grant applies only when no narrower grant exists. Rows
+created before the column existed are filled by the `backfill_zone` patch (Woreda → Zone
+through `DA Administrative Area`, then the farmer reference, then the DA Registry); rows it
+cannot resolve stay empty and remain denied to Zone-only grants.
 
 Admin list endpoints clamp `limit` to 1..500 and `start` to >= 0 (`rbac_service.clamp_page`).
 

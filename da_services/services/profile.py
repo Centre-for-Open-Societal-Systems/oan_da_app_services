@@ -60,6 +60,7 @@ FIELDS = [
 	"reason",
 	"changes",
 	"region",
+	"zone",
 	"woreda",
 	"approver",
 	"decided_at",
@@ -236,6 +237,7 @@ def submit_change_request(
 			"reason": (reason or "").strip() or None,
 			"changes": frappe.as_json(diff),
 			"region": ref.region,
+			"zone": ref.zone,
 			"woreda": ref.woreda,
 			"client_op_id": client_op_id,
 		}
@@ -266,7 +268,7 @@ def _check_read(doc, ctx: ScopeContext) -> None:
 		return
 	if ctx.has_any_role(C.ROLE_DA) and ctx.owns_da(doc.da_id):
 		return
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda):
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda, doc.zone):
 		return
 	frappe.throw(_("Change request {0} is outside your scope.").format(doc.name), frappe.PermissionError)
 
@@ -323,7 +325,7 @@ def decide(name: str, *, decision: str, note: str | None = None, ctx: ScopeConte
 
 	doc = frappe.get_doc("DA Profile Change Request", name)
 	if not ctx.unrestricted:
-		if not ctx.has_any_role(C.ROLE_SUPERVISOR) or not ctx.covers(doc.region, doc.woreda):
+		if not ctx.has_any_role(C.ROLE_SUPERVISOR) or not ctx.covers(doc.region, doc.woreda, doc.zone):
 			frappe.throw(_("Change request {0} is outside your Woreda.").format(name), frappe.PermissionError)
 	if ctx.owns_da(doc.da_id) or doc.requested_by == ctx.user:
 		frappe.throw(_("You cannot decide your own change request."), frappe.PermissionError)

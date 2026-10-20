@@ -57,7 +57,7 @@ class DATask(Document):
 			)
 
 	def _fill_scope_from_registry(self):
-		if self.region and self.woreda:
+		if self.region and self.zone and self.woreda:
 			return
 		try:
 			ref = get_client().get_da(self.da_id)
@@ -66,6 +66,7 @@ class DATask(Document):
 			# row until a sync fills them; the DA still sees their own rows by da_id.
 			return
 		self.region = self.region or ref.region
+		self.zone = self.zone or ref.zone
 		self.woreda = self.woreda or ref.woreda
 
 	# -- actions -----------------------------------------------------------------

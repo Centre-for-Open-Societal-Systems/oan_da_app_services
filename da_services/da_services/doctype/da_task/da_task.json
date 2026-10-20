@@ -23,6 +23,7 @@
   "generated_by_rule",
   "sec_scope",
   "region",
+  "zone",
   "woreda",
   "col_scope",
   "created_by_user",
@@ -136,6 +137,13 @@
    "fieldname": "region",
    "fieldtype": "Data",
    "label": "Region",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Data",
+   "label": "Zone",
    "read_only": 1,
    "search_index": 1
   },

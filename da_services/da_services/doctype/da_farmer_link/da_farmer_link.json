@@ -19,6 +19,7 @@
   "kebele",
   "col_farmer",
   "region",
+  "zone",
   "woreda",
   "sec_status",
   "is_active",
@@ -38,6 +39,7 @@
   {"fieldname": "kebele", "fieldtype": "Data", "in_standard_filter": 1, "label": "Kebele", "search_index": 1, "read_only": 1},
   {"fieldname": "col_farmer", "fieldtype": "Column Break"},
   {"fieldname": "region", "fieldtype": "Data", "in_standard_filter": 1, "label": "Region", "search_index": 1, "read_only": 1},
+  {"fieldname": "zone", "fieldtype": "Data", "label": "Zone", "read_only": 1, "search_index": 1, "in_standard_filter": 1},
   {"fieldname": "woreda", "fieldtype": "Data", "in_standard_filter": 1, "label": "Woreda", "search_index": 1, "read_only": 1},
   {"fieldname": "sec_status", "fieldtype": "Section Break", "label": "Status"},
   {"default": "1", "fieldname": "is_active", "fieldtype": "Check", "label": "Active"},
@@ -57,6 +59,7 @@
   {"create": 1, "delete": 1, "email": 0, "export": 1, "print": 0, "read": 1, "report": 1, "role": "OAN Administrator", "share": 0, "write": 1},
   {"create": 1, "delete": 1, "email": 0, "export": 1, "print": 0, "read": 1, "report": 1, "role": "System Manager", "share": 0, "write": 1},
   {"create": 1, "delete": 0, "read": 1, "report": 1, "role": "Supervisor", "write": 1},
+  {"create": 0, "delete": 0, "read": 1, "report": 1, "role": "Executive", "write": 0},
   {"create": 0, "delete": 0, "read": 1, "role": "Development Agent", "write": 0}
  ],
  "row_format": "Dynamic",
