@@ -267,9 +267,8 @@ def plan_visit(
 					{"question": row["question"].strip(), "answer": (row.get("answer") or "").strip()},
 				)
 
-	# DA-211 Phase 3: Derive and set visit specializations
-	specializations = spec_svc.derive_visit_specializations(visit_type or "Crop Survey", da_id)
-	spec_svc.set_visit_specializations(doc, specializations)
+	# DA-211 Phase 3: Set visit specializations (already derived above for conflict check)
+	spec_svc.set_visit_specializations(doc, new_specializations)
 
 	doc.insert(ignore_permissions=True)
 	return serialize(doc)
@@ -601,6 +600,10 @@ def list_visits(
 			else:
 				# DA has no Kebele assignment - empty list
 				return [], 0
+
+			# Allow DA to filter to their own visits (mobile app use case)
+			if da_id and da_id in ctx.da_ids:
+				filters["da_id"] = da_id
 		else:
 			return [], 0
 	elif da_id:

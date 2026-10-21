@@ -6,6 +6,7 @@ from frappe.utils import add_days, today
 
 from da_services.services import constants as C
 from da_services.services import rbac_service
+from da_services.tests.fixtures import create_administrative_areas
 from da_services.utils import permissions
 from da_services.utils.permissions import get_scope_context, require_da_access
 
@@ -33,6 +34,8 @@ def _grant(user, role, **kw):
 	doc.effective_from = kw.pop("effective_from", today())
 	for k, v in kw.items():
 		setattr(doc, k, v)
+	# ignore_links=True: Administrative areas must exist for scope validation.
+	# Tests call create_administrative_areas() in setUp to provide valid references.
 	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
@@ -49,6 +52,7 @@ class TestRoles(IntegrationTestCase):
 class TestRBACAssignment(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		create_administrative_areas()  # Create admin areas for scope validation
 		frappe.db.delete("DA RBAC Assignment")
 		for e in (SUPERVISOR, DA_USER, EXEC, COMMS):
 			_user(e)
@@ -96,6 +100,7 @@ class TestRBACAssignment(IntegrationTestCase):
 class TestScopeRule(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		create_administrative_areas()  # Create admin areas for scope validation
 		frappe.db.delete("DA RBAC Assignment")
 		for e in (SUPERVISOR, ZONE_SUP, DA_USER, EXEC, COMMS):
 			_user(e)

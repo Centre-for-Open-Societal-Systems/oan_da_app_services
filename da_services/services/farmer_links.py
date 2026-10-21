@@ -246,10 +246,26 @@ def list_farmer_links(
 	if is_active is not None:
 		filters["is_active"] = 1 if is_active else 0
 
-	# Apply Supervisor scope
-	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_SUPERVISOR):
-		if ctx.woreda_scopes:
-			filters["woreda"] = ("in", list(ctx.woreda_scopes))
+	# Apply scope filtering (mirrors da_farmer_link_query_conditions)
+	if not ctx.unrestricted:
+		if ctx.has_any_role(C.ROLE_DA):
+			# DAs see only their own links
+			if not ctx.da_ids:
+				return []
+			filters["da_id"] = ("in", list(ctx.da_ids))
+		elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+			# Supervisors/Executives see by geographic scope
+			if ctx.woreda_scopes:
+				filters["woreda"] = ("in", list(ctx.woreda_scopes))
+			elif ctx.zone_scopes:
+				return []  # rows have no zone field
+			elif ctx.region_scopes:
+				filters["region"] = ("in", list(ctx.region_scopes))
+			else:
+				return []  # no scope defined
+		else:
+			# No authorized role
+			return []
 
 	links = frappe.get_all(
 		"DA Farmer Link",
