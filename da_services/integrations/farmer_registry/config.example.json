@@ -15,6 +15,20 @@
     "update_farmer": "/api/{version}/registry/farmer/{farmer_id}"
   },
 
+  "_comment_ingest": "Farmer registration via Staff API ingest-data. IDs are the dev FARMER_ODK_MODEL register + intake form; confirm per environment.",
+  "farmer_registry_ingest": {
+    "data_model": "FARMER_ODK_MODEL",
+    "register_id": "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd",
+    "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649"
+  },
+
+  "_comment_keycloak": "Service-account (client_credentials) for the Staff API. Needs the intakeSubmission:edit role. Ask Asmit for a DA Services client + secret.",
+  "farmer_registry_keycloak": {
+    "token_url": "https://keycloak-development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+    "client_id": "da-services",
+    "client_secret": "ask-asmit-for-dev-secret"
+  },
+
   "_environments": {
     "development": {
       "farmer_registry_backend": "mock"

@@ -3,9 +3,117 @@
 Handles naming and format differences between systems.
 """
 
+import secrets
 from typing import Any
 
 from .schemas import Farmer
+
+
+def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
+	"""Build the Farmer Registry ingest envelope from a DA registration form.
+
+	Produces the payload accepted by the Staff API ``ingest-data`` endpoint for
+	the FARMER_ODK_MODEL data model. Field names here mirror the registry's ODK
+	transform template (farmer_transform.j2): the registry reads
+	``message.payload`` and maps these keys onto the Farmer intake form.
+
+	Only fields present in ``form`` are included. ``woreda``/``kebele`` must be
+	the numeric administrative codes (not names). Location is "lat lon alt acc".
+
+	Args:
+	    form: DA-side registration form, e.g.
+	        {
+	            "first_name": "Abebe", "father_name": "Kebede",
+	            "grandfather_name": "Tesfaye", "gender": "male",
+	            "date_of_birth": "1985-04-12", "phone": "+251911234567",
+	            "woreda": "40801", "kebele": "40801101001",
+	            "national_id": "1234567890123456",
+	            "da_id": "DA-ID-001",
+	            "lands": [{"ownership": "owner", "area_hectare": 1.5}],
+	            "crops": [{"name": "teff", "planted_date": "2026-07-01"}],
+	            "livestock": [{"animal": "cattle", "count": 3}],
+	        }
+
+	Returns:
+	    Ingest envelope: {"header": {...}, "message": {"payload": {...}}}.
+	"""
+	personal: dict[str, Any] = {}
+	for src, dst in (
+		("first_name", "first_name_english"),
+		("father_name", "father_name_english"),
+		("grandfather_name", "grandfather_name_english"),
+		("gender", "gender"),
+		("date_of_birth", "date_of_birth"),
+		("phone", "primary_phone_number"),
+	):
+		if form.get(src) not in (None, ""):
+			personal[dst] = form[src]
+
+	payload: dict[str, Any] = {
+		"register_mnemonic": "Farmer",
+		"basic_info": {
+			"personal_info": personal,
+			"locale_info": {
+				k: v
+				for k, v in (
+					("region", form.get("region")),
+					("woreda", form.get("woreda")),
+					("kebele", form.get("kebele")),
+				)
+				if v not in (None, "")
+			},
+		},
+	}
+
+	if form.get("national_id"):
+		payload["national_id_section"] = {"national_fan": form["national_id"]}
+	if form.get("location"):
+		payload["farmer_location"] = {"location": form["location"]}
+	if form.get("lands"):
+		payload["land_info"] = {
+			"land_info_repeat": [
+				{
+					"land_id": land.get("land_id") or f"LND-{i + 1}",
+					"land_ownership": land.get("ownership", "owner"),
+					"total_land_area": land.get("area_hectare"),
+				}
+				for i, land in enumerate(form["lands"])
+			]
+		}
+	if form.get("crops"):
+		payload["crop_information"] = {
+			"crop_repeat": [
+				{
+					"crop_name": crop.get("name"),
+					"crop_date": crop.get("planted_date", ""),
+					"crop_season": crop.get("season", "meher"),
+				}
+				for crop in form["crops"]
+			]
+		}
+	if form.get("livestock"):
+		payload["livestock_info"] = {
+			"livestock_repeat": [
+				{
+					"animal": ls.get("animal"),
+					"num_animals": ls.get("count", 1),
+					"livestock_system": ls.get("system", "mixed"),
+				}
+				for ls in form["livestock"]
+			]
+		}
+	if form.get("da_id"):
+		payload["survey_metadata"] = {"enumerator_id": form["da_id"]}
+	if form.get("farmer_reference_id"):
+		payload["farmer_reference_id"] = form["farmer_reference_id"]
+
+	return {
+		"header": {
+			"message_id": f"da-svc-{secrets.token_hex(8)}",
+			"sender_id": "da-services",
+		},
+		"message": {"payload": payload},
+	}
 
 
 def farmer_to_reference_dict(farmer: Farmer) -> dict[str, Any]:

@@ -93,6 +93,53 @@ class FarmerRegistryClient(ABC):
 		"""
 		pass
 
+	@abstractmethod
+	def register_farmer(self, payload: dict) -> dict:
+		"""Register a new farmer through the registry ingest pipeline.
+
+		Submits a farmer record to the Farmer Registry Staff API
+		``/input-mechanism-data/ingest-data`` endpoint. Ingestion is async:
+		the registry classifies and transforms the payload, creates an intake
+		form submission, and routes it for Woreda approval. The call returns a
+		correlation_id to track that pipeline, not a finished farmer.
+
+		Args:
+		    payload: Ingest envelope (header + message.payload) as produced by
+		        mapper.da_form_to_ingest_payload().
+
+		Returns:
+		    {
+		        "success": bool,
+		        "correlation_id": str | None,  # tracks the async ingestion
+		        "status": str,                 # SUCCESS / ERROR
+		        "error_code": str | None,
+		        "error_message": str | None,
+		    }
+
+		Raises:
+		    FarmerRegistryError: Registry unavailable or error
+		"""
+		pass
+
+	@abstractmethod
+	def get_ingest_status(self, correlation_id: str) -> list[dict]:
+		"""Look up ingestion pipeline rows for a correlation_id.
+
+		Calls ``/ingestion-data/search_in_ingestion_data`` to report where a
+		submitted farmer is in the pipeline (classification → transformation →
+		ingestion) and the resulting intake_form_submission_id once created.
+
+		Args:
+		    correlation_id: Value returned by register_farmer().
+
+		Returns:
+		    List of ingestion row dicts (may be empty while still queued).
+
+		Raises:
+		    FarmerRegistryError: Registry unavailable or error
+		"""
+		pass
+
 
 def get_farmer_registry_client() -> FarmerRegistryClient:
 	"""Factory: returns the configured Farmer Registry client.
