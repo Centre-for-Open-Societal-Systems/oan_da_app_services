@@ -634,13 +634,16 @@ def list_visits(
 def dashboard_counts(da_id: str, from_date, to_date) -> dict:
 	"""Farm visits tile: planned (everything meant to happen in the range) vs completed."""
 	rng = ("between", [f"{getdate(from_date)} 00:00:00", f"{getdate(to_date)} 23:59:59"])
+	base_filters = {"da_id": da_id, "scheduled_at": rng}
+
 	return {
 		"planned": frappe.db.count(
-			"DA Visit", {"da_id": da_id, "scheduled_at": rng, "physical_status": ("in", list(PLANNED_STATES))}
+			"DA Visit", {**base_filters, "physical_status": ("in", list(PLANNED_STATES))}
 		),
-		"completed": frappe.db.count(
-			"DA Visit", {"da_id": da_id, "scheduled_at": rng, "physical_status": COMPLETE}
-		),
+		"completed": frappe.db.count("DA Visit", {**base_filters, "physical_status": COMPLETE}),
+		"missed": frappe.db.count("DA Visit", {**base_filters, "physical_status": "Missed"}),
+		"rescheduled": frappe.db.count("DA Visit", {**base_filters, "physical_status": "Rescheduled"}),
+		"in_progress": frappe.db.count("DA Visit", {**base_filters, "physical_status": "In progress"}),
 	}
 
 
