@@ -1,0 +1,28 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-10-19 14:00:00.000000",
+ "description": "Specializations covered by a DA visit (DA-211 Phase 3). A visit can cover multiple specializations (e.g., Combined Crop + Livestock survey).",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "specialization"
+ ],
+ "fields": [
+  {"fieldname": "specialization", "fieldtype": "Select", "in_list_view": 1, "label": "Specialization", "options": "Crop Production\nLivestock\nNatural Resources\nServices\nOther", "reqd": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-19 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Visit Specialization",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

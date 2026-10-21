@@ -46,7 +46,7 @@ class TestPendingActions(IntegrationTestCase):
 				"region": "TEST-REGION",
 				"registration_state": "APPROVED",
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		# Reset A2C client for clean test state
@@ -105,7 +105,7 @@ class TestPendingActions(IntegrationTestCase):
 				"physical_status": "Planned",
 				"scheduled_at": past_date,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Transition: Planned → In progress
 		visit.physical_status = "In progress"
@@ -137,7 +137,7 @@ class TestPendingActions(IntegrationTestCase):
 				"physical_status": "Planned",
 				"scheduled_at": recent_date,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Transition: Planned → In progress → Physical Visit Complete
 		visit.physical_status = "In progress"
@@ -167,7 +167,7 @@ class TestPendingActions(IntegrationTestCase):
 				"physical_status": "Planned",
 				"scheduled_at": crop_date,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 		crop_visit.physical_status = "In progress"
 		crop_visit.save(ignore_permissions=True)
 		crop_visit.physical_status = "Physical Visit Complete"
@@ -184,7 +184,7 @@ class TestPendingActions(IntegrationTestCase):
 				"physical_status": "Planned",
 				"scheduled_at": livestock_date,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Transition: Planned → In progress → Physical Visit Complete
 		livestock_visit.physical_status = "In progress"
@@ -212,7 +212,7 @@ class TestPendingActions(IntegrationTestCase):
 				"physical_status": "Planned",
 				"scheduled_at": past_date,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 		visit.physical_status = "In progress"
 		visit.save(ignore_permissions=True)
 		visit.physical_status = "Physical Visit Complete"
@@ -250,7 +250,7 @@ class TestPendingActions(IntegrationTestCase):
 				"physical_status": "Planned",
 				"scheduled_at": past_date,
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 
 		# Transition: Planned → In progress → Physical Visit Complete
 		visit.physical_status = "In progress"
@@ -285,7 +285,7 @@ class TestPendingActions(IntegrationTestCase):
 				"region": "TEST",
 				"registration_state": "PENDING_APPROVAL",
 			}
-		).insert(ignore_permissions=True)
+		).insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		try:
@@ -352,7 +352,7 @@ class TestPendingActions(IntegrationTestCase):
 					"region": "TEST",
 					"registration_state": "APPROVED",
 				}
-			).insert(ignore_permissions=True)
+			).insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		try:

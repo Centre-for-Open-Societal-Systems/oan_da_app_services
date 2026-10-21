@@ -95,14 +95,14 @@ class TestGetDaEndpoint(IntegrationTestCase):
 			u.email = SUPERVISOR
 			u.first_name = "Supervisor Two"
 			u.send_welcome_email = 0
-			u.insert(ignore_permissions=True)
+			u.insert(ignore_permissions=True, ignore_links=True)
 		grant = frappe.new_doc("DA RBAC Assignment")
 		grant.user = SUPERVISOR
 		grant.role = C.ROLE_SUPERVISOR
 		grant.region_scope = "ET04"
 		grant.woreda_scope = "ET04-W01"
 		grant.effective_from = today()
-		grant.insert(ignore_permissions=True)
+		grant.insert(ignore_permissions=True, ignore_links=True)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")

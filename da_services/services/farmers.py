@@ -7,6 +7,7 @@ with DA Visit history, pending actions (DA-39), and permission checks.
 import frappe
 from frappe import _
 
+from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.mapper import (
 	farmer_to_reference_dict,
@@ -92,10 +93,10 @@ def list_farmers(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list, int]:
-	"""List farmers visible to the user (DA-40 farmers list).
+	"""List farmers visible to the user (DA-40 farmers list, DA-211 Kebele scoping).
 
-	Scope enforcement:
-	- DA: Only linked farmers
+	Scope enforcement (DA-211 updated):
+	- DA: All farmers in assigned Kebele (not just linked farmers)
 	- Supervisor: All farmers in their Woreda
 	- Executive: All farmers in their Region (read-only)
 	- Admin: All farmers
@@ -114,20 +115,18 @@ def list_farmers(
 	"""
 	filters = {}
 
-	# Scope filters - handled by permission_query_conditions hook
-	# The hook in permissions.py applies scope automatically, so we don't
-	# need to manually filter here. This ensures:
-	# - DAs see only linked farmers
-	# - Supervisors with multiple Woredas see all of them
-	# - Zone-scoped Supervisors are denied (no zone field on DA Farmer Reference)
-	# We only need to handle the DA case for the additional linked farmers logic
+	# Scope filters - DA-211 Kebele-based scoping
+	# DAs see all farmers in their assigned Kebele, not just manually linked ones.
+	# Supervisors with multiple Woredas see all of them.
+	# Zone-scoped Supervisors are denied (no zone field on DA Farmer Reference).
 	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
-		# DA sees only linked farmers - apply this before the query
+		# DA sees all farmers in assigned Kebele (DA-211 change)
 		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-		linked_farmer_ids = _get_linked_farmer_ids(da_ids_list)
-		if not linked_farmer_ids:
+		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
+		if not assigned_kebeles:
+			# DA has no Kebele assignment - empty list
 			return [], 0
-		filters["farmer_id"] = ("in", linked_farmer_ids)
+		filters["kebele"] = ("in", assigned_kebeles)
 
 	# User filters - must not override scope
 	# Woreda filter can only narrow within the scope, not expand it
@@ -170,6 +169,16 @@ def list_farmers(
 			filters["woreda"] = woreda
 
 	if kebele:
+		# A requested Kebele may only narrow the caller's scope.
+		# Replacing the DA's assigned-Kebele filter would let them read another Kebele.
+		assigned = filters.get("kebele")
+		if (
+			not ctx.unrestricted
+			and ctx.has_any_role(C.ROLE_DA)
+			and isinstance(assigned, tuple)
+			and kebele not in assigned[1]
+		):
+			return [], 0
 		filters["kebele"] = kebele
 	if state:
 		filters["registration_state"] = state
@@ -230,6 +239,7 @@ def list_farmers(
 		pending_actions = derive_pending_actions_batch(farmer_ids)
 		visit_counts = _get_farmer_visit_counts_batch(farmer_ids)
 		last_visits = _get_last_visit_dates_batch(farmer_ids)
+		assigned_specs = _get_farmer_assigned_specializations_batch(farmer_ids)  # DA-211 Phase 4
 
 		# Add visit counts and pending actions to each farmer
 		for farmer in farmers:
@@ -250,6 +260,9 @@ def list_farmers(
 				# Fallback if derivation failed
 				farmer["pending_action"] = "No action due"
 				farmer["pending_action_priority"] = "low"
+
+			# DA-211 Phase 4: Assignment flags (which specializations have active visits)
+			farmer["assigned_specializations"] = assigned_specs.get(farmer_id, [])
 
 	return farmers, total
 
@@ -464,9 +477,10 @@ def _get_last_visit_dates_batch(farmer_ids: list[str]) -> dict[str, str | None]:
 
 
 def _can_edit_farmer(farmer_id: str, ctx: ScopeContext) -> bool:
-	"""Check if user can edit this farmer (DA-41 rule).
+	"""Check if user can edit this farmer (DA-41 rule, DA-211 updated).
 
 	DA-41 rule: Only farmers linked or assigned to the DA are editable.
+	DA-211 update: "Assigned" means farmer is in the DA's assigned Kebele.
 
 	Args:
 	    farmer_id: Farmer ID
@@ -482,9 +496,9 @@ def _can_edit_farmer(farmer_id: str, ctx: ScopeContext) -> bool:
 	if not ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR):
 		return False
 
-	# For DA role: Must be linked
+	# For DA role: Must be in assigned Kebele (DA-211 Kebele-based scoping)
 	if ctx.has_any_role(C.ROLE_DA):
-		return _is_farmer_linked_to_da(farmer_id, ctx.da_ids)
+		return _is_farmer_in_da_kebele(farmer_id, ctx.da_ids)
 
 	# For Supervisor: Can edit any farmer in their woreda
 	if ctx.has_any_role(C.ROLE_SUPERVISOR):
@@ -497,7 +511,11 @@ def _can_edit_farmer(farmer_id: str, ctx: ScopeContext) -> bool:
 
 
 def _is_farmer_linked_to_da(farmer_id: str, da_ids: list) -> bool:
-	"""Check if farmer is linked to any of the given DA IDs."""
+	"""Check if farmer is linked to any of the given DA IDs.
+
+	DEPRECATED: For Manual mode assignments only.
+	For Kebele-based scoping (DA-211), use _is_farmer_in_da_kebele instead.
+	"""
 	if not da_ids:
 		return False
 
@@ -511,8 +529,36 @@ def _is_farmer_linked_to_da(farmer_id: str, da_ids: list) -> bool:
 	)
 
 
+def _is_farmer_in_da_kebele(farmer_id: str, da_ids: list) -> bool:
+	"""Check if farmer is in any Kebele assigned to the given DA IDs (DA-211).
+
+	Args:
+		farmer_id: Farmer identifier
+		da_ids: List of DA identifiers
+
+	Returns:
+		True if farmer's Kebele matches any DA's assigned Kebele
+	"""
+	if not da_ids:
+		return False
+
+	# Get farmer's Kebele
+	farmer_kebele = frappe.db.get_value("DA Farmer Reference", farmer_id, "kebele")
+	if not farmer_kebele:
+		return False
+
+	# Get DA's assigned Kebeles
+	assigned_kebeles = _get_da_assigned_kebeles(list(da_ids))
+
+	return farmer_kebele in assigned_kebeles
+
+
 def _get_linked_farmer_ids(da_ids: list) -> list:
-	"""Get all farmer IDs linked to the given DA IDs."""
+	"""Get all farmer IDs linked to the given DA IDs.
+
+	DEPRECATED: This is used for Manual mode assignments only.
+	For Kebele-based scoping (DA-211), use _get_da_assigned_kebeles instead.
+	"""
 	if not da_ids:
 		return []
 
@@ -521,3 +567,71 @@ def _get_linked_farmer_ids(da_ids: list) -> list:
 		filters={"da_id": ("in", da_ids), "is_active": 1},
 		pluck="farmer_id",
 	)
+
+
+def _get_farmer_assigned_specializations_batch(farmer_ids: list[str]) -> dict[str, list[str]]:
+	"""Get specializations with active visits for each farmer (DA-211 Phase 4).
+
+	Args:
+		farmer_ids: List of farmer identifiers
+
+	Returns:
+		Dict mapping farmer_id to list of specializations with active visits
+	"""
+	if not farmer_ids:
+		return {}
+
+	# Only open visits mark a specialization as assigned. A completed visit does not.
+	active_statuses = list(OPEN_STATES)
+
+	# Query active visits and their specializations
+	results = frappe.db.sql(
+		"""
+		SELECT
+			v.farmer_id,
+			vs.specialization
+		FROM `tabDA Visit` v
+		INNER JOIN `tabDA Visit Specialization` vs ON vs.parent = v.name
+		WHERE
+			v.farmer_id IN %(farmer_ids)s
+			AND v.physical_status IN %(statuses)s
+		""",
+		{"farmer_ids": farmer_ids, "statuses": active_statuses},
+		as_dict=True,
+	)
+
+	# Group by farmer_id and deduplicate specializations
+	farmer_specs = {}
+	for row in results:
+		farmer_id = row["farmer_id"]
+		spec = row["specialization"]
+
+		if farmer_id not in farmer_specs:
+			farmer_specs[farmer_id] = set()
+
+		if spec:
+			farmer_specs[farmer_id].add(spec)
+
+	# Convert sets to sorted lists
+	return {fid: sorted(list(specs)) for fid, specs in farmer_specs.items()}
+
+
+def _get_da_assigned_kebeles(da_ids: list) -> list:
+	"""Get Kebeles assigned to the given DA IDs (DA-211 Kebele-based scoping).
+
+	Args:
+		da_ids: List of DA identifiers
+
+	Returns:
+		List of Kebele codes assigned to these DAs
+	"""
+	if not da_ids:
+		return []
+
+	kebeles = frappe.get_all(
+		"DA Kebele Assignment",
+		filters={"da_id": ("in", da_ids), "state": "Effective"},
+		pluck="kebele",
+	)
+
+	return kebeles

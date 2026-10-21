@@ -31,7 +31,7 @@ def _user(email, roles):
 				"roles": [{"role": r} for r in roles],
 			}
 		)
-		user.insert(ignore_permissions=True)
+		user.insert(ignore_permissions=True, ignore_links=True)
 	return email
 
 
@@ -49,7 +49,7 @@ def _grant(user, role, **kw):
 			**kw,
 		}
 	)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	frappe.db.commit()
 
 
@@ -152,7 +152,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 		for farmer_data in farmers:
 			if not frappe.db.exists("DA Farmer Reference", farmer_data["farmer_id"]):
 				doc = frappe.get_doc({"doctype": "DA Farmer Reference", **farmer_data})
-				doc.insert(ignore_permissions=True)
+				doc.insert(ignore_permissions=True, ignore_links=True)
 
 		frappe.db.commit()
 
@@ -193,7 +193,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 
 		for link_data in links:
 			doc = frappe.get_doc({"doctype": "DA Farmer Link", **link_data})
-			doc.insert(ignore_permissions=True)
+			doc.insert(ignore_permissions=True, ignore_links=True)
 
 		frappe.db.commit()
 
@@ -511,7 +511,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"max_attempts": 5,
 			}
 		)
-		event.insert(ignore_permissions=True)
+		event.insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		# Process the event
@@ -553,7 +553,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"max_attempts": 5,
 			}
 		)
-		event.insert(ignore_permissions=True)
+		event.insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		# Process the event
@@ -610,7 +610,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"next_retry_at": past_time,  # Ready for immediate retry
 			}
 		)
-		event.insert(ignore_permissions=True)
+		event.insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		# Mock Farmer Registry client to always fail (transient error)
@@ -685,7 +685,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"max_attempts": 5,
 			}
 		)
-		event.insert(ignore_permissions=True)
+		event.insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		# Manually set modified time to the past (simulate stuck event)
@@ -744,7 +744,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"max_attempts": 5,
 			}
 		)
-		event.insert(ignore_permissions=True)
+		event.insert(ignore_permissions=True, ignore_links=True)
 
 		# Now set to Conflict using db_set (bypasses validation)
 		event.db_set("status", "Conflict", update_modified=False)
@@ -797,7 +797,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"max_attempts": 5,
 			}
 		)
-		event.insert(ignore_permissions=True)
+		event.insert(ignore_permissions=True, ignore_links=True)
 		frappe.db.commit()
 
 		# Get status

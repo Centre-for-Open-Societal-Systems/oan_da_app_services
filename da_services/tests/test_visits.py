@@ -6,6 +6,7 @@ from frappe.utils import add_days, add_to_date, now_datetime, today
 
 from da_services.services import constants as C
 from da_services.services import visits
+from da_services.tests.fixtures import ensure_kebele_assignment
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "visit-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -22,7 +23,7 @@ def _user(email, roles):
 		u.email = email
 		u.first_name = email.split("@")[0]
 		u.send_welcome_email = 0
-		u.insert(ignore_permissions=True)
+		u.insert(ignore_permissions=True, ignore_links=True)
 	u = frappe.get_doc("User", email)
 	for r in roles:
 		if r not in frappe.get_roles(email):
@@ -37,7 +38,7 @@ def _grant(user, role, **kw):
 	doc.effective_from = today()
 	for k, v in kw.items():
 		setattr(doc, k, v)
-	doc.insert(ignore_permissions=True)
+	doc.insert(ignore_permissions=True, ignore_links=True)
 	return doc
 
 
@@ -61,6 +62,8 @@ class TestDAVisit(IntegrationTestCase):
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
 		_grant(COMMS, C.ROLE_COMMS)
+		# DA lists are scoped to the Effective Kebele posting, which matches the registry kebele.
+		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
 		self.tomorrow = f"{add_days(today(), 1)} 09:00:00"
 		self.v1 = visits.plan_visit(
 			farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", purpose="Crop inspection", ctx=_ctx(DA1)
@@ -75,6 +78,7 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.db.delete("DA Visit")
 		frappe.db.delete("DA Task")
 		frappe.db.delete("DA RBAC Assignment")
+		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	# -- plan ---------------------------------------------------------------------
