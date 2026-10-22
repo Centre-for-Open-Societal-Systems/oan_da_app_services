@@ -94,7 +94,9 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(out["da_id"], "DA-000001")
 		self.assertEqual(out["range"]["to"], today())
 		self.assertEqual(out["range"]["from"], add_days(today(), -29))
-		self.assertEqual(out["visits"], {"planned": 3, "completed": 2})  # planned includes completed
+		self.assertEqual(
+			out["visits"], {"planned": 3, "completed": 2, "missed": 0, "rescheduled": 0, "in_progress": 0}
+		)  # planned includes completed
 		self.assertEqual(out["tasks"], {"open": 3, "done": 1, "urgent": 1, "due_today": 2})
 		self.assertEqual(out["sync"]["server_pending"], 0)
 		self.assertEqual(out["sync"]["conflicts"], 0)
@@ -157,5 +159,7 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(first["tasks"], 7)
 		self.assertEqual(first["notifications"], 3)  # sync, broadcast, assignment
 		out = dashboard.summary(_ctx("da.demo@da.local"))
-		self.assertEqual(out["visits"], {"planned": 6, "completed": 4})  # the tile's "4 of 6 planned"
+		self.assertEqual(
+			out["visits"], {"planned": 6, "completed": 4, "missed": 0, "rescheduled": 0, "in_progress": 0}
+		)  # the tile's "4 of 6 planned"
 		self.assertEqual(out["tasks"], {"open": 4, "done": 3, "urgent": 1, "due_today": 2})

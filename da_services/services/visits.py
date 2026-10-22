@@ -20,8 +20,10 @@ from frappe.utils import get_datetime, getdate, now_datetime
 from da_services.da_services.doctype.da_visit.da_visit import (
 	COMPLETE,
 	IN_PROGRESS,
+	MISSED,
 	OPEN_STATES,
 	PLANNED_STATES,
+	RESCHEDULED,
 )
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
@@ -76,8 +78,8 @@ def _derived(row: dict) -> dict:
 	sched = row.get("scheduled_at")
 	if status == COMPLETE:
 		ui, planner = "Completed", "completed"
-	elif status == "Missed":
-		ui, planner = "Missed", "scheduled"
+	elif status == MISSED:
+		ui, planner = MISSED, "scheduled"
 	elif status in OPEN_STATES:
 		ui = "Confirmed" if row.get("farmer_confirmation") == "Confirmed" else "Planned"
 		planner = "overdue" if sched and get_datetime(sched) < now_datetime() else "scheduled"
@@ -634,13 +636,16 @@ def list_visits(
 def dashboard_counts(da_id: str, from_date, to_date) -> dict:
 	"""Farm visits tile: planned (everything meant to happen in the range) vs completed."""
 	rng = ("between", [f"{getdate(from_date)} 00:00:00", f"{getdate(to_date)} 23:59:59"])
+	base_filters = {"da_id": da_id, "scheduled_at": rng}
+
 	return {
 		"planned": frappe.db.count(
-			"DA Visit", {"da_id": da_id, "scheduled_at": rng, "physical_status": ("in", list(PLANNED_STATES))}
+			"DA Visit", {**base_filters, "physical_status": ("in", list(PLANNED_STATES))}
 		),
-		"completed": frappe.db.count(
-			"DA Visit", {"da_id": da_id, "scheduled_at": rng, "physical_status": COMPLETE}
-		),
+		"completed": frappe.db.count("DA Visit", {**base_filters, "physical_status": COMPLETE}),
+		"missed": frappe.db.count("DA Visit", {**base_filters, "physical_status": MISSED}),
+		"rescheduled": frappe.db.count("DA Visit", {**base_filters, "physical_status": RESCHEDULED}),
+		"in_progress": frappe.db.count("DA Visit", {**base_filters, "physical_status": IN_PROGRESS}),
 	}
 
 
@@ -652,7 +657,7 @@ def today_items(da_id: str, date=None) -> list[dict]:
 		filters={
 			"da_id": da_id,
 			"scheduled_at": ("between", [f"{d} 00:00:00", f"{d} 23:59:59"]),
-			"physical_status": ("in", [*OPEN_STATES, COMPLETE, "Missed"]),
+			"physical_status": ("in", [*OPEN_STATES, COMPLETE, MISSED]),
 		},
 		fields=[
 			"name",

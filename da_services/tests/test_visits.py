@@ -245,7 +245,9 @@ class TestDAVisit(IntegrationTestCase):
 			)
 		visits.submit_outcome(self.v1["name"], observed="ok", ctx=_ctx(DA1))
 		counts = visits.dashboard_counts("DA-000001", add_days(today(), -30), today())
-		self.assertEqual(counts, {"planned": 4, "completed": 1})
+		self.assertEqual(
+			counts, {"planned": 4, "completed": 1, "missed": 0, "rescheduled": 0, "in_progress": 0}
+		)
 
 		items = visits.today_items("DA-000001")
 		self.assertEqual(len(items), 1)
