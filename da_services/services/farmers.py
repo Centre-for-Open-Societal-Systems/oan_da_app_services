@@ -129,6 +129,8 @@ def list_farmers(
 			# DA has no Kebele assignment - empty list
 			return [], 0
 		filters["kebele"] = ("in", assigned_kebeles)
+		# Live registry: fill the cache for Kebeles we have never synced.
+		_ensure_registry_cache(kebeles=assigned_kebeles)
 
 	# User filters - must not override scope
 	# Woreda filter can only narrow within the scope, not expand it
@@ -553,6 +555,73 @@ def _is_farmer_in_da_kebele(farmer_id: str, da_ids: list) -> bool:
 	assigned_kebeles = _get_da_assigned_kebeles(list(da_ids))
 
 	return farmer_kebele in assigned_kebeles
+
+
+def _ensure_registry_cache(*, kebeles: list) -> None:
+	"""Fill DA Farmer Reference from the live registry for Kebeles with no cached farmers.
+
+	Only runs on the http backend; the mock backend ships its own fixtures. A
+	registry failure is logged, never raised: the list falls back to whatever is
+	cached.
+	"""
+	if frappe.conf.get("farmer_registry_backend") != "http" or not kebeles:
+		return
+	missing = [k for k in kebeles if not frappe.db.exists("DA Farmer Reference", {"kebele": k})]
+	if not missing:
+		return
+	try:
+		sync_farmer_references(kebeles=missing)
+	except Exception:
+		frappe.log_error(title="Farmer Registry sync failed", message=frappe.get_traceback())
+
+
+def sync_farmer_references(
+	*, kebeles: list | None = None, woreda: str | None = None, page_size: int = 200, max_pages: int = 25
+) -> int:
+	"""Pull farmers from the registry into the DA Farmer Reference cache.
+
+	Searches the Farmer register per Kebele (or per Woreda when no Kebele is
+	given) and upserts one cache row per farmer. The Kebele code we searched
+	with is stored on the row so the DA's Kebele-scoped list matches it.
+
+	Returns the number of rows upserted.
+	"""
+	client = get_farmer_registry_client()
+	count = 0
+	for kebele in kebeles or [None]:
+		offset = 0
+		while True:
+			items, total = client.list_farmers(woreda=woreda, kebele=kebele, limit=page_size, offset=offset)
+			for item in items:
+				_upsert_farmer_reference(item, kebele_code=kebele)
+				count += 1
+			offset += page_size
+			if not items or offset >= total or offset >= page_size * max_pages:
+				break
+	frappe.db.commit()
+	return count
+
+
+def _upsert_farmer_reference(item, *, kebele_code: str | None = None) -> None:
+	"""Write a FarmerListItem into the cache (insert or refresh)."""
+	values = {
+		"reg_id": item.reg_id,
+		"farmer_name": item.name,
+		"phone": item.phone,
+		"region": item.region,
+		"woreda": item.woreda,
+		"kebele": kebele_code or item.kebele,
+		"total_land_hectares": item.total_land_area,
+		"registration_state": item.state,
+		"registered_at": item.registration_date,
+		"last_synced_at": frappe.utils.now_datetime(),
+	}
+	if frappe.db.exists("DA Farmer Reference", item.farmer_id):
+		frappe.db.set_value("DA Farmer Reference", item.farmer_id, values, update_modified=False)
+		return
+	frappe.get_doc({"doctype": "DA Farmer Reference", "farmer_id": item.farmer_id, **values}).insert(
+		ignore_permissions=True
+	)
 
 
 def _get_linked_farmer_ids(da_ids: list) -> list:
