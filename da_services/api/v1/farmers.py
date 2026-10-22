@@ -369,6 +369,12 @@ def register_farmer():
 	        "lands": [{"ownership": "owner", "area_hectare": 1.5}],
 	        "crops": [{"name": "teff", "planted_date": "2026-07-01"}],
 	        "livestock": [{"animal": "cattle", "count": 3}],
+	        "household_head": true,           // true = registry also creates a Household
+	        "is_psnp_user": false,
+	        "disabled": false,
+	        "marital_status": "married",
+	        "education_level": "can_read_and_write",
+	        "income_source": "crop_production",
 	        "da_id": "DA-ID-001",
 	        "client_op_id": "<uuid>"          // optional idempotency key
 	    }

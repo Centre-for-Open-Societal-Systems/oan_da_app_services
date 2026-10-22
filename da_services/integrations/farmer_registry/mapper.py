@@ -9,6 +9,13 @@ from typing import Any
 from .schemas import Farmer
 
 
+def _yes_no(value: Any) -> str:
+	"""Registry ODK fields are 'yes'/'no' strings; accept bools and common strings."""
+	if isinstance(value, str):
+		return "yes" if value.strip().lower() in ("yes", "true", "1", "y") else "no"
+	return "yes" if value else "no"
+
+
 def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	"""Build the Farmer Registry ingest envelope from a DA registration form.
 
@@ -32,6 +39,9 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	            "lands": [{"ownership": "owner", "area_hectare": 1.5}],
 	            "crops": [{"name": "teff", "planted_date": "2026-07-01"}],
 	            "livestock": [{"animal": "cattle", "count": 3}],
+	            "household_head": True, "is_psnp_user": False, "disabled": False,
+	            "marital_status": "married", "education_level": "can_read_and_write",
+	            "income_source": "crop_production",
 	        }
 
 	Returns:
@@ -48,6 +58,10 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	):
 		if form.get(src) not in (None, ""):
 			personal[dst] = form[src]
+
+	# Disability sits under personal_info in the registry's ODK layout.
+	if form.get("disabled") is not None:
+		personal["disability"] = _yes_no(form["disabled"])
 
 	payload: dict[str, Any] = {
 		"register_mnemonic": "Farmer",
@@ -102,6 +116,25 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 				for ls in form["livestock"]
 			]
 		}
+	# Household: "yes" makes the registry create a Household record alongside
+	# the farmer; "no" joins an existing household (Household Link tab).
+	household: dict[str, Any] = {}
+	if form.get("household_head") is not None:
+		household["household_head"] = _yes_no(form["household_head"])
+	if form.get("is_psnp_user") is not None:
+		household["is_psnp_user"] = _yes_no(form["is_psnp_user"])
+	if household:
+		payload["household_questions"] = household
+
+	# Socio-economic and Health section; the registry upper-cases these codes.
+	socio = {
+		k: form[k]
+		for k in ("marital_status", "education_level", "income_source")
+		if form.get(k) not in (None, "")
+	}
+	if socio:
+		payload["socio_economic_data"] = socio
+
 	if form.get("da_id"):
 		payload["survey_metadata"] = {"enumerator_id": form["da_id"]}
 	if form.get("farmer_reference_id"):

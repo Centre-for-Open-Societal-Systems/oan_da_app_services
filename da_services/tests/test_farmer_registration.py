@@ -155,3 +155,53 @@ class TestRegisterIdempotency(IntegrationTestCase):
 		payload = da_form_to_ingest_payload(SAMPLE_FORM)
 		suffix = payload["header"]["message_id"].removeprefix("da-svc-")
 		uuid.UUID(suffix)  # raises if not a UUID
+
+
+class TestHouseholdAndSocioMapping(IntegrationTestCase):
+	"""Household head, PSNP, disability and socio-economic fields reach the registry sections."""
+
+	def test_household_and_socio_sections(self):
+		form = {
+			**SAMPLE_FORM,
+			"household_head": True,
+			"is_psnp_user": False,
+			"disabled": False,
+			"marital_status": "married",
+			"education_level": "can_read_and_write",
+			"income_source": "crop_production",
+		}
+		inner = da_form_to_ingest_payload(form)["message"]["payload"]
+		self.assertEqual(inner["household_questions"], {"household_head": "yes", "is_psnp_user": "no"})
+		self.assertEqual(
+			inner["socio_economic_data"],
+			{
+				"marital_status": "married",
+				"education_level": "can_read_and_write",
+				"income_source": "crop_production",
+			},
+		)
+		self.assertEqual(inner["basic_info"]["personal_info"]["disability"], "no")
+
+	def test_sections_omitted_when_not_provided(self):
+		inner = da_form_to_ingest_payload(SAMPLE_FORM)["message"]["payload"]
+		self.assertNotIn("household_questions", inner)
+		self.assertNotIn("socio_economic_data", inner)
+		self.assertNotIn("disability", inner["basic_info"]["personal_info"])
+
+	def test_yes_no_accepts_strings_and_bools(self):
+		from da_services.integrations.farmer_registry.mapper import _yes_no
+
+		self.assertEqual(_yes_no(True), "yes")
+		self.assertEqual(_yes_no("Yes"), "yes")
+		self.assertEqual(_yes_no("1"), "yes")
+		self.assertEqual(_yes_no(False), "no")
+		self.assertEqual(_yes_no("no"), "no")
+
+	def test_form_schema_accepts_household_fields(self):
+		from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
+
+		form = FarmerRegistrationForm(**SAMPLE_FORM, household_head="yes", is_psnp_user="no", disabled=False)
+		dumped = form.model_dump(mode="json", exclude_none=True)
+		self.assertIs(dumped["household_head"], True)
+		self.assertIs(dumped["is_psnp_user"], False)
+		self.assertIs(dumped["disabled"], False)
