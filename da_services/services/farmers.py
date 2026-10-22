@@ -9,7 +9,9 @@ from frappe import _
 
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
+from da_services.integrations.farmer_registry.client import FarmerRegistryClientError
 from da_services.integrations.farmer_registry.mapper import (
+	da_form_to_ingest_payload,
 	farmer_to_reference_dict,
 	reference_dict_to_profile,
 )
@@ -635,3 +637,104 @@ def _get_da_assigned_kebeles(da_ids: list) -> list:
 	)
 
 	return kebeles
+
+
+def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
+	"""Register a new farmer through the Farmer Registry ingest pipeline.
+
+	Maps the DA registration form to the registry ingest envelope, submits it,
+	and records the attempt as a DA Integration Event for traceability. The
+	registry processes ingestion asynchronously, so a correlation_id is returned
+	rather than a finished farmer; the farmer appears after Woreda approval.
+
+	Args:
+	    form_data: DA registration form (see mapper.da_form_to_ingest_payload).
+	    ctx: Scope context of the submitting user (for audit attribution).
+
+	Returns:
+	    {
+	        "success": bool,
+	        "message_id": str,
+	        "correlation_id": str | None,
+	        "status": str,
+	        "event_id": str,
+	        "error_message": str | None,
+	    }
+	"""
+	import json
+
+	if not isinstance(form_data, dict) or not form_data.get("first_name"):
+		frappe.throw(_("Farmer first name is required."), frappe.ValidationError)
+
+	payload = da_form_to_ingest_payload(form_data)
+	message_id = payload["header"]["message_id"]
+
+	# Idempotency: with a client_op_id the message_id is deterministic, so a
+	# retried submission finds its earlier event instead of registering twice.
+	if form_data.get("client_op_id"):
+		existing = frappe.db.get_value(
+			"DA Integration Event",
+			{"event_type": "Farmer Registration", "reference_id": message_id},
+			["name", "status", "external_reference"],
+			as_dict=True,
+		)
+		if existing and existing.status in ("Processing", "Completed"):
+			return {
+				"success": existing.status == "Completed",
+				"message_id": message_id,
+				"correlation_id": existing.external_reference or None,
+				"status": "DUPLICATE",
+				"event_id": existing.name,
+				"error_message": None,
+				"duplicate": True,
+			}
+
+	event = frappe.get_doc(
+		{
+			"doctype": "DA Integration Event",
+			"event_type": "Farmer Registration",
+			"status": "Processing",
+			"reference_id": message_id,
+			"payload": json.dumps(payload, default=str),
+			"attempts": 1,
+			"max_attempts": 1,
+		}
+	)
+	event.insert(ignore_permissions=True)
+
+	client = get_farmer_registry_client()
+	try:
+		result = client.register_farmer(payload)
+	except FarmerRegistryClientError as e:
+		# 4xx: our request was wrong (auth, roles, payload). Not retryable —
+		# surface the registry's reason to the caller as a 400.
+		event.db_set("status", "Failed", update_modified=False)
+		event.db_set("last_error", str(e)[:500], update_modified=False)
+		frappe.db.commit()
+		frappe.throw(_("Farmer Registry rejected the registration: {0}").format(e), frappe.ValidationError)
+	except Exception as e:
+		# 5xx / network: transient. Record it and let the error propagate.
+		event.db_set("status", "Failed", update_modified=False)
+		event.db_set("last_error", str(e)[:500], update_modified=False)
+		frappe.db.commit()
+		raise
+
+	if result.get("success"):
+		event.db_set("status", "Completed", update_modified=False)
+		event.db_set("external_reference", result.get("correlation_id") or "", update_modified=False)
+	else:
+		event.db_set("status", "Failed", update_modified=False)
+		event.db_set(
+			"last_error", (result.get("error_message") or "Ingest rejected")[:500], update_modified=False
+		)
+	frappe.db.commit()
+
+	return {
+		"success": bool(result.get("success")),
+		"message_id": message_id,
+		"correlation_id": result.get("correlation_id"),
+		"status": result.get("status"),
+		"event_id": event.name,
+		"error_message": result.get("error_message"),
+		"duplicate": False,
+	}

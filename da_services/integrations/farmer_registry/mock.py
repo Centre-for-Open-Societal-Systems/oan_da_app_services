@@ -241,3 +241,34 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 			"version": new_version,
 			"message": f"Mock update successful - version updated to v{new_version}",
 		}
+
+	def register_farmer(self, payload: dict) -> dict:
+		"""Mock farmer registration (ingest pipeline).
+
+		Does not persist; returns a deterministic fake correlation_id so callers
+		and tests can exercise the register flow without a live registry.
+		"""
+		if not isinstance(payload, dict) or not payload.get("message"):
+			raise FarmerRegistryError("Invalid ingest payload: missing 'message'")
+
+		message_id = (payload.get("header") or {}).get("message_id") or "mock-msg"
+		correlation_id = f"mock-corr-{message_id}"
+		return {
+			"success": True,
+			"correlation_id": correlation_id,
+			"status": "SUCCESS",
+			"error_code": None,
+			"error_message": None,
+		}
+
+	def get_ingest_status(self, correlation_id: str) -> list[dict]:
+		"""Mock ingestion status: report a single PROCESSED row."""
+		return [
+			{
+				"ingest_correlation_id": correlation_id,
+				"ingest_id": f"mock-ingest-{correlation_id}",
+				"classification_status": "PROCESSED",
+				"transformation_status": "PROCESSED",
+				"ingestion_status": "PROCESSED",
+			}
+		]

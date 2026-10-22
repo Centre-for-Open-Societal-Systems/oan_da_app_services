@@ -7,7 +7,7 @@ Only fields needed for DA-40 profile display are included.
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FarmerIdentity(BaseModel):
@@ -161,3 +161,87 @@ class Plot(BaseModel):
 	soil_fertility: str | None = None
 	current_land_use: str | None = None
 	certificate_provided: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Farmer registration (POST /farmers) — validated at the API boundary
+# ---------------------------------------------------------------------------
+
+
+class LandItem(BaseModel):
+	land_id: str | None = Field(None, max_length=50)
+	ownership: str = Field("owner", description="owner | tenant | share")
+	area_hectare: float | None = Field(None, ge=0, le=10000)
+
+
+class CropItem(BaseModel):
+	name: str = Field(..., min_length=1, max_length=80)
+	planted_date: date | None = None
+	season: str = Field("meher", description="meher | belg | irrigated | perennial")
+
+
+class LivestockItem(BaseModel):
+	animal: str = Field(..., min_length=1, max_length=80)
+	count: int = Field(1, ge=1, le=100000)
+	system: str = Field("mixed", description="mixed | intensive | extensive")
+
+
+class FarmerRegistrationForm(BaseModel):
+	"""Body of POST /farmers.
+
+	Mirrors the fields the DA Register Farmer form collects. Unknown keys are
+	ignored so the frontend can send UI-only fields; known keys are typed and
+	range-checked here so the service and mapper never see malformed input.
+	"""
+
+	model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+	first_name: str = Field(..., min_length=1, max_length=100)
+	father_name: str | None = Field(None, max_length=100)
+	grandfather_name: str | None = Field(None, max_length=100)
+	gender: str | None = Field(None, description="male | female | other")
+	date_of_birth: date | None = None
+	phone: str | None = Field(None, pattern=r"^\+?\d{9,15}$")
+	region: str | None = Field(None, max_length=20)
+	woreda: str | None = Field(None, pattern=r"^\d{1,12}$", description="Master Data woreda code")
+	kebele: str | None = Field(None, pattern=r"^\d{1,15}$", description="Master Data kebele code")
+	national_id: str | None = Field(None, pattern=r"^\d{10,20}$", description="Fayda / national id")
+	location: str | None = Field(None, description='"lat lon [alt [accuracy]]"')
+	lands: list[LandItem] = Field(default_factory=list, max_length=50)
+	crops: list[CropItem] = Field(default_factory=list, max_length=50)
+	livestock: list[LivestockItem] = Field(default_factory=list, max_length=50)
+	da_id: str | None = Field(None, max_length=40)
+	farmer_reference_id: str | None = Field(None, max_length=64)
+	client_op_id: str | None = Field(
+		None, pattern=r"^[A-Za-z0-9_-]{8,64}$", description="Idempotency key chosen by the client"
+	)
+
+	@field_validator("gender", mode="before")
+	@classmethod
+	def _norm_gender(cls, v):
+		if v is None or v == "":
+			return None
+		s = str(v).strip().lower()
+		if s in ("m", "male"):
+			return "male"
+		if s in ("f", "female"):
+			return "female"
+		if s == "other":
+			return "other"
+		raise ValueError("gender must be male, female or other")
+
+	@field_validator("location")
+	@classmethod
+	def _check_location(cls, v):
+		if v is None or v == "":
+			return None
+		parts = v.split()
+		if not 2 <= len(parts) <= 4:
+			raise ValueError('location must be "lat lon [alt [accuracy]]"')
+		try:
+			nums = [float(p) for p in parts]
+		except ValueError as e:
+			raise ValueError("location parts must be numbers") from e
+		if not (-90 <= nums[0] <= 90 and -180 <= nums[1] <= 180):
+			raise ValueError("latitude/longitude out of range")
+		return " ".join(parts)

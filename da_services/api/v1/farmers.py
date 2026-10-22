@@ -23,15 +23,20 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 from oan_auth_service.api.utils import handle_api_errors, success_response
+from pydantic import ValidationError as PydanticValidationError
 
 from da_services.api.router import route
 from da_services.integrations.farmer_registry import get_farmer_registry_client
+from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
 from da_services.services import constants as C
 from da_services.services import farmers
 from da_services.utils.permissions import require_roles
 
 # Roles that may read farmers
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
+
+# Roles that may register a new farmer (Executive is read-only)
+REGISTER_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 
 
 @route("/farmers", methods=("GET",), summary="List farmers with scope selector")
@@ -334,4 +339,88 @@ def get_farmer_plots(farmer_id: str):
 		data={
 			"plots": [plot.dict() for plot in plots],
 		}
+	)
+
+
+@route("/farmers", methods=("POST",), summary="Register a new farmer")
+@frappe.whitelist()
+@handle_api_errors
+def register_farmer():
+	"""Register a new farmer via the Farmer Registry ingest pipeline.
+
+	The DA fills the registration form; this submits it to the registry's
+	ingest-data endpoint. Ingestion is asynchronous, so the response carries a
+	correlation_id (and a local event_id) to track progress, not a final farmer.
+
+	Allowed roles: Development Agent, Supervisor, Admin (Executive is read-only).
+
+	Request body (JSON):
+	    {
+	        "first_name": "Abebe",            // required
+	        "father_name": "Kebede",
+	        "grandfather_name": "Tesfaye",
+	        "gender": "male",
+	        "date_of_birth": "1985-04-12",
+	        "phone": "+251911234567",
+	        "woreda": "40801",                // numeric admin code
+	        "kebele": "40801101001",          // numeric admin code
+	        "national_id": "1234567890123456",
+	        "location": "9.0300 38.7400 2350 5",
+	        "lands": [{"ownership": "owner", "area_hectare": 1.5}],
+	        "crops": [{"name": "teff", "planted_date": "2026-07-01"}],
+	        "livestock": [{"animal": "cattle", "count": 3}],
+	        "da_id": "DA-ID-001",
+	        "client_op_id": "<uuid>"          // optional idempotency key
+	    }
+
+	The body is validated against FarmerRegistrationForm (400 on bad input).
+	With client_op_id, resending the same request returns the original event
+	(status "DUPLICATE", duplicate: true) instead of registering twice.
+
+	Returns:
+	    {
+	        "success": true,
+	        "data": {
+	            "correlation_id": "...",   // track async ingestion
+	            "event_id": "DA-INT-00123",
+	            "status": "SUCCESS",
+	            "message_id": "da-svc-...",
+	            "duplicate": false
+	        }
+	    }
+	"""
+	ctx = require_roles(*REGISTER_ROLES)
+
+	# Parse JSON body (silent=True avoids a 500 on malformed JSON)
+	request_data = frappe.request.get_json(silent=True) if frappe.request else None
+	if not request_data and frappe.form_dict:
+		framework_keys = {"cmd", "_", "sid"}
+		request_data = {k: v for k, v in frappe.form_dict.items() if k not in framework_keys}
+
+	if not request_data:
+		frappe.throw(_("Request body is required and must be valid JSON."), frappe.ValidationError)
+
+	# Validate at the boundary: types, ranges and formats are checked here so the
+	# service and mapper only ever see a well-formed form.
+	try:
+		form = FarmerRegistrationForm(**request_data)
+	except PydanticValidationError as e:
+		problems = "; ".join(
+			f"{'.'.join(str(p) for p in err['loc']) or 'body'}: {err['msg']}" for err in e.errors()
+		)
+		frappe.throw(_("Invalid registration form: {0}").format(problems), frappe.ValidationError)
+
+	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True), ctx)
+
+	return success_response(
+		message=_("Registration already submitted.")
+		if result.get("duplicate")
+		else _("Farmer submitted for registration."),
+		data={
+			"correlation_id": result.get("correlation_id"),
+			"event_id": result.get("event_id"),
+			"status": result.get("status"),
+			"message_id": result.get("message_id"),
+			"duplicate": bool(result.get("duplicate")),
+		},
 	)
