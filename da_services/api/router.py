@@ -74,6 +74,7 @@ def _register() -> None:
 		farmer_links,
 		farmers,
 		farmers_update,
+		leave,
 		me,
 		notifications,
 		profile_self,
