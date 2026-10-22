@@ -23,9 +23,11 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 from oan_auth_service.api.utils import handle_api_errors, success_response
+from pydantic import ValidationError as PydanticValidationError
 
 from da_services.api.router import route
 from da_services.integrations.farmer_registry import get_farmer_registry_client
+from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
 from da_services.services import constants as C
 from da_services.services import farmers
 from da_services.utils.permissions import require_roles
@@ -367,8 +369,13 @@ def register_farmer():
 	        "lands": [{"ownership": "owner", "area_hectare": 1.5}],
 	        "crops": [{"name": "teff", "planted_date": "2026-07-01"}],
 	        "livestock": [{"animal": "cattle", "count": 3}],
-	        "da_id": "DA-ID-001"
+	        "da_id": "DA-ID-001",
+	        "client_op_id": "<uuid>"          // optional idempotency key
 	    }
+
+	The body is validated against FarmerRegistrationForm (400 on bad input).
+	With client_op_id, resending the same request returns the original event
+	(status "DUPLICATE", duplicate: true) instead of registering twice.
 
 	Returns:
 	    {
@@ -377,7 +384,8 @@ def register_farmer():
 	            "correlation_id": "...",   // track async ingestion
 	            "event_id": "DA-INT-00123",
 	            "status": "SUCCESS",
-	            "message_id": "da-svc-..."
+	            "message_id": "da-svc-...",
+	            "duplicate": false
 	        }
 	    }
 	"""
@@ -392,14 +400,27 @@ def register_farmer():
 	if not request_data:
 		frappe.throw(_("Request body is required and must be valid JSON."), frappe.ValidationError)
 
-	result = farmers.register_farmer(request_data, ctx)
+	# Validate at the boundary: types, ranges and formats are checked here so the
+	# service and mapper only ever see a well-formed form.
+	try:
+		form = FarmerRegistrationForm(**request_data)
+	except PydanticValidationError as e:
+		problems = "; ".join(
+			f"{'.'.join(str(p) for p in err['loc']) or 'body'}: {err['msg']}" for err in e.errors()
+		)
+		frappe.throw(_("Invalid registration form: {0}").format(problems), frappe.ValidationError)
+
+	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True), ctx)
 
 	return success_response(
-		message=_("Farmer submitted for registration."),
+		message=_("Registration already submitted.")
+		if result.get("duplicate")
+		else _("Farmer submitted for registration."),
 		data={
 			"correlation_id": result.get("correlation_id"),
 			"event_id": result.get("event_id"),
 			"status": result.get("status"),
 			"message_id": result.get("message_id"),
+			"duplicate": bool(result.get("duplicate")),
 		},
 	)

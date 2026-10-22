@@ -3,7 +3,7 @@
 Handles naming and format differences between systems.
 """
 
-import secrets
+import uuid
 from typing import Any
 
 from .schemas import Farmer
@@ -107,9 +107,13 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	if form.get("farmer_reference_id"):
 		payload["farmer_reference_id"] = form["farmer_reference_id"]
 
+	# A client-supplied idempotency key becomes the message_id, so a retried
+	# submission reaches the registry with the same id instead of a new one.
+	op_id = form.get("client_op_id")
+	message_id = f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
 	return {
 		"header": {
-			"message_id": f"da-svc-{secrets.token_hex(8)}",
+			"message_id": message_id,
 			"sender_id": "da-services",
 		},
 		"message": {"payload": payload},

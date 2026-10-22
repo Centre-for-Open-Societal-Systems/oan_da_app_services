@@ -9,6 +9,7 @@ from frappe import _
 
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
+from da_services.integrations.farmer_registry.client import FarmerRegistryClientError
 from da_services.integrations.farmer_registry.mapper import (
 	da_form_to_ingest_payload,
 	farmer_to_reference_dict,
@@ -668,6 +669,26 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	payload = da_form_to_ingest_payload(form_data)
 	message_id = payload["header"]["message_id"]
 
+	# Idempotency: with a client_op_id the message_id is deterministic, so a
+	# retried submission finds its earlier event instead of registering twice.
+	if form_data.get("client_op_id"):
+		existing = frappe.db.get_value(
+			"DA Integration Event",
+			{"event_type": "Farmer Registration", "reference_id": message_id},
+			["name", "status", "external_reference"],
+			as_dict=True,
+		)
+		if existing and existing.status in ("Processing", "Completed"):
+			return {
+				"success": existing.status == "Completed",
+				"message_id": message_id,
+				"correlation_id": existing.external_reference or None,
+				"status": "DUPLICATE",
+				"event_id": existing.name,
+				"error_message": None,
+				"duplicate": True,
+			}
+
 	event = frappe.get_doc(
 		{
 			"doctype": "DA Integration Event",
@@ -684,7 +705,15 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	client = get_farmer_registry_client()
 	try:
 		result = client.register_farmer(payload)
+	except FarmerRegistryClientError as e:
+		# 4xx: our request was wrong (auth, roles, payload). Not retryable —
+		# surface the registry's reason to the caller as a 400.
+		event.db_set("status", "Failed", update_modified=False)
+		event.db_set("last_error", str(e)[:500], update_modified=False)
+		frappe.db.commit()
+		frappe.throw(_("Farmer Registry rejected the registration: {0}").format(e), frappe.ValidationError)
 	except Exception as e:
+		# 5xx / network: transient. Record it and let the error propagate.
 		event.db_set("status", "Failed", update_modified=False)
 		event.db_set("last_error", str(e)[:500], update_modified=False)
 		frappe.db.commit()
@@ -707,4 +736,5 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 		"status": result.get("status"),
 		"event_id": event.name,
 		"error_message": result.get("error_message"),
+		"duplicate": False,
 	}

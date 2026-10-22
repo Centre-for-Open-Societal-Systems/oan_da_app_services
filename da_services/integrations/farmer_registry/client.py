@@ -17,6 +17,23 @@ class FarmerRegistryError(Exception):
 	pass
 
 
+class FarmerRegistryClientError(FarmerRegistryError):
+	"""The registry rejected the request (HTTP 4xx). Retrying the same call will not help."""
+
+	def __init__(self, message: str, status_code: int | None = None, body: str | None = None):
+		super().__init__(message)
+		self.status_code = status_code
+		self.body = body
+
+
+class FarmerRegistryServerError(FarmerRegistryError):
+	"""The registry failed or was unreachable (HTTP 5xx, timeout, connection). Safe to retry."""
+
+	def __init__(self, message: str, status_code: int | None = None):
+		super().__init__(message)
+		self.status_code = status_code
+
+
 class FarmerRegistryClient(ABC):
 	"""Abstract interface to the Farmer Registry."""
 
