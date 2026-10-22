@@ -1,8 +1,10 @@
 """Dashboard summary / today read models and the demo seed (DA-198)."""
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, today
+from frappe.utils import add_days, get_datetime, today
 
 from da_services.services import constants as C
 from da_services.services import dashboard, tasks, visits
@@ -119,7 +121,13 @@ class TestDashboard(IntegrationTestCase):
 			dashboard.summary(_ctx(SUP), da_id="DA-000003")
 
 	def test_today_merges_visits_and_tasks_in_clock_order(self):
-		out = dashboard.today(_ctx(DA1))
+		# The open visit is at 23:30 today; pin "now" to the morning so the
+		# planner status is "Upcoming" no matter when the suite runs.
+		with patch(
+			"da_services.services.visits.now_datetime",
+			return_value=get_datetime(f"{today()} 08:00:00"),
+		):
+			out = dashboard.today(_ctx(DA1))
 		self.assertEqual(out["date"], today())
 		self.assertEqual(
 			[(i["kind"], i["time"]) for i in out["items"]],
