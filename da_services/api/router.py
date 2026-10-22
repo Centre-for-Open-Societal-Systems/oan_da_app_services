@@ -68,6 +68,7 @@ def _register() -> None:
 
 	# Importing the endpoint modules executes their @route(...) registrations.
 	from da_services.api.v1 import (
+		agents,
 		assignments,
 		da,
 		dashboard,
