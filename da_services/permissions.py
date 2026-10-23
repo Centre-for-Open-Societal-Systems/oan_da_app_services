@@ -20,14 +20,34 @@ def _sql_in(values) -> str:
 	return ", ".join(frappe.db.escape(v) for v in sorted(values))
 
 
+def _officer_scope_clause(table: str, ctx) -> str:
+	"""SQL mirror of ScopeContext.scope_decision for Supervisor / Executive lists.
+
+	A Woreda grant matches rows in that Woreda, a Zone grant rows in that Zone, and the
+	two are OR-ed when a user holds both. A Region grant only applies when the user holds
+	no narrower grant (same rule as scope_decision: a Region grant next to a Zone / Woreda
+	grant is never widened). Rows whose `zone` / `woreda` is empty never match a narrow
+	grant, so missing registry data denies rather than widens.
+	"""
+	clauses = []
+	if ctx.woreda_scopes:
+		clauses.append(f"{table}.`woreda` in ({_sql_in(ctx.woreda_scopes)})")
+	if ctx.zone_scopes:
+		clauses.append(f"{table}.`zone` in ({_sql_in(ctx.zone_scopes)})")
+	if not clauses and ctx.region_scopes:
+		clauses.append(f"{table}.`region` in ({_sql_in(ctx.region_scopes)})")
+	if not clauses:
+		return DENY
+	return clauses[0] if len(clauses) == 1 else "(" + " or ".join(clauses) + ")"
+
+
 def da_scoped_query_conditions(doctype: str, user: str | None = None) -> str:
-	"""List filter for operational doctypes that carry `da_id`, `region`, `woreda`.
+	"""List filter for operational doctypes that carry `da_id`, `region`, `zone`, `woreda`.
 
 	Same rule as utils.permissions.ScopeContext: a DA sees rows for their own DA-ID; a
-	Supervisor / Executive sees rows whose posting codes fall inside their grants, the
-	narrowest grant winning; a Zone-only grant cannot be resolved against rows that carry
-	no zone, so it yields nothing (no silent widening to the Region); Communications
-	Officer and anyone without a grant see nothing. Unrestricted roles see everything.
+	Supervisor / Executive sees rows whose posting codes fall inside their grants (see
+	_officer_scope_clause); Communications Officer and anyone without a grant see
+	nothing. Unrestricted roles see everything.
 	"""
 	user = user or frappe.session.user
 	ctx = get_scope_context(user)
@@ -39,12 +59,7 @@ def da_scoped_query_conditions(doctype: str, user: str | None = None) -> str:
 			return DENY
 		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
 	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		if ctx.woreda_scopes:
-			return f"{t}.`woreda` in ({_sql_in(ctx.woreda_scopes)})"
-		if ctx.zone_scopes:
-			return DENY  # scope unresolved: rows carry no zone
-		if ctx.region_scopes:
-			return f"{t}.`region` in ({_sql_in(ctx.region_scopes)})"
+		return _officer_scope_clause(t, ctx)
 	return DENY
 
 
@@ -57,9 +72,9 @@ def has_da_scoped_permission(doc, ptype: str = "read", user: str | None = None) 
 	if ctx.has_any_role(C.ROLE_DA):
 		return ctx.owns_da(doc.da_id)
 	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		return ctx.covers(doc.region, doc.woreda)
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
 	if ctx.has_any_role(C.ROLE_EXECUTIVE):
-		return ptype == "read" and ctx.covers(doc.region, doc.woreda)
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
 	return False
 
 
@@ -144,12 +159,7 @@ def da_farmer_link_query_conditions(user: str | None = None) -> str:
 			return DENY
 		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
 	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		if ctx.woreda_scopes:
-			return f"{t}.`woreda` in ({_sql_in(ctx.woreda_scopes)})"
-		if ctx.zone_scopes:
-			return DENY  # scope unresolved: rows carry no zone
-		if ctx.region_scopes:
-			return f"{t}.`region` in ({_sql_in(ctx.region_scopes)})"
+		return _officer_scope_clause(t, ctx)
 	return DENY
 
 
@@ -163,9 +173,9 @@ def has_da_farmer_link_permission(doc, ptype: str = "read", user: str | None = N
 		# DA can only read their own links, not create/write
 		return ptype == "read" and ctx.owns_da(doc.da_id)
 	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		return ctx.covers(doc.region, doc.woreda)
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
 	if ctx.has_any_role(C.ROLE_EXECUTIVE):
-		return ptype == "read" and ctx.covers(doc.region, doc.woreda)
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
 	return False
 
 
@@ -193,12 +203,7 @@ def da_farmer_reference_query_conditions(user: str | None = None) -> str:
 			return DENY
 		return f"{t}.`farmer_id` in ({_sql_in(linked_farmer_ids)})"
 	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		if ctx.woreda_scopes:
-			return f"{t}.`woreda` in ({_sql_in(ctx.woreda_scopes)})"
-		if ctx.zone_scopes:
-			return DENY  # scope unresolved: rows carry no zone
-		if ctx.region_scopes:
-			return f"{t}.`region` in ({_sql_in(ctx.region_scopes)})"
+		return _officer_scope_clause(t, ctx)
 	return DENY
 
 
@@ -218,5 +223,5 @@ def has_da_farmer_reference_permission(doc, ptype: str = "read", user: str | Non
 		)
 		return ptype == "read" and is_linked
 	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		return ptype == "read" and ctx.covers(doc.region, doc.woreda)
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
 	return False

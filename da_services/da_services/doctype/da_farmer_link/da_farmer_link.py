@@ -27,11 +27,12 @@ class DAFarmerLink(Document):
 			ref = frappe.db.get_value(
 				"DA Farmer Reference",
 				self.farmer_id,
-				["farmer_name", "region", "woreda", "kebele"],
+				["farmer_name", "region", "zone", "woreda", "kebele"],
 				as_dict=True,
 			)
 			if ref:
 				self.farmer_name = ref.farmer_name
 				self.region = ref.region
+				self.zone = ref.zone
 				self.woreda = ref.woreda
 				self.kebele = ref.kebele
