@@ -169,6 +169,28 @@ class TestAgentsAPI(IntegrationTestCase):
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000003", "DA-000004"})
 
+	def test_executive_with_zone_scope_sees_only_zone(self):
+		"""Executive role: User with zone_scope sees only DAs in that zone."""
+		# Create Executive with zone scope ET04-Z01
+		exec_zone = "agents-api-exec-zone@da.local"
+		_user(exec_zone, [C.ROLE_EXECUTIVE])
+		_grant(exec_zone, C.ROLE_EXECUTIVE, region_scope="ET04", zone_scope="ET04-Z01")
+		frappe.db.commit()
+
+		frappe.set_user(exec_zone)
+		response = frappe.call("da_services.api.v1.agents.list_agents")
+
+		self.assertEqual(response["status"], "success")
+		agents = response["data"]["agents"]
+
+		# ET04-Z01 has DA-000001 and DA-000002
+		agent_ids = {a["da_id"] for a in agents}
+		self.assertEqual(agent_ids, {"DA-000001", "DA-000002"})
+
+		# Verify all returned DAs are in the correct zone
+		for agent in agents:
+			self.assertEqual(agent["zone"], "ET04-Z01")
+
 	def test_admin_sees_all(self):
 		"""Admin role: User sees all DAs (unrestricted)."""
 		frappe.set_user(ADMIN)

@@ -96,7 +96,7 @@ def list_agents(
 
 	Errors:
 	- 403: Permission denied (user lacks DA read roles)
-	- 422: Validation error (invalid filter values)
+	- 400: Validation error (invalid filter values)
 	"""
 	ctx = require_roles(*READ_ROLES)
 
