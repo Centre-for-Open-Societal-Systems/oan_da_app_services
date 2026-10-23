@@ -190,7 +190,7 @@ scheduler_events = {
 # Testing
 # -------
 
-# before_tests = "da_services.install.before_tests"
+before_tests = "da_services.setup.install.before_tests"
 
 # Extend DocType Class
 # ------------------------------
