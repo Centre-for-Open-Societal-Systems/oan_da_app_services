@@ -5,21 +5,23 @@
   "farmer_registry_backend": "http",
   "farmer_registry_url": "http://farmer-registry:8080",
   "farmer_registry_api_key": "your-secret-api-key-here",
-  "farmer_registry_api_version": "v1",
   "farmer_registry_timeout": 30,
 
-  "farmer_registry_endpoints": {
-    "get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-    "list_farmers": "/api/{version}/registry/farmer",
-    "get_plots": "/api/{version}/registry/land",
-    "update_farmer": "/api/{version}/registry/farmer/{farmer_id}"
-  },
+  "_comment_read": "Reads use the OpenG2P Staff API (POST + request_header/request_body envelope): register-data/get_subject_record, get_tab_records, search_in_a_register; updates become change-requests/create_change_request. No per-endpoint path config.",
 
-  "_comment_ingest": "Farmer registration via Staff API ingest-data. IDs are the dev FARMER_ODK_MODEL register + intake form; confirm per environment.",
+  "_comment_ingest": "Farmer register / intake form / tab ids. Values are the dev FARMER_ODK_MODEL set; confirm per environment.",
   "farmer_registry_ingest": {
     "data_model": "FARMER_ODK_MODEL",
     "register_id": "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd",
-    "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649"
+    "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649",
+    "tabs": {
+      "farmer": "farmer_farmer_tab",
+      "location": "farmer_location_tab",
+      "household": "farmer_household_link_tab",
+      "land": "farmer_land_tab",
+      "crop": "farmer_crop_tab",
+      "livestock": "farmer_livestock_tab"
+    }
   },
 
   "_comment_keycloak": "Service-account (client_credentials) for the Staff API. Needs the intakeSubmission:edit role. Ask Asmit for a DA Services client + secret.",

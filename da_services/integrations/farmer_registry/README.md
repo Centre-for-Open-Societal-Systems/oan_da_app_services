@@ -1,240 +1,134 @@
 # Farmer Registry Integration
 
-This module provides integration with the Farmer Registry (OpenG2P-based) service.
+Boundary to the **Farmer Registry** (OpenG2P Gen 2) for the DA app: read farmers,
+plots and holdings, send farmer edits as change requests, and register new
+farmers through the ingest pipeline. Services never call the registry directly;
+they ask `get_farmer_registry_client()` for a client and call its methods.
+
+```
+client.py    interface + factory (mock | http)
+mock.py      in-memory fixtures — the default, used by tests and local dev
+http.py      live client over the OpenG2P Staff API
+schemas.py   Pydantic models: Farmer, FarmerListItem, Plot, FarmerRegistrationForm
+mapper.py    registry rows <-> our schemas, DA form -> ingest payload, DA-41 updates -> change requests
+```
+
+## Backends
+
+| `farmer_registry_backend` | Behaviour |
+|---|---|
+| `"mock"` (default) | Fixture data, no network. Tests always run on this. |
+| `"http"` | Live registry over the Staff API (contract below). |
+
+## Staff API contract (http backend)
+
+Every call is a `POST` with the OpenG2P staff envelope:
+
+```json
+{
+  "request_header": {"sender_app_mnemonic": "DA_SERVICES", "request_id": "<uuid4>", "request_timestamp": "...", ...},
+  "request_body": {
+    "request_payload": {...},
+    "pagination_request": {"current_page": 1, "page_size": 50, "sort_by": "", "filter_by": {...}, "search_text": ""}
+  }
+}
+```
+
+Responses come back as `{"response_header": {"response_status": "SUCCESS|ERROR", ...}, "response_body": {"response_payload": ..., "pagination_response": {...}}}`.
+
+| Client method | Staff API endpoint | Notes |
+|---|---|---|
+| `get_farmer(id)` | `register-data/get_subject_record` + `get_tab_records` (farmer, location, household tabs) | Identity row is flat; birth / socio-economic / phones / location / household come from tab sections and are merged in. Returns `None` when the registry says not found. |
+| `list_farmers(woreda, kebele, state, limit, offset)` | `register-data/search_in_a_register` | `filter_by` is a JSON dict of the register's whitelisted fields (`woreda_name`, `region_name`, `state`, `first_name`, ...). DA codes are translated to names via `DA Administrative Area`. `kebele_name` is not yet whitelisted on the registry, so Kebele is also narrowed client-side from `display_fields`. |
+| `get_farmer_plots(id)` | `register-data/get_tab_records` (land tab) | Land Details rows -> `Plot`. |
+| `update_farmer(id, updates)` | `change-requests/create_change_request` | One change request per register section; approved by a Woreda officer. Only socio-economic fields are editable this way today (`income_source`, `education_level`, `marital_status`, `is_psnp_user`, `disabled`); other DA-41 fields are rejected as unsupported so the sync queue records a clear reason. The change request id is returned as `version`. |
+| `register_farmer(payload)` | `input-mechanism-data/ingest-data?data_model&register_id&intake_form_id` | Async: returns a `correlation_id`; the farmer lands in the Intake Form and gets an FR-id after Woreda approval. |
+| `get_ingest_status(correlation_id)` | `ingestion-data/search_in_ingestion_data` | Pipeline rows for a submission. |
+
+Auth: a Keycloak **client-credentials** token (service account) cached per worker
+behind a lock, plus the double-submit CSRF pair (`X-CSRF-Token` header == cookie)
+the staff middleware requires on POST. HTTP 4xx raises
+`FarmerRegistryClientError` (not retryable), 5xx / network raises
+`FarmerRegistryServerError` (retryable).
+
+The service account needs these `farmer-registry-staff-portal` client roles:
+`Intake Officer` (intakeSubmission:edit — register), `Data Editor`
+(register:view, changeRequest:create — read/update), `Integration Manager`
+(incomingMessage:view — ingest status).
 
 ## Configuration
 
-### Mock Backend (Development)
-
-Default configuration - uses hardcoded test data, no network calls.
-
-```json
-{
-  "farmer_registry_backend": "mock"
-}
-```
-
-### HTTP Backend (Placeholder - Not Production-Ready)
-
-**Note:** This HTTP client is a placeholder. The actual Farmer Registry data comes from the
-**Aggregation Layer** API which uses a different contract:
-- `POST /aggregation/v1/staff/registry/search` (by foundationalId)
-- `POST /aggregation/v1/staff/registry/tab` (with searchId + tabId)
-- Keycloak token authentication (realm: staff)
-- **No update endpoint available yet** (as of Oct 2026)
-
-**Update Endpoint Status (DA-41):**
-- The `update_farmer` endpoint and `expected_version`/optimistic locking are **mock-only**
-- Aggregation Layer has no farmer update API yet
-- Version conflict detection (`If-Match` header) works in mock but is untested against real API
-- When Aggregation Layer adds update support, this will need contract alignment
-
-This HTTP client will be updated once the Aggregation Layer contract is finalized.
-See `docs/DA-Data-Requirements.pdf` for the complete integration specification.
-
-Connect to a compatible Farmer Registry service with configurable routes.
-
-**File:** `sites/da-services.localhost/site_config.json`
+`sites/<site>/site_config.json` (see `config.example.json`):
 
 ```json
 {
   "farmer_registry_backend": "http",
-  "farmer_registry_url": "http://farmer-registry:8080",
-  "farmer_registry_api_key": "your-secret-api-key",
-  "farmer_registry_api_version": "v1",
+  "farmer_registry_url": "https://staff-farmer-development.oanstaging.com",
   "farmer_registry_timeout": 30,
-  
-  "farmer_registry_endpoints": {
-    "get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-    "list_farmers": "/api/{version}/registry/farmer",
-    "get_plots": "/api/{version}/registry/land",
-    "update_farmer": "/api/{version}/registry/farmer/{farmer_id}"
+  "farmer_registry_keycloak": {
+    "token_url": "https://keycloak-development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+    "client_id": "da-services",
+    "client_secret": "<from DevOps>"
+  },
+  "farmer_registry_ingest": {
+    "data_model": "FARMER_ODK_MODEL",
+    "register_id": "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd",
+    "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649",
+    "tabs": {"farmer": "farmer_farmer_tab", "location": "farmer_location_tab",
+             "household": "farmer_household_link_tab", "land": "farmer_land_tab"}
   }
 }
 ```
 
-## Configuration Options
+| Option | Required | Description |
+|---|---|---|
+| `farmer_registry_url` | yes | Staff API base URL (`http(s)://...`) |
+| `farmer_registry_keycloak` | yes* | `token_url`, `client_id`, `client_secret` of the DA Services service account. *Or `farmer_registry_api_key` for a static bearer token (testing only). |
+| `farmer_registry_ingest.register_id` | yes | Farmer register id |
+| `farmer_registry_ingest.intake_form_id` | for register | Farmer intake form id |
+| `farmer_registry_ingest.data_model` | for register | Ingest data model (default `FARMER_ODK_MODEL`) |
+| `farmer_registry_ingest.tabs` | no | Override tab ids (defaults match the dev Farmer register) |
+| `farmer_registry_timeout` | no | Seconds, default 30 |
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `farmer_registry_backend` | string | `"mock"` | Backend type: `"mock"` or `"http"` |
-| `farmer_registry_url` | string | `"http://farmer-registry:8080"` | Base URL of Farmer Registry API |
-| `farmer_registry_api_key` | string | `null` | API key for authentication (Bearer token) |
-| `farmer_registry_api_version` | string | `"v1"` | API version (replaces `{version}` in endpoint templates) |
-| `farmer_registry_timeout` | int | `30` | HTTP request timeout in seconds |
-| `farmer_registry_endpoints` | object | See defaults | Configurable endpoint path templates |
+The http client validates this at construction and raises
+`FarmerRegistryError` on a missing URL, partial Keycloak config, no auth at all
+or a missing register id — misconfiguration surfaces at startup, not on the
+first request from the field.
 
-## Endpoint Templates
+## Cache
 
-Endpoint templates support placeholders:
-- `{version}` - Replaced with `farmer_registry_api_version`
-- `{farmer_id}` - Replaced with actual farmer ID
-- Other parameters as needed
+Farmer reads are cached in `DA Farmer Reference` (`services/farmers.py`).
+Opening a profile fetches and caches that farmer; listing a DA's farmers on the
+http backend triggers `sync_farmer_references(kebeles=...)` for Kebeles with no
+cached rows, which pages through `list_farmers` and upserts one row per farmer.
+Registry failures during that sync are logged and the list falls back to the
+cache.
 
-### Default Endpoints
-
-```python
-{
-	"get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-	"list_farmers": "/api/{version}/registry/farmer",
-	"get_plots": "/api/{version}/registry/land",
-	"update_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-}
-```
-
-## Environment-Specific Configuration
-
-### Development
-```json
-{
-  "farmer_registry_backend": "mock"
-}
-```
-
-### Staging
-```json
-{
-  "farmer_registry_backend": "http",
-  "farmer_registry_url": "https://staging-farmer-registry.example.com",
-  "farmer_registry_api_key": "staging-api-key"
-}
-```
-
-### Production
-```json
-{
-  "farmer_registry_backend": "http",
-  "farmer_registry_url": "https://farmer-registry.production.com",
-  "farmer_registry_api_key": "production-api-key"
-}
-```
-
-## API Version Migration
-
-When Farmer Registry upgrades from v1 to v2:
-
-**Before (v1):**
-```json
-{
-  "farmer_registry_api_version": "v1"
-}
-```
-
-**After (v2) - Just change config:**
-```json
-{
-  "farmer_registry_api_version": "v2"
-}
-```
-
-All API calls automatically update:
-- `/api/v1/registry/farmer/123` → `/api/v2/registry/farmer/123`
-
-## Route Migration
-
-If Farmer Registry changes route structure:
-
-**Old routes:**
-```
-/api/v1/registry/farmer/{id}
-/api/v1/registry/land
-```
-
-**New routes:**
-```
-/api/v2/farmers/{id}
-/api/v2/plots
-```
-
-**Update config (no code changes!):**
-```json
-{
-  "farmer_registry_api_version": "v2",
-  "farmer_registry_endpoints": {
-    "get_farmer": "/api/{version}/farmers/{farmer_id}",
-    "list_farmers": "/api/{version}/farmers",
-    "get_plots": "/api/{version}/plots",
-    "update_farmer": "/api/{version}/farmers/{farmer_id}"
-  }
-}
-```
-
-## Usage in Code
+## Usage
 
 ```python
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 
-# Get client (automatically uses config to choose mock or http)
 client = get_farmer_registry_client()
-
-# Get farmer
-farmer = client.get_farmer("farmer-uuid-001")
-
-# List farmers
+farmer = client.get_farmer("frm-internal-id")
 farmers, total = client.list_farmers(woreda="ET04-W01", limit=50)
-
-# Get plots
-plots = client.get_farmer_plots("farmer-uuid-001")
-
-# Update farmer
-updated = client.update_farmer("farmer-uuid-001", {"phone": "912345678"})
+plots = client.get_farmer_plots("frm-internal-id")
+result = client.update_farmer("frm-internal-id", {"income_source": "LIVESTOCK"})
 ```
 
 ## Testing
 
-Tests always use mock backend regardless of configuration:
+- `tests/test_farmer_registration.py` — mapper, registration form validation, idempotency (mock backend).
+- `tests/test_farmer_registry_http.py` — the http client against stubbed Staff API envelopes: envelope/auth/CSRF, read merging, search filters and pagination, plots, change requests, 4xx/5xx mapping, config validation.
 
-```python
-# In tests, this always returns MockFarmerRegistryClient
-client = get_farmer_registry_client()
-```
+Run: `bench run-tests --app da_services`.
 
 ## Troubleshooting
 
-### Connection Errors
-```python
-# Check configuration
-frappe.conf.get("farmer_registry_url")
-frappe.conf.get("farmer_registry_backend")
-
-# Test connection
-import requests
-
-response = requests.get(f"{base_url}/health")
-```
-
-### Authentication Errors
-```python
-# Verify API key
-frappe.conf.get("farmer_registry_api_key")
-
-# Check headers
-client = get_farmer_registry_client()
-print(client.headers)
-```
-
-### Route Errors
-```python
-# Verify endpoint configuration
-client = get_farmer_registry_client()
-print(client.endpoints)
-
-# Test URL building
-url = client._build_url("get_farmer", farmer_id="test-123")
-print(url)
-```
-
-## Error Logging
-
-All HTTP errors are logged to Frappe's error log:
-
-```python
-# View recent errors
-frappe.get_all(
-	"Error Log",
-	filters={"error": ["like", "%Farmer Registry%"]},
-	fields=["creation", "error"],
-	order_by="creation desc",
-	limit=10,
-)
-```
+| Symptom | Likely cause |
+|---|---|
+| `FarmerRegistryError: ... misconfigured` at startup | A `farmer_registry_*` key is missing or partial (see table above). |
+| `403 Insufficient resource_access roles` | The Keycloak service account lacks the staff-portal client roles listed above. |
+| `403 CSRF token missing or invalid` | Header and cookie `X-CSRF-Token` differ — only possible if a proxy strips cookies. |
+| `list_farmers` ignores the Kebele | `kebele_name` is not in the registry's filter whitelist yet; rows are narrowed client-side only when they carry a kebele display field. |
+| Farmer edit rejected as "not editable through the Farmer Registry change request" | The field is outside the socio-economic section mapping in `mapper.CHANGE_REQUEST_SECTIONS` (phones and household fields live in other registers). |
