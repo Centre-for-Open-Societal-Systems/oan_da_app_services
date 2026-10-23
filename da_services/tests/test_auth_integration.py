@@ -198,7 +198,7 @@ class TestRPCNamespace(IntegrationTestCase):
 			validate_jwt_request(req)
 
 	def test_jwt_middleware_allows_authenticated_user(self):
-		"""An already-authenticated user (session set) passes through the middleware."""
+		"""JWT middleware requires bearer token even when session exists."""
 		from oan_auth_service.api.middleware import validate_jwt_request
 
 		frappe.set_user("Administrator")
@@ -207,7 +207,9 @@ class TestRPCNamespace(IntegrationTestCase):
 		req = make_test_request("/api/method/da_services.api.v1.da.get_da", method="GET")
 		frappe.set_user(SUPERVISOR)
 		frappe.local.session = frappe._dict(user=SUPERVISOR)
-		validate_jwt_request(req)
+		# Middleware now requires JWT token even with active session
+		with self.assertRaises(frappe.AuthenticationError):
+			validate_jwt_request(req)
 
 
 # ---------------------------------------------------------------------------
