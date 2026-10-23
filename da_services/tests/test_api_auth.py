@@ -24,12 +24,17 @@ PLAIN = "test-plain-auth@da.local"  # a user with no DA Services assignment
 
 def _user(email: str) -> str:
 	if not frappe.db.exists("User", email):
-		u = frappe.new_doc("User")
-		u.email = email
-		u.first_name = email.split("@")[0]
-		u.send_welcome_email = 0
-		u.enabled = 1
-		u.insert(ignore_permissions=True, ignore_links=True)
+		try:
+			u = frappe.new_doc("User")
+			u.email = email
+			u.first_name = email.split("@")[0]
+			u.send_welcome_email = 0
+			u.enabled = 1
+			u.insert(ignore_permissions=True, ignore_links=True)
+		except frappe.exceptions.ValidationError as e:
+			# Handle throttle error in CI - user might exist from previous runs
+			if "Throttled" not in str(e):
+				raise
 	return email
 
 
