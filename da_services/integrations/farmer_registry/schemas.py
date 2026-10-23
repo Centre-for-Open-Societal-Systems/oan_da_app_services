@@ -211,6 +211,17 @@ class FarmerRegistrationForm(BaseModel):
 	crops: list[CropItem] = Field(default_factory=list, max_length=50)
 	livestock: list[LivestockItem] = Field(default_factory=list, max_length=50)
 	da_id: str | None = Field(None, max_length=40)
+	# Household Link + Socio-economic and Health (registry tabs 2 and 1.5)
+	household_head: bool | None = Field(
+		None, description="Is the farmer the household head? yes = registry creates a Household record"
+	)
+	is_psnp_user: bool | None = Field(None, description="PSNP beneficiary")
+	disabled: bool | None = Field(None, description="Has a disability")
+	marital_status: str | None = Field(
+		None, max_length=40, description="married | single | widowed | divorced"
+	)
+	education_level: str | None = Field(None, max_length=60, description="e.g. can_read_and_write | primary")
+	income_source: str | None = Field(None, max_length=60, description="e.g. crop_production | livestock")
 	farmer_reference_id: str | None = Field(None, max_length=64)
 	client_op_id: str | None = Field(
 		None, pattern=r"^[A-Za-z0-9_-]{8,64}$", description="Idempotency key chosen by the client"
