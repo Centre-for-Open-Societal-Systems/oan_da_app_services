@@ -29,6 +29,23 @@ def after_migrate():
 	seed_roles()
 
 
+def before_tests():
+	"""Disable Frappe's user-creation throttle for this process.
+
+	``User.before_insert`` rejects the 61st User created in a 60-minute window.
+	The suite inserts one user per role fixture. On a fresh CI database, and on
+	any rerun inside that window, later tests die in ``setUp`` with
+	``ValidationError: Throttled``.
+
+	``frappe.init`` reloads site config from disk, so writing
+	``frappe.conf.throttle_user_limit`` does not survive the first test. Replace
+	the checker itself for the rest of the process.
+	"""
+	from frappe.core.doctype.user import user as user_module
+
+	user_module.throttle_user_creation = lambda: None
+
+
 def seed_roles():
 	"""Create the five DA Services roles if missing and enforce their Desk access.
 
