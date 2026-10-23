@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import now_datetime, today
 
 from da_services.services import constants as C
+from da_services.utils import audit as audit_log
 from da_services.utils.permissions import ScopeContext, require_roles
 
 KINDS = (
@@ -152,3 +153,132 @@ def mark_all_read(ctx: ScopeContext | None = None) -> dict:
 	for name in names:
 		frappe.db.set_value("DA Notification", name, {"read": 1, "read_at": now}, update_modified=True)
 	return {"updated": len(names)}
+
+
+# ---------------------------------------------------------------------------
+# Broadcast (Communications Officer -> DAs)
+# ---------------------------------------------------------------------------
+
+BROADCAST_SCOPES = ("all", "region", "zone", "woreda")
+BROADCAST_SENT = "notification.broadcast.sent"
+
+
+def _broadcast_recipients(scope: str, scope_value: str | None) -> list[str]:
+	"""Users holding an active Development Agent grant inside the scope, de-duplicated."""
+	filters: dict = {
+		"role": C.ROLE_DA,
+		"active": 1,
+		"effective_from": ("<=", today()),
+	}
+	if scope == "region":
+		filters["region_scope"] = scope_value
+	elif scope == "zone":
+		filters["zone_scope"] = scope_value
+	elif scope == "woreda":
+		filters["woreda_scope"] = scope_value
+
+	rows = frappe.get_all(
+		"DA RBAC Assignment",
+		filters=filters,
+		or_filters=[["effective_to", "is", "not set"], ["effective_to", ">=", today()]],
+		fields=["user"],
+	)
+	return sorted({r.user for r in rows if r.user})
+
+
+def _assert_broadcast_scope_allowed(ctx: ScopeContext, scope: str, scope_value: str | None) -> None:
+	"""A sender may only target what their own grants cover (deny, never widen).
+
+	Admin is unrestricted. A Communications Officer whose grant carries no
+	Region / Zone / Woreda is the national comms desk and may target anything;
+	one with a scoped grant may only broadcast inside that scope.
+	"""
+	if ctx.unrestricted:
+		return
+	if not (ctx.region_scopes or ctx.zone_scopes or ctx.woreda_scopes):
+		return
+	if scope == "all":
+		frappe.throw(
+			_("Your grant is limited to a Region / Zone / Woreda; choose a scope you cover."),
+			frappe.PermissionError,
+		)
+	covered = ctx.covers(
+		region=scope_value if scope == "region" else None,
+		zone=scope_value if scope == "zone" else None,
+		woreda=scope_value if scope == "woreda" else None,
+	)
+	if not covered:
+		frappe.throw(
+			_("{0} {1} is not in your scope.").format(scope.capitalize(), scope_value), frappe.PermissionError
+		)
+
+
+def broadcast(
+	ctx: ScopeContext,
+	*,
+	title: str | None,
+	body: str | None = None,
+	href: str | None = None,
+	scope: str = "all",
+	scope_value: str | None = None,
+	client_op_id: str | None = None,
+) -> dict:
+	"""Send one Broadcast notification to every DA in the scope.
+
+	Returns {broadcast_id, scope, scope_value, recipients, duplicate}. With a
+	client_op_id, resending the same request returns the original broadcast
+	instead of notifying everyone twice. The send is recorded as a DA Audit
+	Event (who, what, which scope, how many).
+	"""
+	scope = (scope or "all").strip().lower()
+	if scope not in BROADCAST_SCOPES:
+		frappe.throw(
+			_("scope must be one of: {0}").format(", ".join(BROADCAST_SCOPES)), frappe.ValidationError
+		)
+	if scope != "all" and not scope_value:
+		frappe.throw(_("scope_value is required for scope {0}.").format(scope), frappe.ValidationError)
+	if scope == "all":
+		scope_value = None
+	title = (title or "").strip()
+	if not title:
+		frappe.throw(_("title is required."), frappe.ValidationError)
+	if len(title) > 140:
+		frappe.throw(_("title must be 140 characters or fewer."), frappe.ValidationError)
+
+	_assert_broadcast_scope_allowed(ctx, scope, scope_value)
+
+	broadcast_id = client_op_id or frappe.generate_hash(length=16)
+	event_key = f"broadcast:{broadcast_id}"
+
+	if client_op_id:
+		existing = frappe.get_all(
+			"DA Notification", filters={"kind": "Broadcast", "event": event_key}, pluck="user"
+		)
+		if existing:
+			return {
+				"broadcast_id": broadcast_id,
+				"scope": scope,
+				"scope_value": scope_value,
+				"recipients": len(set(existing)),
+				"duplicate": True,
+			}
+
+	recipients = _broadcast_recipients(scope, scope_value)
+	for user in recipients:
+		notify(user, kind="Broadcast", title=title, body=body, href=href, event=event_key)
+
+	audit_log.record(
+		BROADCAST_SENT,
+		entity_type="DA Notification",
+		entity_name=broadcast_id,
+		details={"scope": scope, "scope_value": scope_value, "title": title, "recipients": len(recipients)},
+		user=ctx.user,
+	)
+
+	return {
+		"broadcast_id": broadcast_id,
+		"scope": scope,
+		"scope_value": scope_value,
+		"recipients": len(recipients),
+		"duplicate": False,
+	}
