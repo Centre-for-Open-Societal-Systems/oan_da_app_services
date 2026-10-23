@@ -12,7 +12,7 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
-from da_services.integrations.da_registry.client import get_client
+from da_services.integrations.da_registry.client import DANotFound, get_client
 from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext
 
@@ -73,7 +73,28 @@ def list_agents(
 			for woreda_code in ctx.woreda_scopes:
 				das = registry_client.list_das(woreda=woreda_code)
 				all_das.extend(das)
-		# Fetch by region scope (broader)
+		# Fetch by zone scope (medium breadth)
+		elif ctx.zone_scopes:
+			# Registry list_das doesn't support zone parameter directly
+			# Derive regions from zone codes (zone format: REGION-Z##)
+			regions_to_fetch = set()
+			for zone_code in ctx.zone_scopes:
+				# Extract region from zone code (e.g., "ET04-Z01" -> "ET04")
+				if zone_code and "-Z" in zone_code:
+					region = zone_code.split("-Z")[0]
+					regions_to_fetch.add(region)
+
+			# Fetch by regions and filter to zones
+			if regions_to_fetch:
+				for region_code in regions_to_fetch:
+					das = registry_client.list_das(region=region_code)
+					# Filter to only DAs in the granted zones
+					all_das.extend([da for da in das if da.zone in ctx.zone_scopes])
+			else:
+				# Cannot derive region from zone, fetch all and filter
+				all_das_unfiltered = registry_client.list_das()
+				all_das = [da for da in all_das_unfiltered if da.zone in ctx.zone_scopes]
+		# Fetch by region scope (broadest)
 		elif ctx.region_scopes:
 			for region_code in ctx.region_scopes:
 				das = registry_client.list_das(region=region_code)
@@ -100,7 +121,7 @@ def list_agents(
 		for da_id in ctx.da_ids:
 			try:
 				all_das.append(registry_client.get_da(da_id))
-			except Exception:
+			except DANotFound:
 				# DA not found in registry - skip
 				continue
 
