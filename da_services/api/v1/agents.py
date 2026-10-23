@@ -113,7 +113,7 @@ def list_agents(
 	try:
 		limit = cint(limit or frappe.form_dict.get("limit") or 50)
 		start = cint(start or frappe.form_dict.get("start") or 0)
-	except (ValueError, TypeError):
+	except (ValueError, TypeError):  # fmt: skip
 		frappe.throw(
 			_("Invalid pagination parameters: limit and start must be integers."), frappe.ValidationError
 		)
