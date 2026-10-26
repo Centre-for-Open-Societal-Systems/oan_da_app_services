@@ -639,6 +639,16 @@ def _get_da_assigned_kebeles(da_ids: list) -> list:
 	return kebeles
 
 
+def _da_display_name(da_id: str) -> str | None:
+	"""The DA's full name from the DA Registry, or None when it cannot be read."""
+	from da_services.integrations.da_registry.client import DARegistryError, get_client
+
+	try:
+		return (get_client().get_da(da_id).full_name or "").strip()[:140] or None
+	except DARegistryError:
+		return None
+
+
 def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	"""Register a new farmer through the Farmer Registry ingest pipeline.
 
@@ -665,6 +675,13 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 
 	if not isinstance(form_data, dict) or not form_data.get("first_name"):
 		frappe.throw(_("Farmer first name is required."), frappe.ValidationError)
+
+	# The registry shows the enumerator's name as the record's creator; take it from
+	# the DA Registry when the form only carries the DA-ID (best effort, never blocks).
+	if form_data.get("da_id") and not form_data.get("enumerator_name"):
+		name = _da_display_name(form_data["da_id"])
+		if name:
+			form_data = {**form_data, "enumerator_name": name}
 
 	payload = da_form_to_ingest_payload(form_data)
 	message_id = payload["header"]["message_id"]

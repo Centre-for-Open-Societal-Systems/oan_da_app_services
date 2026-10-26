@@ -131,9 +131,12 @@ class Farmer(BaseModel):
 	state: str = "APPROVED"
 	registration_date: datetime | None = None
 
-	# Socio-economic
+	# Socio-economic (same vocabulary as FarmerRegistrationForm, so what a DA
+	# registers reads back under the same names)
 	source_of_income: str | None = None
 	is_psnp_user: bool = False
+	marital_status: str | None = None
+	disabled: bool | None = None
 
 
 class FarmerListItem(BaseModel):
@@ -186,12 +189,84 @@ class LivestockItem(BaseModel):
 	system: str = Field("mixed", description="mixed | intensive | extensive")
 
 
+# Vocabularies for the Socio-economic and Health section. Primary source: the choices
+# of the deployed ODK form (ATI_Farmers_Profile_ODK_Form_v2.xlsx, lists
+# choices_marital_status / choices_education_level / choices_income_source), which is
+# what FARMER_ODK_MODEL intake was built for. The registry's lookup codes
+# (g2p_attribute_values*.sql: MARITAL_STATUS, EDUCATION_LEVEL, SOURCE_OF_INCOME) are
+# accepted as well, since the registry team's own integration run submits those too.
+# Codes are passed through in lower case; the registry's transform
+# (odk/templates/farmer_transform.j2) upper-cases them on intake.
+MARITAL_STATUSES = frozenset(
+	{"single", "married", "divorced", "widowed"}  # ODK form
+	| {"separated", "unknown"}  # registry lookup
+)
+EDUCATION_LEVELS = frozenset(
+	{"illiterate", "read_write", "basic", "intermediary", "higher_education"}  # ODK form
+	| {"can_read_and_write", "primary"}  # registry lookup / registry team's test data
+)
+INCOME_SOURCES = frozenset(
+	{"crop", "livestock", "gov_ngo", "other"}  # ODK form (select_multiple)
+	| {"crop_production", "livestock_production", "government_ngo_support", "others"}  # registry lookup
+)
+
+_TRUE_WORDS = frozenset({"yes", "y", "true", "t", "1", "on"})
+_FALSE_WORDS = frozenset({"no", "n", "false", "f", "0", "off"})
+
+
+def _coerce_yes_no(v):
+	"""bool | 0/1 | 'yes'/'no' | 'true'/'false' -> bool; None/'' -> None (field omitted)."""
+	if v is None or v == "":
+		return None
+	if isinstance(v, bool):
+		return v
+	if isinstance(v, int | float) and v in (0, 1):
+		return bool(v)
+	s = str(v).strip().lower()
+	if s in _TRUE_WORDS:
+		return True
+	if s in _FALSE_WORDS:
+		return False
+	raise ValueError("must be a boolean, yes/no, true/false or 1/0")
+
+
+def _coerce_codes(v, allowed: frozenset[str], label: str):
+	"""Several codes (ODK select_multiple): list, or a comma / space separated string.
+
+	Returns them space-separated, the way an ODK select_multiple answer is sent.
+	"""
+	if v is None or v == "":
+		return None
+	parts = v if isinstance(v, list | tuple) else str(v).replace(",", " ").split()
+	codes: list[str] = []
+	for part in parts:
+		code = _coerce_code(part, allowed, label)
+		if code and code not in codes:
+			codes.append(code)
+	return " ".join(codes) or None
+
+
+def _coerce_code(v, allowed: frozenset[str], label: str):
+	"""Normalise a registry code ('Crop Production' -> 'crop_production') and check it."""
+	if v is None or v == "":
+		return None
+	s = str(v).strip().lower().replace("-", "_").replace(" ", "_")
+	if s not in allowed:
+		raise ValueError(f"{label} must be one of: {', '.join(sorted(allowed))}")
+	return s
+
+
 class FarmerRegistrationForm(BaseModel):
 	"""Body of POST /farmers.
 
 	Mirrors the fields the DA Register Farmer form collects. Unknown keys are
 	ignored so the frontend can send UI-only fields; known keys are typed and
 	range-checked here so the service and mapper never see malformed input.
+
+	Boolean fields (household_head, is_psnp_user, disabled) accept a JSON bool,
+	0/1, or the strings yes/no, true/false (any case). Coded fields
+	(marital_status, education_level, income_source) accept the registry codes in
+	any case, with spaces or hyphens for underscores.
 	"""
 
 	model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
@@ -203,6 +278,7 @@ class FarmerRegistrationForm(BaseModel):
 	date_of_birth: date | None = None
 	phone: str | None = Field(None, pattern=r"^\+?\d{9,15}$")
 	region: str | None = Field(None, max_length=20)
+	zone: str | None = Field(None, pattern=r"^\d{1,8}$", description="Master Data zone code (optional)")
 	woreda: str | None = Field(None, pattern=r"^\d{1,12}$", description="Master Data woreda code")
 	kebele: str | None = Field(None, pattern=r"^\d{1,15}$", description="Master Data kebele code")
 	national_id: str | None = Field(None, pattern=r"^\d{10,20}$", description="Fayda / national id")
@@ -211,10 +287,49 @@ class FarmerRegistrationForm(BaseModel):
 	crops: list[CropItem] = Field(default_factory=list, max_length=50)
 	livestock: list[LivestockItem] = Field(default_factory=list, max_length=50)
 	da_id: str | None = Field(None, max_length=40)
+	enumerator_name: str | None = Field(
+		None, max_length=140, description="Registering DA's name; filled by the service from the DA Registry"
+	)
+	# Household Link + Socio-economic and Health (registry tabs 2 and 1.5)
+	household_head: bool | None = Field(
+		None, description="Is the farmer the household head? yes = registry creates a Household record"
+	)
+	is_psnp_user: bool | None = Field(None, description="PSNP beneficiary")
+	disabled: bool | None = Field(None, description="Has a disability")
+	marital_status: str | None = Field(
+		None, max_length=40, description="One of: " + ", ".join(sorted(MARITAL_STATUSES))
+	)
+	education_level: str | None = Field(
+		None, max_length=60, description="One of: " + ", ".join(sorted(EDUCATION_LEVELS))
+	)
+	income_source: str | None = Field(
+		None, max_length=60, description="One of: " + ", ".join(sorted(INCOME_SOURCES))
+	)
 	farmer_reference_id: str | None = Field(None, max_length=64)
 	client_op_id: str | None = Field(
 		None, pattern=r"^[A-Za-z0-9_-]{8,64}$", description="Idempotency key chosen by the client"
 	)
+
+	@field_validator("household_head", "is_psnp_user", "disabled", mode="before")
+	@classmethod
+	def _norm_yes_no(cls, v):
+		return _coerce_yes_no(v)
+
+	@field_validator("marital_status", mode="before")
+	@classmethod
+	def _norm_marital_status(cls, v):
+		return _coerce_code(v, MARITAL_STATUSES, "marital_status")
+
+	@field_validator("education_level", mode="before")
+	@classmethod
+	def _norm_education_level(cls, v):
+		return _coerce_code(v, EDUCATION_LEVELS, "education_level")
+
+	@field_validator("income_source", mode="before")
+	@classmethod
+	def _norm_income_source(cls, v):
+		# ODK select_multiple: "crop livestock" or ["crop", "livestock"] are both fine.
+		return _coerce_codes(v, INCOME_SOURCES, "income_source")
 
 	@field_validator("gender", mode="before")
 	@classmethod
