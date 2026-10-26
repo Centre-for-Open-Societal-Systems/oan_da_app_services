@@ -131,9 +131,12 @@ class Farmer(BaseModel):
 	state: str = "APPROVED"
 	registration_date: datetime | None = None
 
-	# Socio-economic
+	# Socio-economic (same vocabulary as FarmerRegistrationForm, so what a DA
+	# registers reads back under the same names)
 	source_of_income: str | None = None
 	is_psnp_user: bool = False
+	marital_status: str | None = None
+	disabled: bool | None = None
 
 
 class FarmerListItem(BaseModel):
@@ -186,12 +189,58 @@ class LivestockItem(BaseModel):
 	system: str = Field("mixed", description="mixed | intensive | extensive")
 
 
+# Registry vocabularies for the Socio-economic and Health section. The codes are
+# the registry's attribute values (farmer-extension/meta_data/lookup-data/
+# g2p_attribute_values*.sql: MARITAL_STATUS, EDUCATION_LEVEL, SOURCE_OF_INCOME),
+# written the way the ODK form sends them; the registry's transform
+# (odk/templates/farmer_transform.j2) upper-cases them on intake.
+MARITAL_STATUSES = frozenset({"single", "married", "divorced", "widowed", "separated", "unknown"})
+EDUCATION_LEVELS = frozenset(
+	{"illiterate", "can_read_and_write", "basic", "intermediary", "higher_education"}
+)
+INCOME_SOURCES = frozenset({"crop_production", "livestock_production", "government_ngo_support", "others"})
+
+_TRUE_WORDS = frozenset({"yes", "y", "true", "t", "1", "on"})
+_FALSE_WORDS = frozenset({"no", "n", "false", "f", "0", "off"})
+
+
+def _coerce_yes_no(v):
+	"""bool | 0/1 | 'yes'/'no' | 'true'/'false' -> bool; None/'' -> None (field omitted)."""
+	if v is None or v == "":
+		return None
+	if isinstance(v, bool):
+		return v
+	if isinstance(v, int | float) and v in (0, 1):
+		return bool(v)
+	s = str(v).strip().lower()
+	if s in _TRUE_WORDS:
+		return True
+	if s in _FALSE_WORDS:
+		return False
+	raise ValueError("must be a boolean, yes/no, true/false or 1/0")
+
+
+def _coerce_code(v, allowed: frozenset[str], label: str):
+	"""Normalise a registry code ('Crop Production' -> 'crop_production') and check it."""
+	if v is None or v == "":
+		return None
+	s = str(v).strip().lower().replace("-", "_").replace(" ", "_")
+	if s not in allowed:
+		raise ValueError(f"{label} must be one of: {', '.join(sorted(allowed))}")
+	return s
+
+
 class FarmerRegistrationForm(BaseModel):
 	"""Body of POST /farmers.
 
 	Mirrors the fields the DA Register Farmer form collects. Unknown keys are
 	ignored so the frontend can send UI-only fields; known keys are typed and
 	range-checked here so the service and mapper never see malformed input.
+
+	Boolean fields (household_head, is_psnp_user, disabled) accept a JSON bool,
+	0/1, or the strings yes/no, true/false (any case). Coded fields
+	(marital_status, education_level, income_source) accept the registry codes in
+	any case, with spaces or hyphens for underscores.
 	"""
 
 	model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
@@ -218,14 +267,38 @@ class FarmerRegistrationForm(BaseModel):
 	is_psnp_user: bool | None = Field(None, description="PSNP beneficiary")
 	disabled: bool | None = Field(None, description="Has a disability")
 	marital_status: str | None = Field(
-		None, max_length=40, description="married | single | widowed | divorced"
+		None, max_length=40, description="One of: " + ", ".join(sorted(MARITAL_STATUSES))
 	)
-	education_level: str | None = Field(None, max_length=60, description="e.g. can_read_and_write | primary")
-	income_source: str | None = Field(None, max_length=60, description="e.g. crop_production | livestock")
+	education_level: str | None = Field(
+		None, max_length=60, description="One of: " + ", ".join(sorted(EDUCATION_LEVELS))
+	)
+	income_source: str | None = Field(
+		None, max_length=60, description="One of: " + ", ".join(sorted(INCOME_SOURCES))
+	)
 	farmer_reference_id: str | None = Field(None, max_length=64)
 	client_op_id: str | None = Field(
 		None, pattern=r"^[A-Za-z0-9_-]{8,64}$", description="Idempotency key chosen by the client"
 	)
+
+	@field_validator("household_head", "is_psnp_user", "disabled", mode="before")
+	@classmethod
+	def _norm_yes_no(cls, v):
+		return _coerce_yes_no(v)
+
+	@field_validator("marital_status", mode="before")
+	@classmethod
+	def _norm_marital_status(cls, v):
+		return _coerce_code(v, MARITAL_STATUSES, "marital_status")
+
+	@field_validator("education_level", mode="before")
+	@classmethod
+	def _norm_education_level(cls, v):
+		return _coerce_code(v, EDUCATION_LEVELS, "education_level")
+
+	@field_validator("income_source", mode="before")
+	@classmethod
+	def _norm_income_source(cls, v):
+		return _coerce_code(v, INCOME_SOURCES, "income_source")
 
 	@field_validator("gender", mode="before")
 	@classmethod

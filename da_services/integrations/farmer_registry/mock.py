@@ -36,6 +36,8 @@ MOCK_FARMERS = {
 		registration_date=datetime(2024, 6, 1, 10, 30),
 		source_of_income="Crop production",
 		is_psnp_user=False,
+		marital_status="married",
+		disabled=False,
 	),
 	"farmer-uuid-002": Farmer(
 		farmer_id="farmer-uuid-002",
@@ -62,6 +64,8 @@ MOCK_FARMERS = {
 		registration_date=datetime(2024, 6, 15, 14, 20),
 		source_of_income="Mixed farming",
 		is_psnp_user=True,
+		marital_status="single",
+		disabled=False,
 	),
 	"farmer-uuid-003": Farmer(
 		farmer_id="farmer-uuid-003",

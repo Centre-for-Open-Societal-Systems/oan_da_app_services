@@ -8,6 +8,13 @@ from typing import Any
 
 from .schemas import Farmer
 
+# Ingest header the Staff API accepts for the FARMER_ODK_MODEL (from the registry
+# team's "Farmer Registry Integration with DA Registry" collection, Oct 2026): the
+# message is attributed to the registry's existing ODK partner and marked as
+# submitted by an authenticated staff caller; the bearer token carries the identity.
+INGEST_SENDER_ID = "farmer-partner"
+INGEST_SIGNATURE = "STAFF_AUTHENTICATED"
+
 
 def _yes_no(value: Any) -> str:
 	"""Registry ODK fields are 'yes'/'no' strings; accept bools and common strings."""
@@ -147,7 +154,8 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	return {
 		"header": {
 			"message_id": message_id,
-			"sender_id": "da-services",
+			"sender_id": INGEST_SENDER_ID,
+			"signature": INGEST_SIGNATURE,
 		},
 		"message": {"payload": payload},
 	}
@@ -184,6 +192,8 @@ def farmer_to_reference_dict(farmer: Farmer) -> dict[str, Any]:
 		"registered_at": farmer.registration_date,
 		"source_of_income": farmer.source_of_income,
 		"is_psnp_beneficiary": farmer.is_psnp_user,
+		"marital_status": farmer.marital_status,
+		"disabled": farmer.disabled,
 	}
 
 
@@ -228,4 +238,7 @@ def reference_dict_to_profile(ref_dict: dict[str, Any], visit_data: dict[str, An
 		"gender": ref_dict.get("gender"),
 		"education_level": ref_dict.get("education_level"),
 		"source_of_income": ref_dict.get("source_of_income"),
+		"marital_status": ref_dict.get("marital_status"),
+		"is_psnp_user": bool(ref_dict.get("is_psnp_beneficiary")),
+		"disabled": None if ref_dict.get("disabled") is None else bool(ref_dict.get("disabled")),
 	}

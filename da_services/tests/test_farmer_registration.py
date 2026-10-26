@@ -35,7 +35,10 @@ class TestIngestMapper(IntegrationTestCase):
 		payload = da_form_to_ingest_payload(SAMPLE_FORM)
 		self.assertIn("header", payload)
 		self.assertTrue(payload["header"]["message_id"].startswith("da-svc-"))
-		self.assertEqual(payload["header"]["sender_id"], "da-services")
+		# The Staff API attributes staff-submitted ODK messages to the registry's own
+		# partner and expects the STAFF_AUTHENTICATED marker (registry team's collection).
+		self.assertEqual(payload["header"]["sender_id"], "farmer-partner")
+		self.assertEqual(payload["header"]["signature"], "STAFF_AUTHENTICATED")
 		self.assertIn("payload", payload["message"])
 
 	def test_personal_and_location_mapping(self):
@@ -205,3 +208,67 @@ class TestHouseholdAndSocioMapping(IntegrationTestCase):
 		self.assertIs(dumped["household_head"], True)
 		self.assertIs(dumped["is_psnp_user"], False)
 		self.assertIs(dumped["disabled"], False)
+
+	def test_form_boolean_formats(self):
+		from pydantic import ValidationError
+
+		from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
+
+		for raw, expected in (
+			("YES", True),
+			("true", True),
+			(1, True),
+			("No", False),
+			("0", False),
+			(False, False),
+		):
+			form = FarmerRegistrationForm(**SAMPLE_FORM, household_head=raw)
+			self.assertIs(form.household_head, expected, raw)
+		self.assertIsNone(FarmerRegistrationForm(**SAMPLE_FORM, disabled="").disabled)
+		with self.assertRaises(ValidationError):
+			FarmerRegistrationForm(**SAMPLE_FORM, is_psnp_user="maybe")
+
+	def test_form_socio_codes_are_validated_and_normalised(self):
+		from pydantic import ValidationError
+
+		from da_services.integrations.farmer_registry.schemas import (
+			EDUCATION_LEVELS,
+			INCOME_SOURCES,
+			MARITAL_STATUSES,
+			FarmerRegistrationForm,
+		)
+
+		form = FarmerRegistrationForm(
+			**SAMPLE_FORM,
+			marital_status="Married",
+			education_level="Can read and write",
+			income_source="livestock-production",
+		)
+		self.assertEqual(form.marital_status, "married")
+		self.assertEqual(form.education_level, "can_read_and_write")
+		self.assertEqual(form.income_source, "livestock_production")
+		self.assertIn("single", MARITAL_STATUSES)
+		self.assertIn("higher_education", EDUCATION_LEVELS)
+		self.assertIn("others", INCOME_SOURCES)
+		for field, bad in (
+			("marital_status", "engaged"),
+			("education_level", "phd"),
+			("income_source", "mining"),
+		):
+			with self.assertRaises(ValidationError, msg=field):
+				FarmerRegistrationForm(**SAMPLE_FORM, **{field: bad})
+
+	def test_read_schema_mirrors_registration_fields(self):
+		"""What a DA registers can be read back under the same names (read/write symmetry)."""
+		from da_services.integrations.farmer_registry.mapper import reference_dict_to_profile
+		from da_services.integrations.farmer_registry.schemas import Farmer
+
+		farmer = Farmer(farmer_id="f-1", marital_status="married", disabled=False, is_psnp_user=True)
+		self.assertEqual(farmer.marital_status, "married")
+		self.assertIs(farmer.disabled, False)
+		profile = reference_dict_to_profile(
+			{"farmer_id": "f-1", "marital_status": "married", "disabled": 0, "is_psnp_beneficiary": 1}, {}
+		)
+		self.assertEqual(profile["marital_status"], "married")
+		self.assertIs(profile["disabled"], False)
+		self.assertIs(profile["is_psnp_user"], True)
