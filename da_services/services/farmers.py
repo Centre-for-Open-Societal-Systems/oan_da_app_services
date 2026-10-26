@@ -151,8 +151,18 @@ def list_farmers(
 						)
 					filters["woreda"] = woreda
 				elif ctx.zone_scopes:
-					# Zone-scoped: the Woreda must sit under one of their Zones in master data
-					if ancestors_of(woreda).get("zone") not in ctx.zone_scopes:
+					# Zone-scoped: the Woreda must sit under one of their Zones in master data.
+					# An unknown Woreda is a data problem, not a scope problem; say so.
+					woreda_zone = ancestors_of(woreda).get("zone")
+					if not woreda_zone:
+						frappe.throw(
+							_(
+								"Woreda {0} is not in the administrative master data (no Zone known); "
+								"ask an Administrator to load it before filtering by it."
+							).format(woreda),
+							frappe.ValidationError,
+						)
+					if woreda_zone not in ctx.zone_scopes:
 						frappe.throw(
 							_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError
 						)

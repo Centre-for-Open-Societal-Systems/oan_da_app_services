@@ -61,9 +61,16 @@ class DATask(Document):
 			return
 		try:
 			ref = get_client().get_da(self.da_id)
-		except DARegistryError:
+		except DARegistryError as exc:
 			# Unknown DA or registry down: leave the codes empty. Officers will not see the
-			# row until a sync fills them; the DA still sees their own rows by da_id.
+			# row until a sync fills them; the DA still sees their own rows by da_id. Logged
+			# (not raised) so an outage is visible without blocking the DA's work.
+			frappe.logger("da_services").warning(
+				"DA Task %s: scope codes not filled, registry lookup of %s failed: %s",
+				self.name or "(new)",
+				self.da_id,
+				exc,
+			)
 			return
 		self.region = self.region or ref.region
 		self.zone = self.zone or ref.zone
