@@ -169,6 +169,8 @@ def _route(url, json=None, **_):
 		return _Resp(_envelope(SUBJECT))
 	if url.endswith("/register-data/get_tab_records"):
 		tab = json["request_body"]["request_payload"]["tab_id"]
+		if tab in getattr(_route, "failing_tabs", ()):
+			return _Resp({"detail": "gateway"}, 503)
 		return _Resp(
 			_envelope(
 				{
@@ -257,6 +259,21 @@ class TestHttpReadPath(IntegrationTestCase):
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_get_farmer_not_found_returns_none(self, _post):
 		self.assertIsNone(self.client.get_farmer("missing"))
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_reports_sections_it_could_not_fetch(self, _post):
+		"""A tab failure yields a partial record that says so, not a silently blank one."""
+		self.assertEqual(self.client.get_farmer("frm-1").incomplete_sections, [])
+		_route.failing_tabs = ("farmer_household_link_tab", "farmer_location_tab")
+		try:
+			farmer = self.client.get_farmer("frm-1")
+		finally:
+			_route.failing_tabs = ()
+		self.assertEqual(farmer.farmer_id, "frm-1")
+		self.assertEqual(farmer.given_name, "Abebe")  # identity row still came back
+		self.assertEqual(farmer.incomplete_sections, ["location", "household"])
+		self.assertIsNone(farmer.kebele_name)
+		self.assertFalse(farmer.is_household_head)
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_requests_carry_token_csrf_and_envelope(self, post):

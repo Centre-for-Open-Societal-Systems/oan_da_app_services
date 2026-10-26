@@ -404,15 +404,21 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			self._reject(res, "get farmer")
 
 		record = dict(res.payload or {})
+		incomplete: list[str] = []
 		for key in ("farmer", "location", "household"):
 			try:
 				merge_tab_records(record, self._tab_records(farmer_id, key, action=f"get farmer {key} tab"))
 			except FarmerRegistryError as e:
+				incomplete.append(key)
 				frappe.log_error(
 					title="Farmer Registry tab fetch failed",
 					message=f"{farmer_id} {key} tab: {e!s}",
 				)
-		return registry_record_to_farmer(record, farmer_id)
+		farmer = registry_record_to_farmer(record, farmer_id)
+		# Say which sections are missing instead of returning a record that looks
+		# like "no phone / no household" when the registry simply failed mid-read.
+		farmer.incomplete_sections = incomplete
+		return farmer
 
 	def list_farmers(
 		self,

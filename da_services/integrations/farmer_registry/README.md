@@ -104,6 +104,50 @@ cached rows, which pages through `list_farmers` and upserts one row per farmer.
 Registry failures during that sync are logged and the list falls back to the
 cache.
 
+Transaction and concurrency rules:
+
+- The sync runs inside the caller's transaction behind a savepoint. A registry
+  failure half-way rolls back only the partial cache rows; the request itself
+  commits as usual. Nothing in the read path calls `frappe.db.commit()`; pass
+  `sync_farmer_references(..., commit=True)` only from a scheduler or bench job.
+- Two workers caching the same farmer or Kebele at once are safe: inserts are
+  insert-first and a duplicate-key race falls back to refreshing the row, so
+  the last writer wins per row and no request fails.
+- Progress goes to the `da_services` logger (one line per Kebele, a warning when
+  `max_pages` stopped the sync before the registry's total).
+- A farmer read whose tab fetches partly failed is still cached, with
+  `Farmer.incomplete_sections` (for example `["location", "household"]`)
+  listing what is missing; the profile response carries the same list so the
+  UI can show "partial data" instead of blanks.
+
+Performance note: because `kebele_name` is not whitelisted on the registry's
+search, a Kebele sync fetches the whole Woreda (`page_size` 200, up to
+`max_pages` 25, i.e. 5 000 rows) and narrows client-side. For large Woredas
+expect one request per page on the first DA list in that Woreda; later lists
+are served from the cache. The fix is on the registry side (ask: add
+`kebele_name` to the `search_in_a_register` filter whitelist).
+
+## Migration notes (breaking changes from the placeholder client)
+
+`update_farmer(farmer_id, updates, expected_version=None)` now goes through
+registry change requests instead of a direct write, and its return value
+changed:
+
+| Field | Before (placeholder / mock) | Now (http) |
+|---|---|---|
+| `version` | integer, the record's new version | `str | None`: the change request id(s), comma-joined (e.g. `"CR-77"`) — recorded on the DA Integration Event as `external_reference` |
+| `change_request_ids` | absent | `list[str]`, one id per register section touched |
+| `conflict` | `True` when `expected_version` did not match | always `False`: the registry resolves conflicts at approval time, `expected_version` is accepted but ignored |
+| `success` / `farmer_id` / `message` | present | unchanged |
+
+Also: unsupported fields now fail fast with `FarmerRegistryClientError` (HTTP
+400, not retryable) instead of being dropped, so the sync queue records the
+reason. The update is **not** applied until a Woreda officer approves the
+change request in the Staff portal; `GET /farmers/{id}/update-status` shows it
+as pending until then. Consumers that compared `version` numerically must use
+`change_request_ids` instead. The mock backend keeps the old numeric `version`
+for tests.
+
 ## Usage
 
 ```python

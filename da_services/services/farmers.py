@@ -78,6 +78,9 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 
 	# Merge all data into profile
 	profile = reference_dict_to_profile(ref, visit_data)
+	# Sections the registry could not deliver on a fresh fetch (empty on cache hits
+	# and complete reads); the UI can show "partial data" instead of blanks.
+	profile["incomplete_sections"] = list(ref.get("incomplete_sections") or [])
 	profile["can_edit"] = can_edit
 	da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
 	profile["is_linked"] = _is_farmer_linked_to_da(farmer_id, da_ids_list)
@@ -341,7 +344,14 @@ def _get_or_sync_farmer_reference(farmer_id: str) -> dict | None:
 	if not farmer:
 		return None
 
-	# Cache it
+	incomplete = list(getattr(farmer, "incomplete_sections", None) or [])
+	if incomplete:
+		frappe.logger("da_services").warning(
+			"Farmer %s cached with incomplete sections %s (registry tab fetch failed)", farmer_id, incomplete
+		)
+
+	# Cache it. No explicit commit: the row lands with the request's transaction, so a
+	# later failure in the same request does not leave a half-written cache behind.
 	ref_dict = farmer_to_reference_dict(farmer)
 	ref_dict["last_synced_at"] = frappe.utils.now_datetime()
 	ref_dict["sync_version"] = 1
@@ -352,10 +362,15 @@ def _get_or_sync_farmer_reference(farmer_id: str) -> dict | None:
 			**ref_dict,
 		}
 	)
-	doc.insert(ignore_permissions=True)
-	frappe.db.commit()
+	try:
+		doc.insert(ignore_permissions=True)
+		out = doc.as_dict()
+	except frappe.DuplicateEntryError:
+		# Another worker cached the same farmer between our lookup and insert: use its row.
+		out = frappe.db.get_value("DA Farmer Reference", farmer_id, "*", as_dict=True)
 
-	return doc.as_dict()
+	out["incomplete_sections"] = incomplete
+	return out
 
 
 def _get_farmer_visit_data(farmer_id: str) -> dict:
@@ -569,14 +584,23 @@ def _ensure_registry_cache(*, kebeles: list) -> None:
 	missing = [k for k in kebeles if not frappe.db.exists("DA Farmer Reference", {"kebele": k})]
 	if not missing:
 		return
+	# The sync runs inside the caller's transaction behind a savepoint: a registry
+	# failure half-way rolls back only the partial cache rows, never the request.
+	frappe.db.savepoint("farmer_registry_cache")
 	try:
 		sync_farmer_references(kebeles=missing)
 	except Exception:
+		frappe.db.rollback(save_point="farmer_registry_cache")
 		frappe.log_error(title="Farmer Registry sync failed", message=frappe.get_traceback())
 
 
 def sync_farmer_references(
-	*, kebeles: list | None = None, woreda: str | None = None, page_size: int = 200, max_pages: int = 25
+	*,
+	kebeles: list | None = None,
+	woreda: str | None = None,
+	page_size: int = 200,
+	max_pages: int = 25,
+	commit: bool = False,
 ) -> int:
 	"""Pull farmers from the registry into the DA Farmer Reference cache.
 
@@ -584,26 +608,56 @@ def sync_farmer_references(
 	given) and upserts one cache row per farmer. The Kebele code we searched
 	with is stored on the row so the DA's Kebele-scoped list matches it.
 
+	Runs in the caller's transaction. Pass ``commit=True`` only from a scheduler
+	or bench job that owns its transaction; a request must never commit
+	half-way. Two workers syncing the same Kebele at once are safe: the upsert
+	tolerates the duplicate-key race and the last writer wins per row.
+
 	Returns the number of rows upserted.
 	"""
 	client = get_farmer_registry_client()
+	log = frappe.logger("da_services")
 	count = 0
 	for kebele in kebeles or [None]:
 		offset = 0
+		pages = 0
 		while True:
 			items, total = client.list_farmers(woreda=woreda, kebele=kebele, limit=page_size, offset=offset)
 			for item in items:
 				_upsert_farmer_reference(item, kebele_code=kebele)
 				count += 1
 			offset += page_size
-			if not items or offset >= total or offset >= page_size * max_pages:
+			pages += 1
+			if not items or offset >= total or pages >= max_pages:
 				break
-	frappe.db.commit()
+		log.info(
+			"Farmer Registry sync: %s %s -> %s page(s), %s row(s) so far (registry total %s)",
+			"kebele" if kebele else "woreda",
+			kebele or woreda or "*",
+			pages,
+			count,
+			total,
+		)
+		if pages >= max_pages and offset < (total or 0):
+			log.warning(
+				"Farmer Registry sync: stopped after %s pages for %s; %s of %s rows cached",
+				max_pages,
+				kebele or woreda or "*",
+				count,
+				total,
+			)
+	if commit:
+		frappe.db.commit()
 	return count
 
 
 def _upsert_farmer_reference(item, *, kebele_code: str | None = None) -> None:
-	"""Write a FarmerListItem into the cache (insert or refresh)."""
+	"""Write a FarmerListItem into the cache (insert or refresh).
+
+	Insert-first: if another worker inserted the same farmer between our
+	existence check and the insert, the duplicate-key error is caught and the
+	row is refreshed instead, so concurrent syncs never fail or double-insert.
+	"""
 	values = {
 		"reg_id": item.reg_id,
 		"farmer_name": item.name,
@@ -616,12 +670,15 @@ def _upsert_farmer_reference(item, *, kebele_code: str | None = None) -> None:
 		"registered_at": item.registration_date,
 		"last_synced_at": frappe.utils.now_datetime(),
 	}
-	if frappe.db.exists("DA Farmer Reference", item.farmer_id):
-		frappe.db.set_value("DA Farmer Reference", item.farmer_id, values, update_modified=False)
-		return
-	frappe.get_doc({"doctype": "DA Farmer Reference", "farmer_id": item.farmer_id, **values}).insert(
-		ignore_permissions=True
-	)
+	if not frappe.db.exists("DA Farmer Reference", item.farmer_id):
+		try:
+			frappe.get_doc({"doctype": "DA Farmer Reference", "farmer_id": item.farmer_id, **values}).insert(
+				ignore_permissions=True
+			)
+			return
+		except frappe.DuplicateEntryError:
+			pass  # lost the race; fall through and refresh the existing row
+	frappe.db.set_value("DA Farmer Reference", item.farmer_id, values, update_modified=False)
 
 
 def _get_linked_farmer_ids(da_ids: list) -> list:
