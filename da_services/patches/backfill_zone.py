@@ -5,9 +5,9 @@ DA Farmer Link, the cached `DA Farmer Reference`; finally the DA Registry record
 row's DA. Rows that none of these can resolve stay empty and keep being denied to a
 Zone-only grant, exactly as before this column existed.
 
-The whole backfill is one transaction: either every row that can be resolved is
-updated, or nothing is (a half-filled column would make Zone grants see an
-arbitrary subset). Progress and registry failures go to the migrate log so an
+The whole backfill is atomic: either every row that can be resolved is updated,
+or nothing is (a half-filled column would make Zone grants see an arbitrary
+subset). Progress and registry failures go to the migrate log so an
 operator can see what was left empty and why.
 """
 
@@ -21,16 +21,19 @@ EMPTY = "ifnull(`zone`, '') = ''"
 
 
 def execute():
-	frappe.db.begin()
+	# All or nothing, inside the transaction bench migrate already holds for a patch:
+	# a savepoint instead of BEGIN/COMMIT, because Frappe refuses an explicit START
+	# TRANSACTION mid-request (ImplicitCommitError) and commits a patch itself once
+	# execute() returns. Any failure rolls back every row this patch touched.
+	frappe.db.savepoint("backfill_zone")
 	try:
 		for doctype in DOCTYPES:
 			_from_master_data(doctype)
 		_from_farmer_reference()
 		for doctype in DOCTYPES:
 			_from_registry(doctype)
-		frappe.db.commit()
 	except Exception:
-		frappe.db.rollback()
+		frappe.db.rollback(save_point="backfill_zone")
 		raise
 	for doctype in DOCTYPES:
 		left = frappe.db.sql(f"select count(*) from `tab{doctype}` where {EMPTY}")[0][0]
