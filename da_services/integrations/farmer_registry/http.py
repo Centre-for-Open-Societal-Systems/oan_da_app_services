@@ -135,7 +135,7 @@ def _jwt_expires_at(token: str) -> float | None:
 		payload += "=" * (-len(payload) % 4)
 		claims = json.loads(base64.urlsafe_b64decode(payload))
 		return float(claims["exp"])
-	except (IndexError, KeyError, ValueError, json.JSONDecodeError):
+	except IndexError, KeyError, ValueError, json.JSONDecodeError:
 		return None
 
 
@@ -387,7 +387,9 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 		expires_at = _jwt_expires_at(token)
 		if expires_at is None:
-			max_age = _cookie_max_age(exchanged, "X-Access-Token") or _cookie_max_age(exchanged, "X-CSRF-Token")
+			max_age = _cookie_max_age(exchanged, "X-Access-Token") or _cookie_max_age(
+				exchanged, "X-CSRF-Token"
+			)
 			expires_at = time.time() + (max_age if max_age is not None else _CALLBACK_COOKIE_MAX_AGE)
 		return token, csrf, expires_at
 
@@ -456,7 +458,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 			try:
 				expires_in = int(data.get("expires_in", 300))
-			except (TypeError, ValueError):
+			except TypeError, ValueError:
 				expires_in = 300
 			_CC_TOKEN_CACHE[cache_key] = {
 				"token": token,
