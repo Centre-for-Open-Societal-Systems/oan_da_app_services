@@ -54,6 +54,11 @@ class TestFarmersAPI(IntegrationTestCase):
 	def setUp(self):
 		"""Set up test users, grants, and seed farmer data."""
 		frappe.set_user("Administrator")
+		# Plots come from the registry client. Fixture ids such as farmer-uuid-001
+		# exist only in the mock; a site configured for the live registry must not
+		# change this suite.
+		self._farmer_registry_backend = frappe.conf.get("farmer_registry_backend")
+		frappe.conf.farmer_registry_backend = "mock"
 
 		# Clean up
 		frappe.db.delete("DA Farmer Reference")
@@ -119,6 +124,11 @@ class TestFarmersAPI(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		saved = getattr(self, "_farmer_registry_backend", None)
+		if saved is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = saved
 		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
 		frappe.db.commit()
 

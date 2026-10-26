@@ -80,6 +80,10 @@ class TestFarmerUpdates(IntegrationTestCase):
 	def setUp(self):
 		"""Set up test data for each test."""
 		frappe.set_user("Administrator")
+		# Queue and sync call the registry client. farmer-uuid-001 and version
+		# conflicts are mock fixtures; keep this suite off the live registry.
+		self._farmer_registry_backend = frappe.conf.get("farmer_registry_backend")
+		frappe.conf.farmer_registry_backend = "mock"
 
 		# Create test farmers
 		self._create_test_farmers()
@@ -90,6 +94,11 @@ class TestFarmerUpdates(IntegrationTestCase):
 	def tearDown(self):
 		"""Clean up after each test."""
 		frappe.set_user("Administrator")
+		saved = getattr(self, "_farmer_registry_backend", None)
+		if saved is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = saved
 		# The tests assign a plain dict to frappe.form_dict, which replaces Frappe's module-level
 		# LocalProxy for the rest of the process; later tests then break (File.validate reads
 		# frappe.form_dict.file_size as an attribute). Restore the proxy and an empty form.

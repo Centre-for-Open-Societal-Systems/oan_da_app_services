@@ -4,13 +4,15 @@ Business logic for farmer profile display, combining Farmer Registry data
 with DA Visit history, pending actions (DA-39), and permission checks.
 """
 
+import json
+
 import frappe
 from frappe import _
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
-from da_services.integrations.farmer_registry.client import FarmerRegistryClientError
+from da_services.integrations.farmer_registry.client import FarmerRegistryClientError, FarmerRegistryError
 from da_services.integrations.farmer_registry.mapper import (
 	da_form_to_ingest_payload,
 	farmer_to_reference_dict,
@@ -781,6 +783,12 @@ def _get_da_assigned_kebeles(da_ids: list) -> list:
 	return kebeles
 
 
+def _record_registration_failure(event, message: str) -> None:
+	event.db_set("status", "Failed", update_modified=False)
+	event.db_set("last_error", (message or "Farmer registration failed")[:500], update_modified=False)
+	frappe.db.commit()
+
+
 def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	"""Register a new farmer through the Farmer Registry ingest pipeline.
 
@@ -803,8 +811,6 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	        "error_message": str | None,
 	    }
 	"""
-	import json
-
 	if not isinstance(form_data, dict) or not form_data.get("first_name"):
 		frappe.throw(_("Farmer first name is required."), frappe.ValidationError)
 
@@ -844,31 +850,39 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	)
 	event.insert(ignore_permissions=True)
 
+	# farmer_registry_backend selects the live Staff API or the mock client.
 	client = get_farmer_registry_client()
 	try:
 		result = client.register_farmer(payload)
-	except FarmerRegistryClientError as e:
-		# 4xx: our request was wrong (auth, roles, payload). Not retryable —
-		# surface the registry's reason to the caller as a 400.
-		event.db_set("status", "Failed", update_modified=False)
-		event.db_set("last_error", str(e)[:500], update_modified=False)
-		frappe.db.commit()
-		frappe.throw(_("Farmer Registry rejected the registration: {0}").format(e), frappe.ValidationError)
-	except Exception as e:
-		# 5xx / network: transient. Record it and let the error propagate.
-		event.db_set("status", "Failed", update_modified=False)
-		event.db_set("last_error", str(e)[:500], update_modified=False)
-		frappe.db.commit()
+	except FarmerRegistryClientError as exc:
+		# 4xx: the request was wrong (auth, roles, payload). Not retryable.
+		_record_registration_failure(event, str(exc))
+		frappe.throw(
+			_("Farmer Registry rejected the registration: {0}").format(exc),
+			frappe.ValidationError,
+		)
+	except FarmerRegistryError as exc:
+		_record_registration_failure(event, str(exc))
+		raise
+	except Exception as exc:
+		frappe.log_error(title="Farmer registration failed", message=frappe.get_traceback())
+		_record_registration_failure(event, str(exc))
 		raise
 
 	if result.get("success"):
 		event.db_set("status", "Completed", update_modified=False)
 		event.db_set("external_reference", result.get("correlation_id") or "", update_modified=False)
 	else:
-		event.db_set("status", "Failed", update_modified=False)
-		event.db_set(
-			"last_error", (result.get("error_message") or "Ingest rejected")[:500], update_modified=False
-		)
+		_record_registration_failure(event, result.get("error_message") or "Ingest rejected")
+		return {
+			"success": False,
+			"message_id": message_id,
+			"correlation_id": result.get("correlation_id"),
+			"status": result.get("status"),
+			"event_id": event.name,
+			"error_message": result.get("error_message"),
+			"duplicate": False,
+		}
 	frappe.db.commit()
 
 	return {

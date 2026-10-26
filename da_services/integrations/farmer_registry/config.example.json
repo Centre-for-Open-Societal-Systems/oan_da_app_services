@@ -3,7 +3,7 @@
   "_comment2": "Copy relevant settings to sites/<your-site>/site_config.json",
 
   "farmer_registry_backend": "http",
-  "farmer_registry_url": "http://farmer-registry:8080",
+  "farmer_registry_url": "https://staff-farmer.development.oanstaging.com",
   "farmer_registry_api_key": "your-secret-api-key-here",
   "farmer_registry_timeout": 30,
 
@@ -24,21 +24,32 @@
     }
   },
 
-  "_comment_keycloak": "Service-account (client_credentials) for the Staff API. Needs the intakeSubmission:edit role. Ask Asmit for a DA Services client + secret.",
+  "_comment_keycloak": "Prefer staff-user IAM login when username and password are set (callback cookies X-Access-Token and X-CSRF-Token; login_provider_id defaults to 1). Otherwise client_credentials (token_url, client_id, client_secret) or farmer_registry_api_key. Put username and password only in site_config.json.",
   "farmer_registry_keycloak": {
-    "token_url": "https://keycloak-development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+    "iam_base_url": "https://staff-iam.development.oanstaging.com",
+    "kc_realm_url": "https://keycloak.development.oanstaging.com/realms/staff",
+    "login_provider_id": "1",
+    "token_url": "https://keycloak.development.oanstaging.com/realms/staff/protocol/openid-connect/token",
     "client_id": "da-services",
     "client_secret": "ask-asmit-for-dev-secret"
   },
 
+  "_comment_environments": "Documentation only. The client reads the top-level keys from site_config.json and does not load _environments.",
   "_environments": {
     "development": {
       "farmer_registry_backend": "mock"
     },
     "staging": {
       "farmer_registry_backend": "http",
-      "farmer_registry_url": "https://staging-farmer-registry.example.com",
-      "farmer_registry_api_key": "staging-key"
+      "farmer_registry_url": "https://staff-farmer.staging.example.com",
+      "farmer_registry_keycloak": {
+        "iam_base_url": "https://staff-iam.staging.example.com",
+        "kc_realm_url": "https://keycloak.staging.example.com/realms/staff",
+        "login_provider_id": "1",
+        "token_url": "https://keycloak.staging.example.com/realms/staff/protocol/openid-connect/token",
+        "client_id": "da-services",
+        "client_secret": "staging-client-secret"
+      }
     },
     "production": {
       "farmer_registry_backend": "http",
