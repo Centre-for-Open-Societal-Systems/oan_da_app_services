@@ -14,6 +14,7 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
+from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.integrations.da_registry.client import DARegistryUnavailable, get_client
 from da_services.integrations.da_registry.schemas import DAReference
 from da_services.services import constants as C
@@ -46,10 +47,21 @@ def _scoped_das(ctx: ScopeContext) -> list[DAReference]:
 				rows.extend(client.list_das(woreda=woreda))
 			return rows
 		if ctx.zone_scopes:
-			# The registry has no zone filter: fetch the Region(s) and keep the Zone(s).
-			regions = sorted(ctx.region_scopes) if ctx.region_scopes else [None]
+			# The registry has no zone filter (list_das takes woreda or region only), so a
+			# Zone grant is served by fetching its Region once and keeping the Zone's rows.
+			# Cost: one registry call per Region and the Region's DA list on the wire
+			# (hundreds of rows, not thousands); the alternative, one call per Woreda of
+			# the Zone, is more round-trips for the same data. Revisit when the DA
+			# Registry contract adds a zone filter or server-side paging.
+			# The Region comes from the grant, else from master data; a Zone whose Region
+			# cannot be resolved is skipped rather than widened to a full registry fetch.
+			regions = set(ctx.region_scopes)
+			for zone in ctx.zone_scopes:
+				region = ancestors_of(zone).get("region")
+				if region:
+					regions.add(region)
 			rows = []
-			for region in regions:
+			for region in sorted(regions):
 				rows.extend(r for r in client.list_das(region=region) if r.zone in ctx.zone_scopes)
 			return rows
 		if ctx.region_scopes:
@@ -103,11 +115,17 @@ def list_experts(
 			or needle in r.da_id.lower()
 		]
 
-	experts.sort(key=lambda r: ((r.specialisation or "").lower(), (r.full_name or "").lower(), r.da_id))
+	experts.sort(key=lambda r: ((r.specialisation or "").casefold(), (r.full_name or "").casefold(), r.da_id))
 
+	# Group case-insensitively ("Crop production" and "crop PRODUCTION" are one
+	# bucket); the label shown is the first spelling seen in sort order.
 	by_specialisation: dict[str, int] = {}
+	labels: dict[str, str] = {}
 	for r in experts:
-		by_specialisation[r.specialisation] = by_specialisation.get(r.specialisation, 0) + 1
+		spec = (r.specialisation or "").strip()
+		key = spec.casefold()
+		labels.setdefault(key, spec)
+		by_specialisation[key] = by_specialisation.get(key, 0) + 1
 
 	total = len(experts)
 	page = experts[start : start + limit]
@@ -115,6 +133,6 @@ def list_experts(
 		"total": total,
 		"limit": limit,
 		"start": start,
-		"by_specialisation": dict(sorted(by_specialisation.items())),
+		"by_specialisation": {labels[k]: by_specialisation[k] for k in sorted(by_specialisation)},
 	}
 	return [_to_row(r) for r in page], meta

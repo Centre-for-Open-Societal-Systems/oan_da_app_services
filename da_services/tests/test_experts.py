@@ -114,6 +114,17 @@ class TestExperts(IntegrationTestCase):
 		ids, _ = self._ids("Administrator", specialisation="Livestock")
 		self.assertEqual(ids, [])  # only an On-leave DA has it
 
+	def test_by_specialisation_groups_case_insensitively(self):
+		"""'Crop production' and 'crop PRODUCTION ' are one bucket, labelled by the first spelling."""
+		from da_services.integrations.da_registry.client import get_client
+
+		get_client()._records["DA-000004"]["specialisation"] = "crop PRODUCTION "
+		ids, meta = self._ids("Administrator")
+		self.assertEqual(ids, ["DA-000001", "DA-000004"])
+		self.assertEqual(meta["by_specialisation"], {"Crop production": 2})
+		ids, _ = self._ids("Administrator", specialisation="Crop production")
+		self.assertEqual(ids, ["DA-000001", "DA-000004"])
+
 	def test_search(self):
 		ids, _ = self._ids("Administrator", q="hana")
 		self.assertEqual(ids, ["DA-000004"])

@@ -23,6 +23,19 @@ from da_services.utils.permissions import require_roles
 READ_ROLES = C.DA_READ_ROLES
 
 
+def _int_param(name: str, value, default: int) -> int:
+	"""Query-string integer: '' / None -> default; anything non-numeric is a 400.
+
+	frappe.utils.cint never raises (it returns 0 for junk), so the check is explicit.
+	"""
+	if value is None or value == "":
+		return default
+	text = str(value).strip()
+	if not text.lstrip("-").isdigit():
+		frappe.throw(_("{0} must be an integer.").format(name), frappe.ValidationError)
+	return cint(text)
+
+
 @route("/experts", methods=("GET",), summary="Experts / My Team visible to the caller")
 @frappe.whitelist()
 @handle_api_errors
@@ -50,11 +63,8 @@ def list_experts(specialisation=None, q=None, limit=None, start=None):
 
 	specialisation = specialisation or frappe.form_dict.get("specialisation")
 	q = q or frappe.form_dict.get("q")
-	try:
-		limit = cint(limit or frappe.form_dict.get("limit") or 50)
-		start = cint(start or frappe.form_dict.get("start") or 0)
-	except ValueError, TypeError:
-		frappe.throw(_("Pagination parameters must be integers."), frappe.ValidationError)
+	limit = _int_param("limit", limit or frappe.form_dict.get("limit"), 50)
+	start = _int_param("start", start or frappe.form_dict.get("start"), 0)
 	if limit < 1 or limit > 500:
 		frappe.throw(_("Limit must be between 1 and 500."), frappe.ValidationError)
 	if start < 0:
