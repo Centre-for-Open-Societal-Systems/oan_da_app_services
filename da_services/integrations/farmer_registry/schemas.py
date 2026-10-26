@@ -135,6 +135,11 @@ class Farmer(BaseModel):
 	source_of_income: str | None = None
 	is_psnp_user: bool = False
 
+	# Completeness: register tabs the client could not fetch (e.g. "location",
+	# "household"). Empty means every section was read. Callers should treat a
+	# record with entries here as partial rather than as "no phone / no household".
+	incomplete_sections: list[str] = Field(default_factory=list)
+
 
 class FarmerListItem(BaseModel):
 	"""Farmer list item for /farmers endpoint."""

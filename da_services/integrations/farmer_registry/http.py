@@ -1,27 +1,43 @@
-"""HTTP client for live Farmer Registry (OpenG2P-based).
+"""HTTP client for the live Farmer Registry (OpenG2P Staff API).
 
-Connects to the Farmer Registry Staff API at the configured base URL.
-Supports configurable API routes and versioning via site_config.json.
+Every call is a POST with the OpenG2P staff envelope, a Keycloak
+client-credentials bearer token and the double-submit CSRF pair the staff
+middleware requires. Reads come from ``/register-data/*``, updates become
+change requests, and registration goes through the ingest pipeline.
 
-Configuration Example:
+site_config.json:
     {
         "farmer_registry_backend": "http",
-        "farmer_registry_url": "http://farmer-registry:8080",
-        "farmer_registry_api_key": "your-api-key",
-        "farmer_registry_api_version": "v1",
-        "farmer_registry_endpoints": {
-            "get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-            "list_farmers": "/api/{version}/registry/farmer",
-            "get_plots": "/api/{version}/registry/land",
-            "update_farmer": "/api/{version}/registry/farmer/{farmer_id}"
+        "farmer_registry_url": "https://staff-farmer-development.oanstaging.com",
+        "farmer_registry_timeout": 30,
+        "farmer_registry_keycloak": {
+            "token_url": "https://keycloak-development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+            "client_id": "da-services",
+            "client_secret": "..."
+        },
+        "farmer_registry_ingest": {
+            "data_model": "FARMER_ODK_MODEL",
+            "register_id": "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd",
+            "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649",
+            "tabs": {"farmer": "farmer_farmer_tab", "location": "farmer_location_tab",
+                     "household": "farmer_household_link_tab", "land": "farmer_land_tab"}
         }
     }
+
+Staff API endpoints used:
+    register-data/get_subject_record        -> get_farmer (identity row)
+    register-data/get_tab_records           -> get_farmer (farmer/location/household tabs), get_farmer_plots (land tab)
+    register-data/search_in_a_register      -> list_farmers (filter_by on whitelisted *_name fields)
+    change-requests/create_change_request   -> update_farmer (one change request per section)
+    input-mechanism-data/ingest-data        -> register_farmer
+    ingestion-data/search_in_ingestion_data -> get_ingest_status
 """
 
 import secrets
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 import frappe
@@ -34,56 +50,74 @@ from .client import (
 	FarmerRegistryError,
 	FarmerRegistryServerError,
 )
+from .mapper import (
+	land_record_to_plot,
+	merge_tab_records,
+	registry_record_to_farmer,
+	search_row_to_list_item,
+	updates_to_change_requests,
+)
 from .schemas import Farmer, FarmerListItem, Plot
+
+# Farmer register tabs on the registry; overridable through farmer_registry_ingest.tabs
+DEFAULT_TABS: dict[str, str] = {
+	"farmer": "farmer_farmer_tab",
+	"location": "farmer_location_tab",
+	"household": "farmer_household_link_tab",
+	"land": "farmer_land_tab",
+	"crop": "farmer_crop_tab",
+	"livestock": "farmer_livestock_tab",
+}
+
+# Registry messages that mean "no such record" rather than a failure
+_NOT_FOUND_MARKERS = ("not found", "does not exist", "no record")
+
+
+@dataclass
+class StaffResponse:
+	"""Parsed OpenG2P staff envelope."""
+
+	status: str
+	error_code: str | None
+	error_message: str | None
+	payload: object
+	pagination: dict = field(default_factory=dict)
+
+	@property
+	def ok(self) -> bool:
+		return self.status == "SUCCESS"
+
+	@property
+	def not_found(self) -> bool:
+		msg = (self.error_message or "").lower()
+		return (not self.ok) and any(m in msg for m in _NOT_FOUND_MARKERS)
 
 
 class HTTPFarmerRegistryClient(FarmerRegistryClient):
-	"""HTTP client for live Farmer Registry with configurable routes."""
+	"""Live Farmer Registry client over the OpenG2P Staff API."""
 
-	# Default endpoint templates (can be overridden in config)
-	DEFAULT_ENDPOINTS: ClassVar[dict] = {
-		"get_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-		"list_farmers": "/api/{version}/registry/farmer",
-		"get_plots": "/api/{version}/registry/land",
-		"update_farmer": "/api/{version}/registry/farmer/{farmer_id}",
-	}
+	REGISTER_MNEMONIC: ClassVar[str] = "Farmer"
 
 	def __init__(self):
-		"""Initialize HTTP client with configurable endpoints."""
-		# Base configuration
-		self.base_url = frappe.conf.get("farmer_registry_url", "http://farmer-registry:8080")
+		self.base_url = str(frappe.conf.get("farmer_registry_url", "") or "").rstrip("/")
 		self.api_key = frappe.conf.get("farmer_registry_api_key")
 		self.timeout = frappe.conf.get("farmer_registry_timeout", 30)  # seconds
 
-		# API version (configurable for v1, v2, etc.)
-		self.api_version = frappe.conf.get("farmer_registry_api_version", "v1")
-
-		# Configurable endpoint paths with defaults
-		self.endpoints = frappe.conf.get("farmer_registry_endpoints", self.DEFAULT_ENDPOINTS)
-
-		# HTTP headers
-		self.headers = {
-			"Content-Type": "application/json",
-			"Accept": "application/json",
-		}
-
-		# Add authentication if a static API key / token is configured.
-		# When Keycloak client-credentials are configured instead (see
-		# _get_access_token), the per-request token takes precedence.
+		self.headers = {"Content-Type": "application/json", "Accept": "application/json"}
+		# A static token/API key is the fallback when no Keycloak client is configured.
 		if self.api_key:
 			self.headers["Authorization"] = f"Bearer {self.api_key}"
 
-		# Ingest pipeline configuration (farmer registration via ingest-data).
-		# These identify the target data model / register / intake form in the
-		# OpenG2P Farmer Registry; defaults match the dev FARMER_ODK_MODEL.
+		# Register / intake / tab identifiers for the Farmer register.
 		ingest = frappe.conf.get("farmer_registry_ingest", {}) or {}
 		self.ingest_data_model = ingest.get("data_model", "FARMER_ODK_MODEL")
 		self.ingest_register_id = ingest.get("register_id")
 		self.ingest_intake_form_id = ingest.get("intake_form_id")
+		self.register_id = ingest.get("register_id")
+		self.tabs = {**DEFAULT_TABS, **(ingest.get("tabs") or {})}
 
 		# Keycloak client-credentials for a DA Services service account.
-		# When present, a token is fetched and cached per worker; the lock keeps
-		# concurrent threads from refreshing the same token at once.
+		# The lock keeps concurrent threads from refreshing the same token at once.
 		self.keycloak = frappe.conf.get("farmer_registry_keycloak", {}) or {}
 		self._token_cache: dict = {}
 		self._token_lock = threading.Lock()
@@ -92,10 +126,12 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		# is built, not on the first request from the field.
 		self._validate_config()
 
+	# ------------------------------------------------------------------ config
+
 	def _validate_config(self) -> None:
 		"""Raise FarmerRegistryError if the live client cannot possibly work."""
 		problems = []
-		if not str(self.base_url or "").startswith(("http://", "https://")):
+		if not self.base_url.startswith(("http://", "https://")):
 			problems.append("farmer_registry_url must be an http(s) URL")
 
 		kc_keys = ("token_url", "client_id", "client_secret")
@@ -108,22 +144,25 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if not kc_set and not self.api_key:
 			problems.append("set farmer_registry_keycloak (service account) or farmer_registry_api_key")
 
+		if not self.register_id:
+			problems.append("farmer_registry_ingest.register_id (Farmer register id) is required")
 		if not self.ingest_data_model:
 			problems.append("farmer_registry_ingest.data_model is required")
 
 		if problems:
 			raise FarmerRegistryError("Farmer Registry HTTP client misconfigured: " + "; ".join(problems))
 
+	# ------------------------------------------------------------------ auth
+
 	def _get_access_token(self) -> str | None:
 		"""Return a bearer token for the Staff API.
 
 		Preference order:
 		1. Keycloak client-credentials (service account), cached until near expiry.
-		2. Static ``farmer_registry_api_key`` (set on self.headers in __init__).
+		2. Static ``farmer_registry_api_key`` (already on self.headers).
 
-		Returns None when neither is configured (caller then relies on whatever
-		is already on self.headers). Refresh is serialised with a lock so two
-		threads cannot both hit Keycloak and race on the cache.
+		Refresh is serialised with a lock so two threads cannot both hit
+		Keycloak and race on the cache.
 		"""
 		kc = self.keycloak
 		token_url = kc.get("token_url")
@@ -135,7 +174,6 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		def _fresh(cache: dict) -> bool:
 			return bool(cache.get("token")) and cache.get("expires_at", 0) > time.time() + 30
 
-		# Fast path without the lock; re-check inside it (double-checked locking).
 		if _fresh(self._token_cache):
 			return self._token_cache["token"]
 
@@ -182,6 +220,24 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			}
 			return token
 
+	def _auth_and_csrf_headers(self) -> tuple[dict, dict]:
+		"""Headers + cookies for a state-changing (POST) staff call.
+
+		Adds the bearer token and a double-submit CSRF pair (matching header +
+		cookie), which the registry's CsrfMiddleware requires on POST.
+		"""
+		headers = dict(self.headers)
+		token = self._get_access_token()
+		if token:
+			headers["Authorization"] = f"Bearer {token}"
+
+		csrf = secrets.token_urlsafe(24)
+		headers["X-CSRF-Token"] = csrf
+		cookies = {"X-CSRF-Token": csrf}
+		return headers, cookies
+
+	# ------------------------------------------------------------------ transport
+
 	@staticmethod
 	def _raise_for_status(response: requests.Response, action: str) -> None:
 		"""Map HTTP errors to retryable vs non-retryable registry exceptions.
@@ -219,24 +275,16 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			f"Farmer Registry failed during {action} (HTTP {code})", status_code=code
 		)
 
-	def _auth_and_csrf_headers(self) -> tuple[dict, dict]:
-		"""Build headers and cookies for a state-changing (POST) staff call.
-
-		Adds the bearer token and a double-submit CSRF pair (matching header +
-		cookie), which the registry's CsrfMiddleware requires on POST.
-		"""
-		headers = dict(self.headers)
-		token = self._get_access_token()
-		if token:
-			headers["Authorization"] = f"Bearer {token}"
-
-		csrf = secrets.token_urlsafe(24)
-		headers["X-CSRF-Token"] = csrf
-		cookies = {"X-CSRF-Token": csrf}
-		return headers, cookies
-
 	@staticmethod
-	def _staff_envelope(request_payload: dict) -> dict:
+	def _staff_envelope(
+		request_payload: dict,
+		*,
+		page: int = 1,
+		page_size: int = 50,
+		filter_by: dict | None = None,
+		search_text: str = "",
+		sort_by: str = "",
+	) -> dict:
 		"""Wrap a payload in the OpenG2P staff request envelope."""
 		return {
 			"request_header": {
@@ -249,79 +297,128 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			"request_body": {
 				"request_payload": request_payload,
 				"pagination_request": {
-					"current_page": 1,
-					"page_size": 50,
-					"sort_by": "",
-					"filter_by": "",
-					"search_text": "",
+					"current_page": page,
+					"page_size": page_size,
+					"sort_by": sort_by,
+					"filter_by": filter_by or "",
+					"search_text": search_text,
 				},
 			},
 		}
 
-	def _build_url(self, endpoint_key: str, **params) -> str:
-		"""Build URL from configurable endpoint template.
+	def _staff_post(self, path: str, request_payload: dict, *, action: str, **pagination) -> StaffResponse:
+		"""POST an enveloped request to the Staff API and parse the envelope back.
 
-		Args:
-		    endpoint_key: Key in self.endpoints dict (e.g., "get_farmer")
-		    **params: URL parameters to substitute (e.g., farmer_id="123")
-
-		Returns:
-		    Complete URL with base_url + endpoint path
-
-		Example:
-		    _build_url("get_farmer", farmer_id="farmer-uuid-001")
-		    → "http://farmer-registry:8080/api/v1/registry/farmer/farmer-uuid-001"
+		Raises FarmerRegistryServerError on network failure, and the 4xx/5xx
+		mapping from _raise_for_status. A 200 with response_status ERROR is
+		returned as a StaffResponse so callers can treat "not found" specially.
 		"""
-		template = self.endpoints.get(endpoint_key, self.DEFAULT_ENDPOINTS.get(endpoint_key))
-
-		if not template:
-			frappe.throw(_("Endpoint '{0}' not configured").format(endpoint_key))
-
-		# Replace {version} placeholder
-		path = template.replace("{version}", self.api_version)
-
-		# Replace other placeholders like {farmer_id}
+		url = f"{self.base_url}{path}"
+		headers, cookies = self._auth_and_csrf_headers()
 		try:
-			path = path.format(**params)
-		except KeyError as e:
-			frappe.throw(_("Missing URL parameter: {0}").format(str(e)))
-
-		return f"{self.base_url}{path}"
-
-	def get_farmer(self, farmer_id: str) -> Farmer | None:
-		"""Get farmer details via HTTP GET.
-
-		Args:
-		    farmer_id: Farmer Registry internal_record_id
-
-		Returns:
-		    Farmer object or None if not found
-
-		Raises:
-		    requests.RequestException: If HTTP request fails
-		"""
-		url = self._build_url("get_farmer", farmer_id=farmer_id)
-
-		try:
-			response = requests.get(url, headers=self.headers, timeout=self.timeout)
-
-			# Handle 404 - farmer not found
-			if response.status_code == 404:
-				return None
-
-			# Raise for other errors (4xx, 5xx)
-			response.raise_for_status()
-
-			# Parse JSON response and convert to Farmer schema
-			data = response.json()
-			return Farmer(**data)
-
+			response = requests.post(
+				url,
+				headers=headers,
+				cookies=cookies,
+				json=self._staff_envelope(request_payload, **pagination),
+				timeout=self.timeout,
+			)
 		except requests.RequestException as e:
 			frappe.log_error(
-				title="Farmer Registry HTTP Error",
-				message=f"Failed to get farmer {farmer_id} from {url}: {e!s}",
+				title="Farmer Registry HTTP Error", message=f"Could not reach {url} ({action}): {e!s}"
 			)
-			raise
+			raise FarmerRegistryServerError(f"Farmer Registry unreachable: {e!s}") from e
+
+		self._raise_for_status(response, action)
+		try:
+			data = response.json()
+		except ValueError as e:
+			raise FarmerRegistryServerError(f"Farmer Registry returned non-JSON for {action}") from e
+
+		header = data.get("response_header") or {}
+		body = data.get("response_body") or {}
+		return StaffResponse(
+			status=header.get("response_status") or "ERROR",
+			error_code=header.get("response_error_code"),
+			error_message=header.get("response_error_message"),
+			payload=body.get("response_payload"),
+			pagination=body.get("pagination_response") or {},
+		)
+
+	@staticmethod
+	def _reject(res: StaffResponse, action: str) -> None:
+		"""Turn a response_status=ERROR envelope into a client error."""
+		raise FarmerRegistryClientError(
+			f"Farmer Registry rejected {action}: {res.error_message or res.error_code or 'unknown error'}",
+			status_code=200,
+			body=res.error_code,
+		)
+
+	# ------------------------------------------------------------------ helpers
+
+	@staticmethod
+	def _area_name(code_or_name: str | None) -> str | None:
+		"""Registry filters use administrative *names*; translate a DA code when we know it."""
+		if not code_or_name:
+			return code_or_name
+		try:
+			name = frappe.db.get_value("DA Administrative Area", {"code": code_or_name}, "name_en")
+		except Exception:
+			name = None
+		return name or code_or_name
+
+	def _tab_records(self, farmer_id: str, tab_key: str, *, action: str) -> list:
+		"""Rows of one register tab for a farmer (list of RegisterTabRecordData dicts)."""
+		tab_id = self.tabs.get(tab_key)
+		if not tab_id:
+			return []
+		res = self._staff_post(
+			"/register-data/get_tab_records",
+			{"subject_register_id": self.register_id, "subject_record_id": farmer_id, "tab_id": tab_id},
+			action=action,
+		)
+		if not res.ok:
+			if res.not_found:
+				return []
+			self._reject(res, action)
+		return list(res.payload or [])
+
+	# ------------------------------------------------------------------ reads
+
+	def get_farmer(self, farmer_id: str) -> Farmer | None:
+		"""Farmer identity row plus the farmer / location / household tabs.
+
+		get_subject_record returns the register row (flattened fields);
+		birth, socio-economic, phone, location and household data live in tab
+		sections, so those tabs are merged in (best effort: a tab failure is
+		logged and skipped, the identity row still comes back).
+		"""
+		res = self._staff_post(
+			"/register-data/get_subject_record",
+			{"subject_register_id": self.register_id, "subject_record_id": farmer_id},
+			action="get farmer",
+		)
+		if not res.ok:
+			if res.not_found:
+				return None
+			self._reject(res, "get farmer")
+
+		record = dict(res.payload or {})
+		incomplete: list[str] = []
+		for key in ("farmer", "location", "household"):
+			try:
+				merge_tab_records(record, self._tab_records(farmer_id, key, action=f"get farmer {key} tab"))
+			except FarmerRegistryError as e:
+				incomplete.append(key)
+				frappe.log_error(
+					title="Farmer Registry tab fetch failed",
+					message=f"{farmer_id} {key} tab: {e!s}",
+				)
+		farmer = registry_record_to_farmer(record, farmer_id)
+		# Say which sections are missing instead of returning a record that looks
+		# like "no phone / no household" when the registry simply failed mid-read.
+		farmer.incomplete_sections = incomplete
+		return farmer
 
 	def list_farmers(
 		self,
@@ -332,147 +429,105 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		limit: int = 50,
 		offset: int = 0,
 	) -> tuple[list[FarmerListItem], int]:
-		"""List farmers via HTTP GET with query parameters.
+		"""Search the Farmer register.
 
-		Args:
-		    woreda: Filter by woreda code
-		    kebele: Filter by kebele name
-		    state: Filter by registration state
-		    limit: Maximum number of results
-		    offset: Pagination offset
-
-		Returns:
-		    Tuple of (list of farmers, total count)
-
-		Raises:
-		    requests.RequestException: If HTTP request fails
+		The registry filters on whitelisted *_name fields, so DA codes are
+		translated to names through DA Administrative Area. kebele_name is not
+		yet whitelisted on the registry side, so Kebele is also applied here on
+		the returned rows.
 		"""
-		url = self._build_url("list_farmers")
+		limit = max(1, int(limit or 50))
+		offset = max(0, int(offset or 0))
 
-		# Build query parameters
-		params = {
-			"limit": limit,
-			"offset": offset,
-		}
-
-		if woreda:
-			params["woreda"] = woreda
-		if kebele:
-			params["kebele"] = kebele
+		filter_by: dict = {}
+		woreda_name = self._area_name(woreda)
+		kebele_name = self._area_name(kebele)
+		if woreda_name:
+			filter_by["woreda_name"] = woreda_name
+		if kebele_name:
+			filter_by["kebele_name"] = kebele_name
 		if state:
-			params["state"] = state
+			filter_by["state"] = state
 
-		try:
-			response = requests.get(url, headers=self.headers, params=params, timeout=self.timeout)
-			response.raise_for_status()
+		res = self._staff_post(
+			"/register-data/search_in_a_register",
+			{"register_id": self.register_id},
+			action="list farmers",
+			page=offset // limit + 1,
+			page_size=limit,
+			filter_by=filter_by or None,
+		)
+		if not res.ok:
+			self._reject(res, "list farmers")
 
-			data = response.json()
+		rows = list(res.payload or [])
+		items = [search_row_to_list_item(row) for row in rows]
+		if kebele_name:
+			narrowed = [i for i in items if not i.kebele or i.kebele == kebele_name]
+			# Only trust the client-side narrowing when the rows carry a kebele.
+			if any(i.kebele for i in items):
+				items = narrowed
 
-			# Parse response - expecting {"results": [...], "total": N}
-			farmers = [FarmerListItem(**f) for f in data.get("results", [])]
-			total = data.get("total", 0)
-
-			return farmers, total
-
-		except requests.RequestException as e:
-			frappe.log_error(
-				title="Farmer Registry HTTP Error", message=f"Failed to list farmers from {url}: {e!s}"
-			)
-			raise
+		total = res.pagination.get("number_of_items")
+		return items, int(total) if total is not None else len(items)
 
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
-		"""Get farmer's land plots via HTTP GET.
+		"""Land Details rows for a farmer (Lands tab)."""
+		plots: list[Plot] = []
+		for section in self._tab_records(farmer_id, "land", action="get farmer plots"):
+			for rec in section.get("records") or []:
+				plots.append(land_record_to_plot(rec))
+		return plots
 
-		Args:
-		    farmer_id: Farmer Registry internal_record_id
-
-		Returns:
-		    List of Plot objects
-
-		Raises:
-		    requests.RequestException: If HTTP request fails
-		"""
-		url = self._build_url("get_plots")
-
-		params = {
-			"link_internal_record_id": farmer_id,
-			"limit": 100,  # Get all plots for this farmer
-		}
-
-		try:
-			response = requests.get(url, headers=self.headers, params=params, timeout=self.timeout)
-			response.raise_for_status()
-
-			data = response.json()
-
-			# Parse plots from response
-			plots = [Plot(**p) for p in data.get("results", [])]
-
-			return plots
-
-		except requests.RequestException as e:
-			frappe.log_error(
-				title="Farmer Registry HTTP Error",
-				message=f"Failed to get plots for {farmer_id} from {url}: {e!s}",
-			)
-			raise
+	# ------------------------------------------------------------------ writes
 
 	def update_farmer(self, farmer_id: str, updates: dict, expected_version: int | None = None) -> dict:
-		"""Update farmer via HTTP PATCH with version checking (DA-41).
+		"""Edit a farmer through registry change requests (DA-41).
 
-		Args:
-		    farmer_id: Farmer Registry internal_record_id
-		    updates: Dictionary of fields to update
-		    expected_version: Expected current version for optimistic concurrency
-
-		Returns:
-		    Update result dict with version info or conflict flag
-
-		Raises:
-		    requests.RequestException: If HTTP request fails
+		The registry has no direct PATCH: each editable section gets a change
+		request that a Woreda officer approves. Fields the registry cannot take
+		through this route are rejected up front (non-retryable) so the queue
+		records a clear reason instead of silently dropping them.
 		"""
-		url = self._build_url("update_farmer", farmer_id=farmer_id)
-
-		# Add version header if provided
-		headers = dict(self.headers)
-		if expected_version is not None:
-			headers["If-Match"] = f'"{expected_version}"'
-
-		try:
-			response = requests.patch(url, headers=headers, json=updates, timeout=self.timeout)
-
-			# Handle version conflict (409 Conflict)
-			if response.status_code == 409:
-				conflict_data = response.json()
-				return {
-					"success": False,
-					"conflict": True,
-					"farmer_id": farmer_id,
-					"expected_version": expected_version,
-					"current_version": conflict_data.get("current_version"),
-					"current_data": conflict_data.get("current_data", {}),
-					"message": conflict_data.get("message", "Version conflict"),
-				}
-
-			# Raise for other errors
-			response.raise_for_status()
-
-			# Success
-			result = response.json()
-			return {
-				"success": True,
-				"conflict": False,
-				"farmer_id": farmer_id,
-				"version": result.get("version"),
-				"message": result.get("message", "Update successful"),
-			}
-
-		except requests.RequestException as e:
-			frappe.log_error(
-				title="Farmer Registry HTTP Error",
-				message=f"Failed to update farmer {farmer_id} at {url}: {e!s}",
+		groups, unsupported = updates_to_change_requests(updates)
+		if unsupported:
+			raise FarmerRegistryClientError(
+				"Fields not editable through the Farmer Registry change request: " + ", ".join(unsupported),
+				status_code=400,
 			)
-			raise
+		if not groups:
+			raise FarmerRegistryClientError("No registry-backed fields to update", status_code=400)
+
+		change_request_ids: list[str] = []
+		for group in groups:
+			res = self._staff_post(
+				"/change-requests/create_change_request",
+				{
+					"register_id": self.register_id,
+					"register_mnemonic": self.REGISTER_MNEMONIC,
+					"tab_id": self.tabs.get(group["tab"]),
+					"section_id": group["section_id"],
+					"section_register_id": self.register_id,
+					"internal_record_id": farmer_id,
+					"change_payload": group["payload"],
+				},
+				action="update farmer",
+			)
+			if not res.ok:
+				self._reject(res, "update farmer")
+			payload = res.payload if isinstance(res.payload, dict) else {}
+			cr_id = payload.get("change_request_id")
+			if cr_id:
+				change_request_ids.append(str(cr_id))
+
+		return {
+			"success": True,
+			"conflict": False,
+			"farmer_id": farmer_id,
+			"version": ",".join(change_request_ids) or None,
+			"change_request_ids": change_request_ids,
+			"message": _("Change request created; pending approval in the Farmer Registry"),
+		}
 
 	def register_farmer(self, payload: dict) -> dict:
 		"""Register a new farmer via the Staff API ingest-data endpoint.
@@ -526,36 +581,19 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		}
 
 	def get_ingest_status(self, correlation_id: str) -> list[dict]:
-		"""Search ingestion rows for a correlation_id.
-
-		POST /ingestion-data/search_in_ingestion_data with the staff envelope,
-		using correlation_id as the search text.
-		"""
-		url = f"{self.base_url}/ingestion-data/search_in_ingestion_data"
-		envelope = self._staff_envelope({})
-		envelope["request_body"]["pagination_request"]["search_text"] = correlation_id
-
-		headers, cookies = self._auth_and_csrf_headers()
-
-		try:
-			response = requests.post(
-				url,
-				headers=headers,
-				cookies=cookies,
-				json=envelope,
-				timeout=self.timeout,
-			)
-		except requests.RequestException as e:
-			frappe.log_error(
-				title="Farmer Registry HTTP Error",
-				message=f"Could not reach {url} for ingest status: {e!s}",
-			)
-			raise FarmerRegistryServerError(f"Farmer Registry unreachable: {e!s}") from e
-
-		self._raise_for_status(response, "get ingest status")
-		data = response.json()
-
-		payload = (data.get("response_body", {}) or {}).get("response_payload")
+		"""Search ingestion rows for a correlation_id."""
+		res = self._staff_post(
+			"/ingestion-data/search_in_ingestion_data",
+			{},
+			action="get ingest status",
+			page_size=50,
+			search_text=correlation_id,
+		)
+		if not res.ok:
+			if res.not_found:
+				return []
+			self._reject(res, "get ingest status")
+		payload = res.payload
 		if isinstance(payload, list):
 			return payload
 		return [payload] if payload else []
