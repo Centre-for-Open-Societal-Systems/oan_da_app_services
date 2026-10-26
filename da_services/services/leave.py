@@ -35,6 +35,8 @@ READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 DECIDE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 DECISIONS = {"Approve": "Approved", "Reject": "Rejected"}
 MAX_DAYS = 365
+MAX_REASON = 500
+LOCK_TIMEOUT_SECONDS = 10
 
 FIELDS = [
 	"name",
@@ -117,44 +119,53 @@ def submit_leave_request(
 	reason = (reason or "").strip()
 	if len(reason) < 5:
 		frappe.throw(_("A reason of at least 5 characters is required."), frappe.ValidationError)
+	if len(reason) > MAX_REASON:
+		frappe.throw(_("The reason cannot exceed {0} characters.").format(MAX_REASON), frappe.ValidationError)
 
 	da_id = _own_da_id(ctx)
 	ref = get_da_reference(da_id, ctx)
 
-	overlap = frappe.get_all(
-		DOCTYPE,
-		filters={
-			"da_id": da_id,
-			"status": ("in", list(OPEN_STATES)),
-			"from_date": ("<=", end),
-			"to_date": (">=", start),
-		},
-		pluck="name",
-		limit_page_length=1,
-	)
-	if overlap:
-		frappe.throw(
-			_("You already have an open leave request ({0}) overlapping these dates.").format(overlap[0]),
-			frappe.ValidationError,
+	# Overlap check and insert are one critical section per DA: two requests from
+	# the same DA racing each other (double tap, two devices) are serialised by a
+	# database lock, so the second one sees the first one's row and is rejected.
+	lock = _lock_da(da_id)
+	try:
+		overlap = frappe.get_all(
+			DOCTYPE,
+			filters={
+				"da_id": da_id,
+				"status": ("in", list(OPEN_STATES)),
+				"from_date": ("<=", end),
+				"to_date": (">=", start),
+			},
+			pluck="name",
+			limit_page_length=1,
 		)
+		if overlap:
+			frappe.throw(
+				_("You already have an open leave request ({0}) overlapping these dates.").format(overlap[0]),
+				frappe.ValidationError,
+			)
 
-	doc = frappe.get_doc(
-		{
-			"doctype": DOCTYPE,
-			"da_id": da_id,
-			"leave_type": leave_type,
-			"status": "Pending",
-			"requested_by": ctx.user,
-			"reason": reason,
-			"from_date": start,
-			"to_date": end,
-			"region": ref.region,
-			"zone": ref.zone,
-			"woreda": ref.woreda,
-			"client_op_id": client_op_id,
-		}
-	)
-	doc.insert(ignore_permissions=True)
+		doc = frappe.get_doc(
+			{
+				"doctype": DOCTYPE,
+				"da_id": da_id,
+				"leave_type": leave_type,
+				"status": "Pending",
+				"requested_by": ctx.user,
+				"reason": reason,
+				"from_date": start,
+				"to_date": end,
+				"region": ref.region,
+				"zone": ref.zone,
+				"woreda": ref.woreda,
+				"client_op_id": client_op_id,
+			}
+		)
+		doc.insert(ignore_permissions=True)
+	finally:
+		_unlock(lock)
 	audit.record(
 		"leave_requested",
 		entity_type=DOCTYPE,
@@ -162,6 +173,29 @@ def submit_leave_request(
 		details={"leave_type": leave_type, "from": str(start), "to": str(end), "days": doc.days},
 	)
 	return serialize(doc)
+
+
+def _lock_da(da_id: str) -> str | None:
+	"""Serialise leave submissions for one DA across workers (MariaDB named lock).
+
+	Same pattern as services/assignments._lock_da. The lock is released in the
+	caller's finally block, and by MariaDB itself if the connection drops.
+	"""
+	if frappe.db.db_type != "mariadb":
+		return None  # no named locks on other engines; the request transaction still applies
+	key = f"da_services:leave_request:{da_id}"
+	got = frappe.db.sql("select get_lock(%s, %s)", (key, LOCK_TIMEOUT_SECONDS))[0][0]
+	if not got:
+		frappe.throw(
+			_("Another leave request for DA {0} is being saved; try again in a moment.").format(da_id),
+			frappe.ValidationError,
+		)
+	return key
+
+
+def _unlock(key: str | None) -> None:
+	if key:
+		frappe.db.sql("select release_lock(%s)", (key,))
 
 
 def cancel_leave_request(name: str, ctx: ScopeContext | None = None) -> dict:
@@ -189,7 +223,9 @@ def _check_read(doc, ctx: ScopeContext) -> None:
 		return
 	if ctx.has_any_role(C.ROLE_DA) and ctx.owns_da(doc.da_id):
 		return
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda):
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(
+		doc.region, doc.woreda, zone=doc.zone
+	):
 		return
 	frappe.throw(_("Leave request {0} is outside your scope.").format(doc.name), frappe.PermissionError)
 
@@ -248,7 +284,10 @@ def decide(name: str, *, decision: str, note: str | None = None, ctx: ScopeConte
 
 	doc = frappe.get_doc(DOCTYPE, name)
 	if not ctx.unrestricted:
-		if not ctx.has_any_role(C.ROLE_SUPERVISOR) or not ctx.covers(doc.region, doc.woreda):
+		# Zone is passed too: a Zone-only grant must not be widened to the Region
+		# (scope_decision treats a Region grant as covering only when no narrower
+		# grant exists).
+		if not ctx.has_any_role(C.ROLE_SUPERVISOR) or not ctx.covers(doc.region, doc.woreda, zone=doc.zone):
 			frappe.throw(_("Leave request {0} is outside your Woreda.").format(name), frappe.PermissionError)
 	if ctx.owns_da(doc.da_id) or doc.requested_by == ctx.user:
 		frappe.throw(_("You cannot decide your own leave request."), frappe.PermissionError)
@@ -292,15 +331,59 @@ def _push(doc, *, transition_type: str, new_active_status: str, effective_date, 
 	try:
 		result = get_client().push_lifecycle_outcome(outcome)
 	except (DARegistryUnavailable, DARegistryContractPending, DARegistryError) as exc:
-		doc.db_set("registry_sync_state", "Failed", update_modified=False)
-		doc.db_set("registry_error", f"{exc.__class__.__name__}: {exc}"[:500], update_modified=False)
-		return False
+		return _push_failed(doc, transition_type, f"{exc.__class__.__name__}: {exc}")
 	if not result.accepted:
-		doc.db_set("registry_sync_state", "Failed", update_modified=False)
-		doc.db_set("registry_error", (result.message or "rejected")[:500], update_modified=False)
-		return False
+		return _push_failed(doc, transition_type, result.message or "rejected")
 	doc.db_set("registry_sync_state", "Accepted", update_modified=False)
 	doc.db_set("registry_reference", result.external_reference, update_modified=False)
+	doc.db_set("registry_error", None, update_modified=False)
+	return True
+
+
+def _push_failed(doc, transition_type: str, error: str) -> bool:
+	"""Record a failed registry push on the row (the local state stands; the daily
+	scheduler retries until the registry accepts, so the two systems converge)."""
+	doc.db_set("registry_sync_state", "Failed", update_modified=False)
+	doc.db_set("registry_error", error[:500], update_modified=False)
+	audit.record(
+		"leave_registry_sync_failed",
+		entity_type=DOCTYPE,
+		entity_name=doc.name,
+		details={"transition": transition_type, "error": error[:200]},
+	)
+	frappe.logger("da_services").warning(
+		"DA Leave Request %s: registry push (%s) failed, will retry daily: %s",
+		doc.name,
+		transition_type,
+		error,
+	)
+	return False
+
+
+def retry_registry_push(doc) -> bool:
+	"""Re-send the lifecycle outcome a row is missing in the registry.
+
+	Idempotent: the registry de-duplicates on the reference (the row name, or
+	"<name>-return" for the reactivation), so a retry after a lost response is
+	harmless. Rows that are not Active / Completed have nothing to push.
+	"""
+	if doc.status == "Active":
+		return _push(
+			doc,
+			transition_type="Leave",
+			new_active_status=C.ACTIVE_STATUS_ON_LEAVE,
+			effective_date=doc.from_date,
+			reference=doc.name,
+		)
+	if doc.status == "Completed":
+		return _push(
+			doc,
+			transition_type="Reactivation",
+			new_active_status=C.ACTIVE_STATUS_ACTIVE,
+			effective_date=doc.to_date,
+			reference=f"{doc.name}-return",
+		)
+	doc.db_set("registry_sync_state", "Not sent", update_modified=False)
 	doc.db_set("registry_error", None, update_modified=False)
 	return True
 
@@ -354,21 +437,57 @@ def complete(doc) -> None:
 
 
 def process_leave_schedule() -> dict:
-	"""Daily: start approved leaves whose first day has come; end active leaves whose last day has passed."""
-	started = ended = 0
-	for name in frappe.get_all(
-		DOCTYPE, filters={"status": "Approved", "from_date": ("<=", today())}, pluck="name"
-	):
-		activate(frappe.get_doc(DOCTYPE, name))
-		started += 1
-	for name in frappe.get_all(
-		DOCTYPE, filters={"status": "Active", "to_date": ("<", today())}, pluck="name"
-	):
-		complete(frappe.get_doc(DOCTYPE, name))
-		ended += 1
-	if started or ended:
-		frappe.db.commit()
-	return {"started": started, "ended": ended}
+	"""Daily: start approved leaves whose first day has come, end active leaves whose
+	last day has passed, and retry registry pushes that failed.
+
+	Safe to run more than once a day and safe to interrupt:
+	- each row is its own unit of work (commit per row; one bad row is logged
+	  and skipped, the rest still move);
+	- the state checks in activate() / complete() make a repeat run a no-op for
+	  rows already moved;
+	- registry retries de-duplicate on the row's reference.
+	Returns counts: started, ended, retried (registry pushes that succeeded on
+	retry) and failed (rows that raised and were skipped this run).
+	"""
+	stats = {"started": 0, "ended": 0, "retried": 0, "failed": 0}
+
+	def _each(names: list[str], step, counter: str, *, count_when_true: bool = False) -> None:
+		for name in names:
+			try:
+				ok = step(frappe.get_doc(DOCTYPE, name))
+				frappe.db.commit()
+			except Exception:
+				frappe.db.rollback()
+				stats["failed"] += 1
+				frappe.log_error(
+					title=f"DA Leave Request {name}: scheduler step {step.__name__} failed",
+					message=frappe.get_traceback(),
+				)
+				continue
+			if not count_when_true or ok:
+				stats[counter] += 1
+
+	_each(
+		frappe.get_all(DOCTYPE, filters={"status": "Approved", "from_date": ("<=", today())}, pluck="name"),
+		activate,
+		"started",
+	)
+	_each(
+		frappe.get_all(DOCTYPE, filters={"status": "Active", "to_date": ("<", today())}, pluck="name"),
+		complete,
+		"ended",
+	)
+	_each(
+		frappe.get_all(
+			DOCTYPE,
+			filters={"registry_sync_state": "Failed", "status": ("in", ("Active", "Completed"))},
+			pluck="name",
+		),
+		retry_registry_push,
+		"retried",
+		count_when_true=True,
+	)
+	return stats
 
 
 def _notify(doc) -> None:

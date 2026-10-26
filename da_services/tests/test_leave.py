@@ -216,7 +216,8 @@ class TestLeaveRequests(IntegrationTestCase):
 		out = self._submit(from_date=add_days(today(), 1), to_date=add_days(today(), 2))
 		svc.decide(out["id"], decision="Approve", ctx=_ctx(SUP))
 		# Not yet started
-		self.assertEqual(svc.process_leave_schedule(), {"started": 0, "ended": 0})
+		stats = svc.process_leave_schedule()
+		self.assertEqual((stats["started"], stats["ended"], stats["failed"]), (0, 0, 0))
 
 		# Pretend the first day has come
 		frappe.db.set_value(
@@ -238,6 +239,41 @@ class TestLeaveRequests(IntegrationTestCase):
 		self.assertEqual(doc.status, "Completed")
 		self.assertIsNotNone(doc.completed_at)
 		self.assertEqual(get_client().get_da("DA-000001").active_status, C.ACTIVE_STATUS_ACTIVE)
+
+	def test_scheduler_retries_failed_registry_push(self):
+		"""A registry outage at approval time is recorded, not fatal; the next run converges."""
+		from unittest.mock import patch
+
+		from da_services.integrations.da_registry.client import DARegistryUnavailable
+
+		out = self._submit(from_date=today(), to_date=add_days(today(), 1))
+		with patch.object(
+			MockDARegistryClient, "push_lifecycle_outcome", side_effect=DARegistryUnavailable("registry down")
+		):
+			decided = svc.decide(out["id"], decision="Approve", ctx=_ctx(SUP))
+		self.assertEqual(decided["status"], "Active")  # local state stands
+		self.assertEqual(decided["registry_sync_state"], "Failed")
+		self.assertIn("registry down", decided["registry_error"])
+		self.assertEqual(get_client().get_da("DA-000001").active_status, C.ACTIVE_STATUS_ACTIVE)
+		self.assertTrue(
+			frappe.db.exists(
+				"DA Audit Event", {"action": "leave_registry_sync_failed", "entity_name": out["id"]}
+			)
+		)
+
+		stats = svc.process_leave_schedule()
+		self.assertEqual(stats["retried"], 1)
+		doc = frappe.get_doc("DA Leave Request", out["id"])
+		self.assertEqual(doc.registry_sync_state, "Accepted")
+		self.assertEqual(get_client().get_da("DA-000001").active_status, C.ACTIVE_STATUS_ON_LEAVE)
+		# Nothing left to retry; a second run is a no-op
+		self.assertEqual(svc.process_leave_schedule()["retried"], 0)
+
+	def test_reason_length_is_bounded(self):
+		with self.assertRaises(frappe.ValidationError):
+			self._submit(reason="x" * (svc.MAX_REASON + 1))
+		out = self._submit(reason="y" * svc.MAX_REASON)
+		self.assertEqual(len(out["reason"]), svc.MAX_REASON)
 
 	def test_active_leave_cannot_be_cancelled(self):
 		out = self._submit(from_date=today(), to_date=add_days(today(), 1))
