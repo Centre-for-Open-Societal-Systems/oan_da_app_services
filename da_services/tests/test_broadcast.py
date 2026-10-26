@@ -44,10 +44,14 @@ def _grant(user, role, **kw):
 	return doc
 
 
+SENDERS = (COMMS_NATIONAL, COMMS_W01, SUP, "Administrator")
+
+
 class TestBroadcast(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		frappe.db.delete("DA Notification", {"user": ("in", ALL_USERS)})
+		frappe.db.delete("DA Broadcast", {"sent_by": ("in", SENDERS)})
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
 		_user(DA_W01, [C.ROLE_DA])
 		_user(DA_W02, [C.ROLE_DA])
@@ -65,6 +69,7 @@ class TestBroadcast(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.delete("DA Notification", {"user": ("in", ALL_USERS)})
+		frappe.db.delete("DA Broadcast", {"sent_by": ("in", SENDERS)})
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
 
 	def _rows(self, user):
@@ -149,6 +154,45 @@ class TestBroadcast(IntegrationTestCase):
 		self.assertEqual(first["broadcast_id"], "bc-op-0001")
 		self.assertEqual(second["recipients"], 3)
 		self.assertEqual(len(self._rows(DA_W01)), 1)
+		# One record, guarded by the unique client_op_id (the database-level check)
+		self.assertEqual(frappe.db.count("DA Broadcast", {"client_op_id": "bc-op-0001"}), 1)
+
+	def test_broadcast_record_written(self):
+		ctx = get_scope_context(COMMS_NATIONAL)
+		out = svc.broadcast(
+			ctx, title="recorded", body="b", href="/notifications", scope="region", scope_value="ET04"
+		)
+		row = frappe.db.get_value(
+			"DA Broadcast",
+			{"client_op_id": ("is", "not set"), "title": "recorded"},
+			["name", "sent_by", "scope", "scope_value", "recipients", "href"],
+			as_dict=True,
+		)
+		self.assertEqual(out["broadcast_id"], row.name)  # no client_op_id: the record name is the id
+		self.assertEqual(row.sent_by, COMMS_NATIONAL)
+		self.assertEqual(
+			(row.scope, row.scope_value, row.recipients, row.href), ("region", "ET04", 2, "/notifications")
+		)
+
+	def test_failed_send_leaves_nothing_behind(self):
+		"""Atomic: if sending stops half-way, neither the record nor partial notifications remain."""
+		from unittest.mock import patch
+
+		ctx = get_scope_context(COMMS_NATIONAL)
+		real_notify = svc.notify
+		calls = []
+
+		def flaky(user, **kw):
+			calls.append(user)
+			if len(calls) == 2:
+				raise RuntimeError("boom")
+			return real_notify(user, **kw)
+
+		with patch.object(svc, "notify", side_effect=flaky), self.assertRaises(RuntimeError):
+			svc.broadcast(ctx, title="partial", scope="all", client_op_id="bc-op-atomic")
+		self.assertEqual(frappe.db.count("DA Broadcast", {"client_op_id": "bc-op-atomic"}), 0)
+		for u in (DA_W01, DA_W02, DA_ET03):
+			self.assertEqual(self._rows(u), [])
 
 	# -- validation + audit ---------------------------------------------------
 
@@ -160,6 +204,21 @@ class TestBroadcast(IntegrationTestCase):
 			svc.broadcast(ctx, title="x", scope="woreda")  # scope_value missing
 		with self.assertRaises(frappe.ValidationError):
 			svc.broadcast(ctx, title="x", scope="planet")
+
+	def test_href_must_be_a_portal_path(self):
+		ctx = get_scope_context(COMMS_NATIONAL)
+		for bad in ("https://evil.example/x", "//evil.example", "notifications", "/a b"):
+			with self.assertRaises(frappe.ValidationError, msg=bad):
+				svc.broadcast(ctx, title="x", scope="all", href=bad)
+		out = svc.broadcast(ctx, title="ok", scope="all", href=" /notifications ")
+		self.assertEqual(out["recipients"], 3)
+
+	def test_scope_with_no_active_da_is_rejected(self):
+		"""A typo in scope_value must not silently send to nobody."""
+		ctx = get_scope_context(COMMS_NATIONAL)
+		with self.assertRaises(frappe.ValidationError):
+			svc.broadcast(ctx, title="x", scope="woreda", scope_value="ET99-W99")
+		self.assertEqual(frappe.db.count("DA Broadcast", {"scope_value": "ET99-W99"}), 0)
 
 	def test_audit_event_written(self):
 		ctx = get_scope_context(COMMS_NATIONAL)

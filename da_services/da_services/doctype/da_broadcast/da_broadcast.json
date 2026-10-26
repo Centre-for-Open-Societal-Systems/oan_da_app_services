@@ -1,0 +1,154 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DA-BCT-{YYYY}-{#######}",
+ "creation": "2026-10-26 12:00:00.000000",
+ "description": "One broadcast sent by a Communications Officer (or Administrator) to every DA in a scope. The row is written before the per-DA notifications; its unique client_op_id is the idempotency guard, so a replayed request can never notify everyone twice.",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "scope",
+  "scope_value",
+  "col_main",
+  "sent_by",
+  "sent_at",
+  "recipients",
+  "sec_content",
+  "body",
+  "href",
+  "sec_device",
+  "client_op_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "length": 140,
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "scope",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Scope",
+   "options": "all\nregion\nzone\nworeda",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "scope_value",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Scope Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sent_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sent By",
+   "options": "User",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "recipients",
+   "fieldtype": "Int",
+   "label": "Recipients",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_content",
+   "fieldtype": "Section Break",
+   "label": "Content"
+  },
+  {
+   "fieldname": "body",
+   "fieldtype": "Small Text",
+   "label": "Body",
+   "read_only": 1
+  },
+  {
+   "description": "Portal path the notification navigates to, e.g. /notifications.",
+   "fieldname": "href",
+   "fieldtype": "Data",
+   "label": "Link",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_device",
+   "fieldtype": "Section Break",
+   "label": "Idempotency"
+  },
+  {
+   "description": "Client-chosen idempotency key. Unique: a replayed request finds this row and does not resend.",
+   "fieldname": "client_op_id",
+   "fieldtype": "Data",
+   "label": "Client Op ID",
+   "read_only": 1,
+   "unique": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-26 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Broadcast",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 0
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 0
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Communications Officer"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

@@ -245,35 +245,65 @@ def broadcast(
 	if len(title) > 140:
 		frappe.throw(_("title must be 140 characters or fewer."), frappe.ValidationError)
 
+	href = _validate_href(href)
 	_assert_broadcast_scope_allowed(ctx, scope, scope_value)
 
-	broadcast_id = client_op_id or frappe.generate_hash(length=16)
-	event_key = f"broadcast:{broadcast_id}"
+	# Idempotency at the database: the DA Broadcast row goes in first and its
+	# client_op_id is unique, so two replays racing each other cannot both pass a
+	# "does it exist yet" check; the second insert blocks on the first and then
+	# fails as a duplicate. Everything after the insert sits behind a savepoint so
+	# a failure half-way through the recipient loop leaves neither the record nor
+	# a partial set of notifications behind (atomic broadcast).
+	frappe.db.savepoint("broadcast")
+	record = frappe.get_doc(
+		{
+			"doctype": "DA Broadcast",
+			"title": title,
+			"body": body,
+			"href": href,
+			"scope": scope,
+			"scope_value": scope_value,
+			"sent_by": ctx.user,
+			"sent_at": now_datetime(),
+			"client_op_id": client_op_id,
+		}
+	)
+	record.flags.ignore_permissions = True
+	try:
+		record.insert()
+	except frappe.UniqueValidationError, frappe.DuplicateEntryError:
+		frappe.db.rollback(save_point="broadcast")
+		return _duplicate_broadcast(client_op_id)
 
-	if client_op_id:
-		existing = frappe.get_all(
-			"DA Notification", filters={"kind": "Broadcast", "event": event_key}, pluck="user"
-		)
-		if existing:
-			return {
-				"broadcast_id": broadcast_id,
+	broadcast_id = client_op_id or record.name
+	event_key = f"broadcast:{broadcast_id}"
+	try:
+		recipients = _broadcast_recipients(scope, scope_value)
+		if not recipients:
+			frappe.throw(
+				_("No active Development Agent is assigned to {0} {1}; check the scope value.")
+				.format(scope, scope_value or "")
+				.strip(),
+				frappe.ValidationError,
+			)
+		for user in recipients:
+			notify(user, kind="Broadcast", title=title, body=body, href=href, event=event_key)
+		record.db_set("recipients", len(recipients), update_modified=False)
+		audit_log.record(
+			BROADCAST_SENT,
+			entity_type="DA Broadcast",
+			entity_name=broadcast_id,
+			details={
 				"scope": scope,
 				"scope_value": scope_value,
-				"recipients": len(set(existing)),
-				"duplicate": True,
-			}
-
-	recipients = _broadcast_recipients(scope, scope_value)
-	for user in recipients:
-		notify(user, kind="Broadcast", title=title, body=body, href=href, event=event_key)
-
-	audit_log.record(
-		BROADCAST_SENT,
-		entity_type="DA Notification",
-		entity_name=broadcast_id,
-		details={"scope": scope, "scope_value": scope_value, "title": title, "recipients": len(recipients)},
-		user=ctx.user,
-	)
+				"title": title,
+				"recipients": len(recipients),
+			},
+			user=ctx.user,
+		)
+	except Exception:
+		frappe.db.rollback(save_point="broadcast")
+		raise
 
 	return {
 		"broadcast_id": broadcast_id,
@@ -282,3 +312,37 @@ def broadcast(
 		"recipients": len(recipients),
 		"duplicate": False,
 	}
+
+
+def _duplicate_broadcast(client_op_id: str | None) -> dict:
+	"""The response for a replayed client_op_id: what the original send did."""
+	row = frappe.db.get_value(
+		"DA Broadcast",
+		{"client_op_id": client_op_id},
+		["name", "scope", "scope_value", "recipients"],
+		as_dict=True,
+	)
+	if not row:  # the unique index fired on something else; nothing sensible to replay
+		frappe.throw(
+			_("Broadcast {0} could not be recorded; retry.").format(client_op_id), frappe.ValidationError
+		)
+	return {
+		"broadcast_id": client_op_id or row.name,
+		"scope": row.scope,
+		"scope_value": row.scope_value,
+		"recipients": int(row.recipients or 0),
+		"duplicate": True,
+	}
+
+
+def _validate_href(href: str | None) -> str | None:
+	"""A broadcast link is a portal path ("/notifications"), never an external URL."""
+	href = (href or "").strip()
+	if not href:
+		return None
+	if not href.startswith("/") or href.startswith("//") or any(c.isspace() for c in href) or len(href) > 500:
+		frappe.throw(
+			_("href must be a portal path starting with '/', for example /notifications."),
+			frappe.ValidationError,
+		)
+	return href
