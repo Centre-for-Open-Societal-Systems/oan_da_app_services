@@ -47,8 +47,30 @@ class TestIngestMapper(IntegrationTestCase):
 		self.assertEqual(personal["first_name_english"], "Abebe")
 		self.assertEqual(personal["father_name_english"], "Kebede")
 		self.assertEqual(personal["primary_phone_number"], "+251911234567")
-		self.assertEqual(inner["basic_info"]["locale_info"]["kebele"], "40801101001")
+		self.assertEqual(personal["phone_number"], "yes")
+		# Master Data P-code widths, as the ODK form sends them (region 2, woreda 6, kebele 12)
+		self.assertEqual(
+			inner["basic_info"]["locale_info"], {"region": "04", "woreda": "040801", "kebele": "040801101001"}
+		)
 		self.assertEqual(inner["register_mnemonic"], "Farmer")
+
+	def test_matches_registry_integration_collection_shape(self):
+		"""Same keys the registry team's passing run submits: __id, phone flag, enumerator, codes."""
+		form = {
+			**SAMPLE_FORM,
+			"client_op_id": "a7211a13-3534-4348-b6d0-4e6ee8a4cd2d",
+			"enumerator_name": "Abebe K.",
+		}
+		env = da_form_to_ingest_payload(form)
+		inner = env["message"]["payload"]
+		self.assertEqual(env["header"]["message_id"], "da-svc-a7211a13-3534-4348-b6d0-4e6ee8a4cd2d")
+		self.assertEqual(inner["__id"], "uuid:a7211a13-3534-4348-b6d0-4e6ee8a4cd2d")
+		self.assertEqual(
+			inner["survey_metadata"], {"enumerator_name": "Abebe K.", "enumerator_id": "DA-ID-001"}
+		)
+		no_phone = da_form_to_ingest_payload({"first_name": "Solo"})["message"]["payload"]
+		self.assertEqual(no_phone["basic_info"]["personal_info"]["phone_number"], "no")
+		self.assertNotIn("primary_phone_number", no_phone["basic_info"]["personal_info"])
 
 	def test_repeat_sections(self):
 		inner = da_form_to_ingest_payload(SAMPLE_FORM)["message"]["payload"]
@@ -250,6 +272,18 @@ class TestHouseholdAndSocioMapping(IntegrationTestCase):
 		self.assertIn("single", MARITAL_STATUSES)
 		self.assertIn("higher_education", EDUCATION_LEVELS)
 		self.assertIn("others", INCOME_SOURCES)
+		# ODK form codes (what FARMER_ODK_MODEL was built for) are accepted as-is,
+		# and income_source is a select_multiple: several codes, space-separated.
+		odk = FarmerRegistrationForm(
+			**SAMPLE_FORM,
+			marital_status="single",
+			education_level="read_write",
+			income_source=["crop", "livestock"],
+		)
+		self.assertEqual((odk.education_level, odk.income_source), ("read_write", "crop livestock"))
+		self.assertEqual(
+			FarmerRegistrationForm(**SAMPLE_FORM, income_source="crop, other").income_source, "crop other"
+		)
 		for field, bad in (
 			("marital_status", "engaged"),
 			("education_level", "phd"),

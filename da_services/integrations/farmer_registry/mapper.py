@@ -23,6 +23,23 @@ def _yes_no(value: Any) -> str:
 	return "yes" if value else "no"
 
 
+# Master Data P-code widths (farmer_transform.j2 pads to these before looking the
+# place up: region 2, zone 4, woreda 6, kebele 12). Padded here too so the message
+# matches what the ODK form sends and what the registry team's test data uses.
+_CODE_WIDTHS = (("region", 2), ("zone", 4), ("woreda", 6), ("kebele", 12))
+
+
+def _locale_info(form: dict[str, Any]) -> dict[str, str]:
+	out: dict[str, str] = {}
+	for key, width in _CODE_WIDTHS:
+		value = form.get(key)
+		if value in (None, ""):
+			continue
+		text = str(value).strip()
+		out[key] = text.zfill(width) if text.isdigit() and len(text) < width else text
+	return out
+
+
 def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	"""Build the Farmer Registry ingest envelope from a DA registration form.
 
@@ -66,23 +83,29 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 		if form.get(src) not in (None, ""):
 			personal[dst] = form[src]
 
+	# ODK asks "has a phone?" (yes/no) before the number; the transform reads the
+	# number from primary_phone_number and only falls back to phone_number when it is
+	# not a yes/no, so the flag is informational but keeps the message shaped like a
+	# real form submission.
+	personal["phone_number"] = "yes" if personal.get("primary_phone_number") else "no"
+
 	# Disability sits under personal_info in the registry's ODK layout.
 	if form.get("disabled") is not None:
 		personal["disability"] = _yes_no(form["disabled"])
 
+	# A client-supplied idempotency key becomes the message_id, so a retried
+	# submission reaches the registry with the same id instead of a new one. The
+	# same id doubles as the ODK instance id (`__id`) the intake records.
+	op_id = form.get("client_op_id")
+	instance = str(op_id) if op_id else str(uuid.uuid4())
+	message_id = f"da-svc-{instance}"
+
 	payload: dict[str, Any] = {
 		"register_mnemonic": "Farmer",
+		"__id": f"uuid:{instance}",
 		"basic_info": {
 			"personal_info": personal,
-			"locale_info": {
-				k: v
-				for k, v in (
-					("region", form.get("region")),
-					("woreda", form.get("woreda")),
-					("kebele", form.get("kebele")),
-				)
-				if v not in (None, "")
-			},
+			"locale_info": _locale_info(form),
 		},
 	}
 
@@ -142,15 +165,18 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	if socio:
 		payload["socio_economic_data"] = socio
 
-	if form.get("da_id"):
-		payload["survey_metadata"] = {"enumerator_id": form["da_id"]}
+	# Who registered: the registry shows enumerator_name as the record's creator
+	# (odk_actor) and keeps enumerator_id as the collector's user id.
+	meta = {
+		k: v
+		for k, v in (("enumerator_name", form.get("enumerator_name")), ("enumerator_id", form.get("da_id")))
+		if v not in (None, "")
+	}
+	if meta:
+		payload["survey_metadata"] = meta
 	if form.get("farmer_reference_id"):
 		payload["farmer_reference_id"] = form["farmer_reference_id"]
 
-	# A client-supplied idempotency key becomes the message_id, so a retried
-	# submission reaches the registry with the same id instead of a new one.
-	op_id = form.get("client_op_id")
-	message_id = f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
 	return {
 		"header": {
 			"message_id": message_id,
