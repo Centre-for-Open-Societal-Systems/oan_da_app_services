@@ -7,6 +7,7 @@ with DA Visit history, pending actions (DA-39), and permission checks.
 import frappe
 from frappe import _
 
+from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.client import FarmerRegistryClientError
@@ -117,10 +118,12 @@ def list_farmers(
 	"""
 	filters = {}
 
-	# Scope filters - DA-211 Kebele-based scoping
-	# DAs see all farmers in their assigned Kebele, not just manually linked ones.
-	# Supervisors with multiple Woredas see all of them.
-	# Zone-scoped Supervisors are denied (no zone field on DA Farmer Reference).
+	# Scope filters
+	# - DA: all farmers in the assigned Kebele(s), not just manually linked ones (DA-211).
+	# - Supervisor: their Woreda(s); the permission_query_conditions hook applies this.
+	# - Zone-scoped officers: the Woredas under their Zone, via the zone column on
+	#   DA Farmer Reference (Zone scope) and ancestors_of() for the woreda filter.
+	# - Executive (Region): their Region, read-only.
 	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
 		# DA sees all farmers in assigned Kebele (DA-211 change)
 		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
@@ -148,9 +151,22 @@ def list_farmers(
 						)
 					filters["woreda"] = woreda
 				elif ctx.zone_scopes:
-					# Zone-scoped: would need to validate woreda is in their zone
-					# For now, deny (zone validation not implemented)
-					frappe.throw(_("Cannot filter by Woreda with Zone-only scope."), frappe.PermissionError)
+					# Zone-scoped: the Woreda must sit under one of their Zones in master data.
+					# An unknown Woreda is a data problem, not a scope problem; say so.
+					woreda_zone = ancestors_of(woreda).get("zone")
+					if not woreda_zone:
+						frappe.throw(
+							_(
+								"Woreda {0} is not in the administrative master data (no Zone known); "
+								"ask an Administrator to load it before filtering by it."
+							).format(woreda),
+							frappe.ValidationError,
+						)
+					if woreda_zone not in ctx.zone_scopes:
+						frappe.throw(
+							_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError
+						)
+					filters["woreda"] = woreda
 				elif ctx.region_scopes:
 					# Region-scoped: woreda must be in their region
 					# Simplified check: assume woreda code starts with region code
@@ -207,7 +223,7 @@ def list_farmers(
 			return [], 0
 
 	# Query DA Farmer Reference using get_list to apply permission hooks
-	# This ensures zone-scoped Supervisors are denied and multi-Woreda
+	# This ensures Zone-scoped officers see only their Zone and multi-Woreda
 	# Supervisors see all their Woredas
 	farmers = frappe.get_list(
 		"DA Farmer Reference",

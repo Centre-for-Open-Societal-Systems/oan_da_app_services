@@ -95,13 +95,22 @@ class DAVisit(Document):
 			)
 
 	def _fill_scope_from_registry(self):
-		if self.region and self.woreda and self.kebele:
+		if self.region and self.zone and self.woreda and self.kebele:
 			return
 		try:
 			ref = get_client().get_da(self.da_id)
-		except DARegistryError:
+		except DARegistryError as exc:
+			# Unknown DA or registry down: leave the codes empty (the DA still sees the row
+			# by da_id). Logged, not raised, so an outage never blocks planning a visit.
+			frappe.logger("da_services").warning(
+				"DA Visit %s: scope codes not filled, registry lookup of %s failed: %s",
+				self.name or "(new)",
+				self.da_id,
+				exc,
+			)
 			return
 		self.region = self.region or ref.region
+		self.zone = self.zone or ref.zone
 		self.woreda = self.woreda or ref.woreda
 		self.kebele = self.kebele or ref.kebele
 
@@ -224,6 +233,7 @@ class DAVisit(Document):
 				"priority": "Normal",
 				"generated_by_rule": FOLLOW_UP_RULE,
 				"region": self.region,
+				"zone": self.zone,
 				"woreda": self.woreda,
 			}
 		)
@@ -256,6 +266,7 @@ class DAVisit(Document):
 					"location_lat": self.location_lat,
 					"location_lng": self.location_lng,
 					"region": self.region,
+					"zone": self.zone,
 					"woreda": self.woreda,
 					"kebele": self.kebele,
 					"created_by_user": self.created_by_user,

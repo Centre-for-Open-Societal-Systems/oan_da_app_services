@@ -120,7 +120,9 @@ def _load_in_scope(name: str, ctx: ScopeContext):
 	if ctx.has_any_role(C.ROLE_DA):
 		if ctx.owns_da(doc.da_id):
 			return doc
-	elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda):
+	elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(
+		doc.region, doc.woreda, doc.zone
+	):
 		return doc
 	frappe.throw(_("Task {0} is outside your scope.").format(name), frappe.PermissionError)
 
