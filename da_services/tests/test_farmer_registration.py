@@ -162,3 +162,90 @@ class TestRegisterIdempotency(IntegrationTestCase):
 		payload = da_form_to_ingest_payload(SAMPLE_FORM)
 		suffix = payload["header"]["message_id"].removeprefix("da-svc-")
 		uuid.UUID(suffix)  # raises if not a UUID
+
+
+REGISTRY_REJECTED = {
+	"success": False,
+	"correlation_id": None,
+	"status": "ERROR",
+	"error_code": "SYS-ERR-001",
+	"error_message": "UNEXPECTED_ERROR",
+}
+
+
+class TestRegisterRegistryRejection(IntegrationTestCase):
+	"""A registry ERROR (e.g. SYS-ERR-001) is a failed registration, not a success."""
+
+	def setUp(self):
+		frappe.response.pop("http_status_code", None)
+
+	def tearDown(self):
+		frappe.response.pop("http_status_code", None)
+
+	def _client(self, result):
+		from unittest.mock import MagicMock
+
+		client = MagicMock()
+		client.register_farmer.return_value = result
+		return client
+
+	def test_service_marks_event_failed_and_returns_registry_error(self):
+		from unittest.mock import patch
+
+		from da_services.services import farmers as svc
+
+		with patch(
+			"da_services.services.farmers.get_farmer_registry_client",
+			return_value=self._client(REGISTRY_REJECTED),
+		):
+			result = svc.register_farmer(dict(SAMPLE_FORM), ctx=None)
+
+		self.assertFalse(result["success"])
+		self.assertEqual(result["error_code"], "SYS-ERR-001")
+		self.assertEqual(result["error_message"], "UNEXPECTED_ERROR")
+		event = frappe.db.get_value(
+			"DA Integration Event", result["event_id"], ["status", "last_error"], as_dict=True
+		)
+		self.assertEqual(event.status, "Failed")
+		self.assertEqual(event.last_error, "UNEXPECTED_ERROR")
+
+	def test_route_returns_502_error_when_registry_rejects(self):
+		from unittest.mock import patch
+
+		from da_services.api.v1 import farmers as api
+
+		frappe.local.form_dict = frappe._dict(first_name="Abebe", gender="male")
+		with (
+			patch.object(api, "require_roles", return_value=None),
+			patch(
+				"da_services.services.farmers.get_farmer_registry_client",
+				return_value=self._client(REGISTRY_REJECTED),
+			),
+		):
+			res = api.register_farmer()
+
+		self.assertEqual(frappe.response.get("http_status_code"), 502)
+		self.assertEqual(res["status"], "error")
+		self.assertEqual(res["code"], "FARMER_REGISTRY_REJECTED")
+		self.assertIn("UNEXPECTED_ERROR", res["message"])
+		self.assertEqual(res["details"]["registry_error_code"], "SYS-ERR-001")
+		self.assertTrue(res["details"]["event_id"])
+
+	def test_route_still_succeeds_when_registry_accepts(self):
+		from unittest.mock import patch
+
+		from da_services.api.v1 import farmers as api
+
+		frappe.local.form_dict = frappe._dict(first_name="Abebe", gender="male")
+		with (
+			patch.object(api, "require_roles", return_value=None),
+			patch(
+				"da_services.services.farmers.get_farmer_registry_client",
+				return_value=MockFarmerRegistryClient(),
+			),
+		):
+			res = api.register_farmer()
+
+		self.assertIsNone(frappe.response.get("http_status_code"))
+		self.assertEqual(res["status"], "success")
+		self.assertTrue(res["data"]["correlation_id"])

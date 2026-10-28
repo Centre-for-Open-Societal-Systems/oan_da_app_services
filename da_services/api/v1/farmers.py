@@ -22,7 +22,7 @@ from __future__ import annotations
 import frappe
 from frappe import _
 from frappe.utils import cint
-from oan_auth_service.api.utils import handle_api_errors, success_response
+from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
 from pydantic import ValidationError as PydanticValidationError
 
 from da_services.api.router import route
@@ -388,6 +388,10 @@ def register_farmer():
 	            "duplicate": false
 	        }
 	    }
+
+	If the registry answers but does not accept the submission, the response is
+	a 502 error (code FARMER_REGISTRY_REJECTED) carrying the event_id and the
+	registry's status and error code; nothing was registered.
 	"""
 	ctx = require_roles(*REGISTER_ROLES)
 
@@ -411,6 +415,23 @@ def register_farmer():
 		frappe.throw(_("Invalid registration form: {0}").format(problems), frappe.ValidationError)
 
 	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True), ctx)
+
+	# The registry answered but did not accept the submission (e.g. SYS-ERR-001):
+	# nothing was registered, so this must not read as a success to the DA.
+	if not result.get("success") and not result.get("duplicate"):
+		frappe.response["http_status_code"] = 502
+		return error_response(
+			_("Farmer Registry did not accept the registration: {0}").format(
+				result.get("error_message") or result.get("status") or _("unknown error")
+			),
+			"FARMER_REGISTRY_REJECTED",
+			details={
+				"event_id": result.get("event_id"),
+				"message_id": result.get("message_id"),
+				"registry_status": result.get("status"),
+				"registry_error_code": result.get("error_code"),
+			},
+		)
 
 	return success_response(
 		message=_("Registration already submitted.")
