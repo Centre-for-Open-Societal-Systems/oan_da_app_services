@@ -1,28 +1,13 @@
 """HTTP client for the live Farmer Registry (OpenG2P Staff API).
 
-Every call is a POST with the OpenG2P staff envelope, a Keycloak
-client-credentials bearer token and the double-submit CSRF pair the staff
-middleware requires. Reads come from ``/register-data/*``, updates become
-change requests, and registration goes through the ingest pipeline.
+Every call is a POST with the OpenG2P staff envelope and the double-submit
+CSRF pair the staff middleware requires. Auth order is staff-user IAM login
+(when username and password are set), then Keycloak client-credentials, then
+a static API key. Reads come from ``/register-data/*``, updates become change
+requests, and registration goes through the ingest pipeline.
 
-site_config.json:
-    {
-        "farmer_registry_backend": "http",
-        "farmer_registry_url": "https://staff-farmer-development.oanstaging.com",
-        "farmer_registry_timeout": 30,
-        "farmer_registry_keycloak": {
-            "token_url": "https://keycloak-development.oanstaging.com/realms/staff/protocol/openid-connect/token",
-            "client_id": "da-services",
-            "client_secret": "..."
-        },
-        "farmer_registry_ingest": {
-            "data_model": "FARMER_ODK_MODEL",
-            "register_id": "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd",
-            "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649",
-            "tabs": {"farmer": "farmer_farmer_tab", "location": "farmer_location_tab",
-                     "household": "farmer_household_link_tab", "land": "farmer_land_tab"}
-        }
-    }
+Copy keys from ``config.example.json`` into site_config.json. The client does
+not read the ``_environments`` examples in that file.
 
 Staff API endpoints used:
     register-data/get_subject_record        -> get_farmer (identity row)
@@ -33,12 +18,17 @@ Staff API endpoints used:
     ingestion-data/search_in_ingestion_data -> get_ingest_status
 """
 
+import base64
+import hashlib
+import json
+import re
 import secrets
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import ClassVar
+from urllib.parse import urljoin
 
 import frappe
 import requests
@@ -72,6 +62,95 @@ DEFAULT_TABS: dict[str, str] = {
 # Registry messages that mean "no such record" rather than a failure
 _NOT_FOUND_MARKERS = ("not found", "does not exist", "no record")
 
+# A new client is built per call, so tokens live on the worker, not the instance.
+_STAFF_TOKEN_CACHE: dict[tuple[str, str], dict] = {}
+_STAFF_TOKEN_LOCK = threading.Lock()
+_CC_TOKEN_CACHE: dict[tuple[str, str], dict] = {}
+_CC_TOKEN_LOCK = threading.Lock()
+_TOKEN_SKEW_SECONDS = 30
+_CALLBACK_COOKIE_MAX_AGE = 2100
+
+_LOGIN_FORM_RE = re.compile(r'<form\b[^>]*\bid=["\']kc-form-login["\'][^>]*>', re.IGNORECASE)
+_FORM_ACTION_RE = re.compile(r'\baction=["\']([^"\']+)["\']', re.IGNORECASE)
+_MAX_AGE_RE = re.compile(r"Max-Age=(\d+)", re.IGNORECASE)
+
+
+def _set_cookie_chunks(response: requests.Response) -> list[str]:
+	raw_headers = getattr(getattr(response, "raw", None), "headers", None)
+	if raw_headers is not None and hasattr(raw_headers, "getlist"):
+		return [chunk for chunk in raw_headers.getlist("Set-Cookie") if chunk]
+	single = response.headers.get("Set-Cookie")
+	return [single] if single else []
+
+
+def _cookie_value(response: requests.Response, name: str) -> str | None:
+	"""Last Set-Cookie value for name. Also checks the parsed cookie jar."""
+	pattern = re.compile(rf"^{re.escape(name)}=([^;]*)", re.IGNORECASE)
+	found = []
+	for chunk in _set_cookie_chunks(response):
+		match = pattern.match(chunk)
+		if match:
+			found.append(match.group(1).strip().strip('"'))
+	if found and found[-1]:
+		return found[-1]
+	cookie = response.cookies.get(name)
+	if cookie:
+		value = str(cookie).strip().strip('"')
+		return value or None
+	return None
+
+
+def _cookie_max_age(response: requests.Response, name: str) -> int | None:
+	pattern = re.compile(rf"^{re.escape(name)}=", re.IGNORECASE)
+	for chunk in _set_cookie_chunks(response):
+		if pattern.match(chunk):
+			match = _MAX_AGE_RE.search(chunk)
+			if match:
+				return int(match.group(1))
+	return None
+
+
+def _positive_timeout(value: object, default: float = 30) -> float:
+	if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+		return default
+	try:
+		timeout = float(value)
+	except ValueError:
+		return default
+	return timeout if timeout > 0 else default
+
+
+def _token_still_valid(entry: dict, *, require_csrf: bool = False) -> bool:
+	if not entry.get("token") or entry.get("expires_at", 0) <= time.time() + _TOKEN_SKEW_SECONDS:
+		return False
+	if require_csrf and not entry.get("csrf"):
+		return False
+	return True
+
+
+def _jwt_expires_at(token: str) -> float | None:
+	"""Read exp. The Staff API checks the signature."""
+	try:
+		payload = token.split(".")[1]
+		payload += "=" * (-len(payload) % 4)
+		claims = json.loads(base64.urlsafe_b64decode(payload))
+		return float(claims["exp"])
+	except IndexError, KeyError, ValueError, json.JSONDecodeError:
+		return None
+
+
+def _keycloak_login_action(html: str, realm_url: str) -> str:
+	"""Pull the credential form action out of the Keycloak login page."""
+	form = _LOGIN_FORM_RE.search(html or "")
+	if not form:
+		raise FarmerRegistryClientError("Keycloak did not return the staff login form")
+	action = _FORM_ACTION_RE.search(form.group(0))
+	url = action.group(1).replace("&amp;", "&") if action else ""
+	expected = realm_url.rstrip("/") + "/login-actions/"
+	if not url.startswith(expected):
+		raise FarmerRegistryClientError("Keycloak login form does not post to the configured staff realm")
+	return url
+
 
 @dataclass
 class StaffResponse:
@@ -101,10 +180,10 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 	def __init__(self):
 		self.base_url = str(frappe.conf.get("farmer_registry_url", "") or "").rstrip("/")
 		self.api_key = frappe.conf.get("farmer_registry_api_key")
-		self.timeout = frappe.conf.get("farmer_registry_timeout", 30)  # seconds
+		self.timeout = _positive_timeout(frappe.conf.get("farmer_registry_timeout"))
 
 		self.headers = {"Content-Type": "application/json", "Accept": "application/json"}
-		# A static token/API key is the fallback when no Keycloak client is configured.
+		# Static API key. Staff IAM or client-credentials replace this per request.
 		if self.api_key:
 			self.headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -116,11 +195,9 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		self.register_id = ingest.get("register_id")
 		self.tabs = {**DEFAULT_TABS, **(ingest.get("tabs") or {})}
 
-		# Keycloak client-credentials for a DA Services service account.
-		# The lock keeps concurrent threads from refreshing the same token at once.
+		# Staff IAM login and/or Keycloak client-credentials. Tokens are cached
+		# on the worker; see _STAFF_TOKEN_CACHE and _CC_TOKEN_CACHE.
 		self.keycloak = frappe.conf.get("farmer_registry_keycloak", {}) or {}
-		self._token_cache: dict = {}
-		self._token_lock = threading.Lock()
 
 		# Fail fast: a missing or partial config should surface when the client
 		# is built, not on the first request from the field.
@@ -134,15 +211,29 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if not self.base_url.startswith(("http://", "https://")):
 			problems.append("farmer_registry_url must be an http(s) URL")
 
-		kc_keys = ("token_url", "client_id", "client_secret")
-		kc_set = [k for k in kc_keys if self.keycloak.get(k)]
-		if kc_set and len(kc_set) != len(kc_keys):
+		iam_keys = ("iam_base_url", "kc_realm_url", "username", "password")
+		cc_keys = ("token_url", "client_id", "client_secret")
+		iam_set = [k for k in iam_keys if self.keycloak.get(k)]
+		cc_set = [k for k in cc_keys if self.keycloak.get(k)]
+		iam_complete = len(iam_set) == len(iam_keys)
+		cc_complete = len(cc_set) == len(cc_keys)
+		if cc_set and not cc_complete:
 			problems.append(
 				"farmer_registry_keycloak needs token_url, client_id and client_secret "
-				f"(found only: {', '.join(kc_set)})"
+				f"(found only: {', '.join(cc_set)})"
 			)
-		if not kc_set and not self.api_key:
-			problems.append("set farmer_registry_keycloak (service account) or farmer_registry_api_key")
+		# Realm URLs without a username are optional alongside a service account.
+		# A started staff login (username or password present) must be complete.
+		staff_login_started = any(self.keycloak.get(k) for k in ("username", "password"))
+		if iam_set and not iam_complete and (staff_login_started or not (cc_complete or self.api_key)):
+			problems.append(
+				"farmer_registry_keycloak staff login needs iam_base_url, kc_realm_url, username and password "
+				f"(found only: {', '.join(iam_set)})"
+			)
+		if not iam_complete and not cc_complete and not self.api_key:
+			problems.append(
+				"set farmer_registry_keycloak (staff login or service account) or farmer_registry_api_key"
+			)
 
 		if not self.register_id:
 			problems.append("farmer_registry_ingest.register_id (Farmer register id) is required")
@@ -154,15 +245,161 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 	# ------------------------------------------------------------------ auth
 
+	def _staff_session(self) -> tuple[str | None, str | None]:
+		"""Return (access token, csrf) from the IAM callback, cached per worker.
+
+		Returns (None, None) when staff login is not configured. The caller then
+		uses client-credentials or ``farmer_registry_api_key`` and a generated CSRF pair.
+		"""
+		kc = self.keycloak or {}
+		iam = str(kc.get("iam_base_url") or "").rstrip("/")
+		realm = str(kc.get("kc_realm_url") or "").rstrip("/")
+		username = kc.get("username")
+		password = kc.get("password")
+		if not (iam and realm and username and password):
+			return None, None
+
+		cache_key = (iam, str(username))
+
+		cached = _STAFF_TOKEN_CACHE.get(cache_key) or {}
+		if _token_still_valid(cached, require_csrf=True):
+			return cached["token"], cached["csrf"]
+
+		with _STAFF_TOKEN_LOCK:
+			cached = _STAFF_TOKEN_CACHE.get(cache_key) or {}
+			if _token_still_valid(cached, require_csrf=True):
+				return cached["token"], cached["csrf"]
+
+			token, csrf, expires_at = self._login_via_iam(
+				iam,
+				realm,
+				str(username),
+				str(password),
+				str(kc.get("login_provider_id") or "1"),
+			)
+			_STAFF_TOKEN_CACHE[cache_key] = {"token": token, "csrf": csrf, "expires_at": expires_at}
+			return token, csrf
+
+	def _login_via_iam(
+		self, iam: str, realm: str, username: str, password: str, provider_id: str
+	) -> tuple[str, str, float]:
+		"""Run the staff login and return (X-Access-Token, X-CSRF-Token, expires_at).
+
+		01 POST {iam}/auth/start_authentication_transaction -> authorization URL
+		02 GET  that URL -> Keycloak login form action
+		03 POST the form (no redirect) -> location is the IAM callback URL
+		04 GET  the callback (no redirect) -> Set-Cookie X-Access-Token and X-CSRF-Token
+
+		The authorization code in the callback URL is not logged.
+		"""
+		session = requests.Session()
+		timeout = self.timeout
+		try:
+			return self._exchange_staff_login(session, iam, realm, username, password, provider_id, timeout)
+		finally:
+			session.close()
+
+	def _exchange_staff_login(
+		self,
+		session: requests.Session,
+		iam: str,
+		realm: str,
+		username: str,
+		password: str,
+		provider_id: str,
+		timeout: float,
+	) -> tuple[str, str, float]:
+		try:
+			started = session.post(
+				f"{iam}/auth/start_authentication_transaction",
+				params={"id": provider_id, "redirect_uri": "/en"},
+				timeout=timeout,
+			)
+		except requests.RequestException as e:
+			frappe.log_error(title="Farmer Registry Auth Error", message=f"IAM login start failed: {e!s}")
+			raise FarmerRegistryServerError("Could not reach IAM to start staff login") from e
+
+		if started.status_code != 200:
+			raise FarmerRegistryClientError(
+				f"IAM did not start staff login (HTTP {started.status_code})",
+				status_code=started.status_code,
+			)
+		try:
+			body = started.json()
+		except ValueError as e:
+			raise FarmerRegistryServerError("IAM login response was not JSON") from e
+		redirect_url = body.get("redirectUrl") if isinstance(body, dict) else ""
+
+		if not str(redirect_url).startswith(realm + "/protocol/openid-connect/auth?"):
+			raise FarmerRegistryClientError("IAM authorization URL is not on the configured staff realm")
+
+		try:
+			form_page = session.get(redirect_url + "&prompt=login", timeout=timeout)
+		except requests.RequestException as e:
+			frappe.log_error(title="Farmer Registry Auth Error", message=f"Keycloak login page failed: {e!s}")
+			raise FarmerRegistryServerError("Could not open the Keycloak staff login page") from e
+
+		if form_page.status_code != 200:
+			raise FarmerRegistryClientError(
+				f"Keycloak login page failed (HTTP {form_page.status_code})",
+				status_code=form_page.status_code,
+			)
+
+		try:
+			signed_in = session.post(
+				_keycloak_login_action(form_page.text, realm),
+				data={"username": username, "password": password, "credentialId": ""},
+				timeout=timeout,
+				allow_redirects=False,
+			)
+		except requests.RequestException as e:
+			frappe.log_error(title="Farmer Registry Auth Error", message=f"Keycloak sign-in failed: {e!s}")
+			raise FarmerRegistryServerError("Could not submit the staff username and password") from e
+
+		if signed_in.status_code not in (302, 303):
+			raise FarmerRegistryClientError(
+				f"Keycloak did not accept the staff user (HTTP {signed_in.status_code})",
+				status_code=signed_in.status_code,
+			)
+
+		callback = urljoin(signed_in.url, signed_in.headers.get("Location") or "")
+		if not callback.startswith(iam + "/auth/callback?"):
+			raise FarmerRegistryClientError("Keycloak did not redirect back to the IAM callback")
+
+		try:
+			exchanged = session.get(callback, timeout=timeout, allow_redirects=False)
+		except requests.RequestException as e:
+			frappe.log_error(title="Farmer Registry Auth Error", message=f"IAM callback failed: {e!s}")
+			raise FarmerRegistryServerError("Could not complete the IAM callback") from e
+
+		if exchanged.status_code not in (302, 303, 307):
+			raise FarmerRegistryClientError(
+				f"IAM callback did not complete (HTTP {exchanged.status_code})",
+				status_code=exchanged.status_code,
+			)
+
+		token = _cookie_value(exchanged, "X-Access-Token")
+		csrf = _cookie_value(exchanged, "X-CSRF-Token")
+		if not token:
+			raise FarmerRegistryServerError("IAM callback did not set an X-Access-Token cookie")
+		if not csrf:
+			raise FarmerRegistryServerError("IAM callback did not set an X-CSRF-Token cookie")
+
+		expires_at = _jwt_expires_at(token)
+		if expires_at is None:
+			max_age = _cookie_max_age(exchanged, "X-Access-Token") or _cookie_max_age(
+				exchanged, "X-CSRF-Token"
+			)
+			expires_at = time.time() + (max_age if max_age is not None else _CALLBACK_COOKIE_MAX_AGE)
+		return token, csrf, expires_at
+
 	def _get_access_token(self) -> str | None:
 		"""Return a bearer token for the Staff API.
 
-		Preference order:
-		1. Keycloak client-credentials (service account), cached until near expiry.
-		2. Static ``farmer_registry_api_key`` (already on self.headers).
-
-		Refresh is serialised with a lock so two threads cannot both hit
-		Keycloak and race on the cache.
+		Used when staff IAM login is not configured. The token is cached on the
+		worker until near expiry, including across new client instances. A
+		static ``farmer_registry_api_key`` stays on self.headers when this
+		returns None.
 		"""
 		kc = self.keycloak
 		token_url = kc.get("token_url")
@@ -171,15 +408,16 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if not (token_url and client_id and client_secret):
 			return None
 
-		def _fresh(cache: dict) -> bool:
-			return bool(cache.get("token")) and cache.get("expires_at", 0) > time.time() + 30
+		cache_key = (str(token_url), str(client_id))
+		secret_mark = hashlib.sha256(str(client_secret).encode()).hexdigest()
+		cached = _CC_TOKEN_CACHE.get(cache_key) or {}
+		if cached.get("secret_mark") == secret_mark and _token_still_valid(cached):
+			return cached["token"]
 
-		if _fresh(self._token_cache):
-			return self._token_cache["token"]
-
-		with self._token_lock:
-			if _fresh(self._token_cache):
-				return self._token_cache["token"]
+		with _CC_TOKEN_LOCK:
+			cached = _CC_TOKEN_CACHE.get(cache_key) or {}
+			if cached.get("secret_mark") == secret_mark and _token_still_valid(cached):
+				return cached["token"]
 
 			try:
 				resp = requests.post(
@@ -199,9 +437,10 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 				raise FarmerRegistryServerError("Could not reach Keycloak for a registry token") from e
 
 			if resp.status_code >= 400:
+				# Do not log the body: a token endpoint can echo the client or the token.
 				frappe.log_error(
 					title="Farmer Registry Auth Error",
-					message=f"Keycloak token request failed: HTTP {resp.status_code} {resp.text[:300]}",
+					message=f"Keycloak token request failed: HTTP {resp.status_code} {token_url}",
 				)
 				exc = FarmerRegistryClientError if resp.status_code < 500 else FarmerRegistryServerError
 				raise exc(
@@ -209,29 +448,42 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 					status_code=resp.status_code,
 				)
 
-			data = resp.json()
-			token = data.get("access_token")
+			try:
+				data = resp.json()
+			except ValueError as e:
+				raise FarmerRegistryServerError("Keycloak token response was not JSON") from e
+			token = data.get("access_token") if isinstance(data, dict) else None
 			if not token:
 				raise FarmerRegistryServerError("Keycloak response had no access_token")
 
-			self._token_cache = {
+			try:
+				expires_in = int(data.get("expires_in", 300))
+			except TypeError, ValueError:
+				expires_in = 300
+			_CC_TOKEN_CACHE[cache_key] = {
 				"token": token,
-				"expires_at": time.time() + int(data.get("expires_in", 300)),
+				"secret_mark": secret_mark,
+				"expires_at": time.time() + max(expires_in, 0),
 			}
 			return token
 
 	def _auth_and_csrf_headers(self) -> tuple[dict, dict]:
 		"""Headers + cookies for a state-changing (POST) staff call.
 
-		Adds the bearer token and a double-submit CSRF pair (matching header +
-		cookie), which the registry's CsrfMiddleware requires on POST.
+		Staff-user IAM login supplies the callback token and CSRF cookie.
+		Otherwise a client-credentials token is used with a generated CSRF pair.
+		A static API key already on self.headers is the last fallback.
 		"""
 		headers = dict(self.headers)
-		token = self._get_access_token()
+		token, csrf = self._staff_session()
+		if not token:
+			token = self._get_access_token()
+			csrf = None
 		if token:
 			headers["Authorization"] = f"Bearer {token}"
 
-		csrf = secrets.token_urlsafe(24)
+		if not csrf:
+			csrf = secrets.token_urlsafe(24)
 		headers["X-CSRF-Token"] = csrf
 		cookies = {"X-CSRF-Token": csrf}
 		return headers, cookies
@@ -364,6 +616,11 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		try:
 			name = frappe.db.get_value("DA Administrative Area", {"code": code_or_name}, "name_en")
 		except Exception:
+			# A lookup failure must not turn a farmer search into a 500. The
+			# registry can still filter on the code the caller sent.
+			frappe.logger("da_services").warning(
+				"Could not resolve administrative area %s to a name", code_or_name, exc_info=True
+			)
 			name = None
 		return name or code_or_name
 

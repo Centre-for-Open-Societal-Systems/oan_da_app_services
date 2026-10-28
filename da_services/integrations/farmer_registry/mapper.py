@@ -4,9 +4,14 @@ Handles naming and format differences between systems.
 """
 
 import uuid
+from datetime import date, datetime
 from typing import Any
 
-from .schemas import Farmer
+from .schemas import Farmer, FarmerListItem, Plot
+
+# Staff ingest accepts this partner id and skips partner-key checks for this signature.
+INGEST_SENDER_ID = "farmer-partner"
+INGEST_STAFF_SIGNATURE = "STAFF_AUTHENTICATED"
 
 
 def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
@@ -111,10 +116,12 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	# submission reaches the registry with the same id instead of a new one.
 	op_id = form.get("client_op_id")
 	message_id = f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
+	# The Staff API wraps this object as {"body": ...}, so these fields are $.body.header.*.
 	return {
 		"header": {
 			"message_id": message_id,
-			"sender_id": "da-services",
+			"sender_id": INGEST_SENDER_ID,
+			"signature": INGEST_STAFF_SIGNATURE,
 		},
 		"message": {"payload": payload},
 	}
@@ -201,10 +208,6 @@ def reference_dict_to_profile(ref_dict: dict[str, Any], visit_data: dict[str, An
 # ---------------------------------------------------------------------------
 # Staff API read path: registry rows -> our schemas
 # ---------------------------------------------------------------------------
-
-from datetime import date, datetime
-
-from .schemas import FarmerListItem, Plot
 
 # DA-41 editable fields the registry can take through a change request, grouped
 # by the register section they live in. Everything else is reported back as

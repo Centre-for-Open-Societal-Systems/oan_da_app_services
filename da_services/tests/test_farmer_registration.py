@@ -35,7 +35,8 @@ class TestIngestMapper(IntegrationTestCase):
 		payload = da_form_to_ingest_payload(SAMPLE_FORM)
 		self.assertIn("header", payload)
 		self.assertTrue(payload["header"]["message_id"].startswith("da-svc-"))
-		self.assertEqual(payload["header"]["sender_id"], "da-services")
+		self.assertEqual(payload["header"]["sender_id"], "farmer-partner")
+		self.assertEqual(payload["header"]["signature"], "STAFF_AUTHENTICATED")
 		self.assertIn("payload", payload["message"])
 
 	def test_personal_and_location_mapping(self):
@@ -128,14 +129,20 @@ class TestRegisterIdempotency(IntegrationTestCase):
 
 	def test_duplicate_submission_returns_first_event(self):
 		import uuid
+		from unittest.mock import patch
 
 		from da_services.services import farmers as svc
 
 		op_id = f"test-{uuid.uuid4().hex[:12]}"
 		form = {**SAMPLE_FORM, "client_op_id": op_id}
 
-		first = svc.register_farmer(dict(form), ctx=None)
-		second = svc.register_farmer(dict(form), ctx=None)
+		# Registration follows farmer_registry_backend. This test only checks idempotency.
+		with patch(
+			"da_services.services.farmers.get_farmer_registry_client",
+			return_value=MockFarmerRegistryClient(),
+		):
+			first = svc.register_farmer(dict(form), ctx=None)
+			second = svc.register_farmer(dict(form), ctx=None)
 
 		self.assertFalse(first["duplicate"])
 		self.assertTrue(second["duplicate"])
