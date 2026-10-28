@@ -881,6 +881,7 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 			"correlation_id": result.get("correlation_id"),
 			"status": result.get("status"),
 			"event_id": event.name,
+			"error_code": result.get("error_code"),
 			"error_message": result.get("error_message"),
 			"duplicate": False,
 		}
