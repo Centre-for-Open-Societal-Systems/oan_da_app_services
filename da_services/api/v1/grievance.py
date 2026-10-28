@@ -7,6 +7,8 @@ a 503 error.
 
 from __future__ import annotations
 
+import uuid
+
 import frappe
 from frappe import _
 from oan_auth_service.api.router import prefixed
@@ -14,6 +16,8 @@ from oan_auth_service.api.utils import error_response, handle_api_errors, succes
 
 from da_services.integrations.grievance.client import (
 	GrievanceNotFound,
+	GrievanceRejected,
+	GrievanceServiceError,
 	GrievanceServiceUnavailable,
 	get_client,
 )
@@ -25,6 +29,14 @@ from da_services.utils.permissions import require_roles
 grievance_route = prefixed("/api/v1/da-services")
 
 _UNAVAILABLE_MSG = _("Grievance Service is currently unavailable. Try again shortly.")
+_UPSTREAM_MSG = _("Grievance Service could not complete the request. Try again shortly.")
+
+
+def _upstream_error() -> dict:
+	"""Log an upstream fault and return a stable envelope. The client never sees the cause."""
+	frappe.log_error(title="Grievance Service request failed", message=frappe.get_traceback())
+	frappe.response["http_status_code"] = 502
+	return error_response(str(_UPSTREAM_MSG), "BAD_GATEWAY")
 
 
 @grievance_route("/grievances", methods=("GET",), summary="List grievances scoped to caller")
@@ -40,6 +52,17 @@ def list_grievances():
 	kwargs: dict = {"page": page, "page_size": page_size}
 	if status_filter:
 		kwargs["status"] = status_filter
+	for name in (
+		"service_category",
+		"grievance_type",
+		"search",
+		"administrative_area",
+		"from_date",
+		"to_date",
+	):
+		value = frappe.form_dict.get(name)
+		if value:
+			kwargs[name] = value
 
 	if ctx.has_any_role(C.ROLE_DA):
 		da_ids = list(ctx.da_ids)
@@ -60,9 +83,13 @@ def list_grievances():
 			data=[g.to_dict() for g in items],
 			meta={"page": page, "page_size": page_size, "total": total},
 		)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
 	except GrievanceServiceUnavailable:
 		frappe.response["http_status_code"] = 503
 		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
 
 
 @grievance_route("/grievances", methods=("POST",), summary="Submit a new grievance")
@@ -80,6 +107,16 @@ def submit_grievance():
 	raised_for = body.get("raised_for", "Self").strip()
 	farmer_id = (body.get("farmer_id") or "").strip() or None
 	client_op_id = (body.get("client_op_id") or "").strip() or None
+	submitter_name = (body.get("submitter_name") or "").strip() or None
+	contact_mobile = (body.get("contact_mobile") or "").strip() or None
+	administrative_area = (body.get("administrative_area") or "").strip() or None
+	administrative_unit = (body.get("administrative_unit") or "").strip() or None
+	service_category = (body.get("service_category") or "").strip() or None
+	grievance_type = (body.get("grievance_type") or "").strip() or None
+	desired_outcome = (body.get("desired_outcome") or "").strip() or None
+	submitter_type = (body.get("submitter_type") or "").strip() or "Individual Farmer"
+	consent_given = body.get("consent_given", 1) not in (0, "0", False, "false")
+	is_anonymous = body.get("is_anonymous") in (1, "1", True, "true")
 
 	if not subject:
 		frappe.throw(_("Subject is required."), frappe.ValidationError)
@@ -103,6 +140,17 @@ def submit_grievance():
 		raised_for=raised_for,
 		farmer_id=farmer_id,
 		attachments=body.get("attachments") or [],
+		client_submission_uuid=client_op_id or str(uuid.uuid4()),
+		submitter_type=submitter_type,
+		submitter_name=submitter_name,
+		contact_mobile=contact_mobile,
+		administrative_area=administrative_area,
+		administrative_unit=administrative_unit,
+		service_category=service_category,
+		grievance_type=grievance_type,
+		desired_outcome=desired_outcome,
+		is_anonymous=is_anonymous,
+		consent_given=consent_given,
 	)
 
 	reference_id = client_op_id or f"{complainant_id}:{subject[:50]}"
@@ -114,10 +162,13 @@ def submit_grievance():
 		return success_response(
 			data={
 				"ticket_id": result.ticket_id,
+				"ticket_number": result.ticket_number or result.ticket_id,
 				"sync_state": "synced",
 				"message": result.message,
 			},
 		)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
 	except GrievanceServiceUnavailable:
 		event_name = enqueue_event(
 			event_type="Grievance Submit",
@@ -133,6 +184,8 @@ def submit_grievance():
 				"message": "Grievance queued for submission — the service is temporarily unavailable.",
 			},
 		)
+	except GrievanceServiceError:
+		return _upstream_error()
 
 
 @grievance_route("/grievances/<ticket_id>", methods=("GET",), summary="Get grievance detail")
@@ -147,9 +200,13 @@ def get_grievance(ticket_id: str):
 		return success_response(data=detail.to_dict())
 	except GrievanceNotFound:
 		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
 	except GrievanceServiceUnavailable:
 		frappe.response["http_status_code"] = 503
 		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
 
 
 @grievance_route("/grievances/<ticket_id>/timeline", methods=("GET",), summary="Get grievance timeline")
@@ -164,9 +221,13 @@ def get_timeline(ticket_id: str):
 		return success_response(data=entries)
 	except GrievanceNotFound:
 		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
 	except GrievanceServiceUnavailable:
 		frappe.response["http_status_code"] = 503
 		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
 
 
 @grievance_route(
@@ -181,9 +242,13 @@ def get_options():
 		client = get_client()
 		options = client.get_options()
 		return success_response(data=options)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
 	except GrievanceServiceUnavailable:
 		frappe.response["http_status_code"] = 503
 		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
 
 
 @grievance_route("/grievances/sync/retry", methods=("POST",), summary="Retry failed integration events")

@@ -47,6 +47,20 @@ def _grant(user, role, **kw):
 	return doc
 
 
+def _use_mock_grievance(test):
+	"""These tests exercise the in-memory client. A site configured for http must not leak in."""
+	test._grievance_backend = frappe.conf.get("grievance_backend")
+	frappe.conf.grievance_backend = "mock"
+
+
+def _restore_grievance_backend(test):
+	previous = getattr(test, "_grievance_backend", None)
+	if previous is None:
+		frappe.conf.pop("grievance_backend", None)
+	else:
+		frappe.conf.grievance_backend = previous
+
+
 # ---------------------------------------------------------------------------
 # 1. Mock client
 # ---------------------------------------------------------------------------
@@ -54,8 +68,12 @@ def _grant(user, role, **kw):
 
 class TestMockGrievanceClient(IntegrationTestCase):
 	def setUp(self):
+		_use_mock_grievance(self)
 		MockGrievanceClient.reset()
 		self.client = MockGrievanceClient()
+
+	def tearDown(self):
+		_restore_grievance_backend(self)
 
 	def test_list_returns_fixtures(self):
 		items, total = self.client.list_grievances()
@@ -129,8 +147,17 @@ class TestMockGrievanceClient(IntegrationTestCase):
 		self.assertIn("statuses", opts)
 
 	def test_default_backend_is_mock(self):
-		MockGrievanceClient.reset()
-		self.assertIsInstance(get_client(), MockGrievanceClient)
+		"""An unset grievance_backend selects the mock. A site may still set http."""
+		previous = frappe.conf.get("grievance_backend")
+		frappe.conf.pop("grievance_backend", None)
+		try:
+			MockGrievanceClient.reset()
+			self.assertIsInstance(get_client(), MockGrievanceClient)
+		finally:
+			if previous is None:
+				frappe.conf.pop("grievance_backend", None)
+			else:
+				frappe.conf.grievance_backend = previous
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +168,12 @@ class TestMockGrievanceClient(IntegrationTestCase):
 class TestQueueProcessor(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		_use_mock_grievance(self)
 		MockGrievanceClient.reset()
 		frappe.db.delete("DA Integration Event")
 
 	def tearDown(self):
+		_restore_grievance_backend(self)
 		frappe.set_user("Administrator")
 
 	def test_enqueue_creates_pending_event(self):
@@ -258,6 +287,7 @@ class TestGrievanceAPI(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		frappe.set_user("Administrator")
+		_use_mock_grievance(self)
 		MockGrievanceClient.reset()
 		frappe.db.delete("DA RBAC Assignment")
 		frappe.db.delete("DA Integration Event")
@@ -270,6 +300,7 @@ class TestGrievanceAPI(IntegrationTestCase):
 		_grant(COMMS_USER, C.ROLE_COMMS, region_scope="ET04")
 
 	def tearDown(self):
+		_restore_grievance_backend(self)
 		frappe.set_user("Administrator")
 		super().tearDown()
 
@@ -451,3 +482,20 @@ class TestGrievanceAPI(IntegrationTestCase):
 			doc = frappe.get_doc("DA Integration Event", body["data"]["queue_ref"])
 			self.assertEqual(doc.event_type, "Grievance Submit")
 			self.assertIn(doc.status, ("Pending", "Processing", "Completed"))
+
+	def test_list_upstream_fault_is_bad_gateway(self):
+		from unittest.mock import Mock, patch
+
+		from da_services.integrations.grievance.client import GrievanceServiceError
+
+		client = Mock()
+		client.list_grievances.side_effect = GrievanceServiceError("IAM login refused: HTTP 401")
+		with patch("da_services.api.v1.grievance.get_client", return_value=client):
+			res = self._request("/api/v1/da-services/grievances", user=DA_USER)
+
+		self.assertEqual(res.status_code, 502)
+		body = json.loads(res.get_data(as_text=True))
+		self.assertEqual(body["status"], "error")
+		self.assertEqual(body["code"], "BAD_GATEWAY")
+		self.assertNotIn("401", body["message"])
+		self.assertNotIn("IAM", body["message"])

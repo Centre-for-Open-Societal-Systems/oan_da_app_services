@@ -139,6 +139,7 @@ class MockGrievanceClient(GrievanceClient):
 
 	def __init__(self, records: dict[str, dict] | None = None):
 		self._records = {k: dict(v) for k, v in (records or FIXTURE_GRIEVANCES).items()}
+		self._by_uuid: dict[str, str] = {}
 
 	@classmethod
 	def shared(cls) -> MockGrievanceClient:
@@ -152,6 +153,14 @@ class MockGrievanceClient(GrievanceClient):
 
 	def submit_grievance(self, submission: GrievanceSubmission) -> GrievanceResult:
 		global _COUNTER
+		existing = submission.client_submission_uuid and self._by_uuid.get(submission.client_submission_uuid)
+		if existing and existing in self._records:
+			return GrievanceResult(
+				accepted=True,
+				ticket_id=existing,
+				ticket_number=existing,
+				message="Already submitted",
+			)
 		_COUNTER += 1
 		ticket_id = f"GRV-{_COUNTER:06d}"
 		now = datetime.now(UTC).isoformat()
@@ -183,9 +192,12 @@ class MockGrievanceClient(GrievanceClient):
 			],
 		}
 		self._records[ticket_id] = record
+		if submission.client_submission_uuid:
+			self._by_uuid[submission.client_submission_uuid] = ticket_id
 		return GrievanceResult(
 			accepted=True,
 			ticket_id=ticket_id,
+			ticket_number=ticket_id,
 			message="Grievance created",
 			raw={"created_at": now},
 		)
@@ -199,6 +211,12 @@ class MockGrievanceClient(GrievanceClient):
 		status: str | None = None,
 		page: int = 1,
 		page_size: int = 20,
+		service_category: str | None = None,
+		grievance_type: str | None = None,
+		search: str | None = None,
+		administrative_area: str | None = None,
+		from_date: str | None = None,
+		to_date: str | None = None,
 	) -> tuple[list[GrievanceSummary], int]:
 		filtered = list(self._records.values())
 		if region:
@@ -212,6 +230,20 @@ class MockGrievanceClient(GrievanceClient):
 			filtered = [r for r in filtered if r.get("complainant_id") in ids]
 		if status:
 			filtered = [r for r in filtered if r.get("status") == status]
+		if service_category:
+			filtered = [r for r in filtered if r.get("category") == service_category]
+		if grievance_type:
+			filtered = [r for r in filtered if r.get("subcategory") == grievance_type]
+		if administrative_area:
+			filtered = [r for r in filtered if r.get("woreda") == administrative_area]
+		if search:
+			needle = search.lower()
+			filtered = [
+				r
+				for r in filtered
+				if needle in (r.get("subject") or "").lower()
+				or needle in (r.get("description") or "").lower()
+			]
 
 		total = len(filtered)
 		start = (page - 1) * page_size
