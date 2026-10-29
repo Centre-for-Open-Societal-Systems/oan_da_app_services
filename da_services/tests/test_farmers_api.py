@@ -370,6 +370,20 @@ class TestFarmersAPI(IntegrationTestCase):
 		unknown = list_registers("passport")
 		self.assertEqual((unknown["status"], unknown["code"]), ("error", "NOT_FOUND"))
 
+	def test_profile_and_plots_accept_the_farmer_number(self):
+		"""FR-000101 (reg_id) resolves to the cached farmer, so profile / plots / permissions work with it."""
+		frappe.set_user(DA1)
+
+		from da_services.api.v1.farmers import check_farmer_permissions, get_farmer_plots, get_farmer_profile
+
+		profile = get_farmer_profile("FR-000101")
+		self.assertEqual(profile["status"], "success", profile)
+		self.assertEqual(profile["data"]["farmer_id"], self.farmer1_id)
+		plots = get_farmer_plots("FR-000101")
+		self.assertEqual(plots["status"], "success", plots)
+		self.assertEqual(len(plots["data"]["plots"]), 1)
+		self.assertTrue(check_farmer_permissions("FR-000101")["data"]["is_linked"])
+
 	def test_get_farmer_profile_success(self):
 		"""Get farmer profile with merged visit data."""
 		frappe.set_user(DA1)
