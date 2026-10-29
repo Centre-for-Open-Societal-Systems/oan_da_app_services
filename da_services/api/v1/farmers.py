@@ -5,6 +5,8 @@ GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
 GET /api/v1/da-services/farmers/{id}/permissions
 GET /api/v1/da-services/farmers/{id}/plots
+POST /api/v1/da-services/farmers
+POST /api/v1/da-services/farmers/registrations/documents
 
 DA-39: Adds pending action state (system-derived chip) to farmer list.
 
@@ -346,11 +348,12 @@ def get_farmer_plots(farmer_id: str):
 @frappe.whitelist()
 @handle_api_errors
 def register_farmer():
-	"""Register a new farmer via the Farmer Registry ingest pipeline.
+	"""Register a new farmer in the Farmer Registry.
 
-	The DA fills the registration form; this submits it to the registry's
-	ingest-data endpoint. Ingestion is asynchronous, so the response carries a
-	correlation_id (and a local event_id) to track progress, not a final farmer.
+	Site config farmer_registry_register_mode picks the registry path:
+	"ingest" (default, one async ingest-data call, returns correlation_id) or
+	"intake" (the staff intake form: each section saved into one draft, then
+	finalized for approval; returns submission_id).
 
 	Allowed roles: Development Agent, Supervisor, Admin (Executive is read-only).
 
@@ -358,14 +361,25 @@ def register_farmer():
 	    {
 	        "first_name": "Abebe",            // required
 	        "father_name": "Kebede",
-	        "grandfather_name": "Tesfaye",
-	        "gender": "male",
-	        "date_of_birth": "1985-04-12",
-	        "phone": "+251911234567",
-	        "woreda": "40801",                // numeric admin code
-	        "kebele": "40801101001",          // numeric admin code
-	        "national_id": "1234567890123456",
+	        "grandfather_name": "Tesfaye",    // registry last name; required for intake
+	        "gender": "male",                 // required for intake
+	        "date_of_birth": "1985-04-12",    // required for intake
+	        "phone": "0911234567",
+	        "kebele": "ET04080101",           // intake: Master Data kebele id; ingest: numeric P-code
+	        "national_id": "1234567890123456",  // Fayda FAN (16) or FIN (12)
+	        "fayda_rid": "<29 digits>",
 	        "location": "9.0300 38.7400 2350 5",
+	        "marital_status": "married",      // required for intake
+	        "education_level": "primary",     // required for intake
+	        "income_sources": ["crop", "livestock"],
+	        "disabled": false,
+	        "household": {                    // the farmer is the head and counts in size
+	            "size": 2, "other_land_owner": false,
+	            "members": [{"first_name": "Almaz", "grandfather_name": "Tesfaye", "gender": "female",
+	                         "date_of_birth": "1990-01-01", "relationship": "spouse"}]
+	        },
+	        "identity_document_id": "<from POST /farmers/registrations/documents>",  // required for intake
+	        "identity_document_type": "fayda",
 	        "lands": [{"ownership": "owner", "area_hectare": 1.5}],
 	        "crops": [{"name": "teff", "planted_date": "2026-07-01"}],
 	        "livestock": [{"animal": "cattle", "count": 3}],
@@ -373,25 +387,29 @@ def register_farmer():
 	        "client_op_id": "<uuid>"          // optional idempotency key
 	    }
 
-	The body is validated against FarmerRegistrationForm (400 on bad input).
-	With client_op_id, resending the same request returns the original event
-	(status "DUPLICATE", duplicate: true) instead of registering twice.
+	The body is validated against FarmerRegistrationForm (400 on bad input);
+	in intake mode, missing required fields and unknown codes are listed in
+	one 400. With client_op_id, resending the same request returns the
+	original event (status "DUPLICATE", duplicate: true) instead of
+	registering twice.
 
 	Returns:
 	    {
 	        "success": true,
 	        "data": {
-	            "correlation_id": "...",   // track async ingestion
+	            "correlation_id": "...",   // ingest
+	            "submission_id": "...",    // intake
 	            "event_id": "DA-INT-00123",
-	            "status": "SUCCESS",
+	            "status": "SUCCESS" | "PENDING_APPROVAL",
 	            "message_id": "da-svc-...",
 	            "duplicate": false
 	        }
 	    }
 
 	If the registry answers but does not accept the submission, the response is
-	a 502 error (code FARMER_REGISTRY_REJECTED) carrying the event_id and the
-	registry's status and error code; nothing was registered.
+	a 502 error (code FARMER_REGISTRY_REJECTED) carrying the event_id, the
+	registry's status and error code, and for intake the section that failed;
+	the registry's own message (e.g. a household rule) is in "message".
 	"""
 	ctx = require_roles(*REGISTER_ROLES)
 
@@ -428,6 +446,8 @@ def register_farmer():
 			details={
 				"event_id": result.get("event_id"),
 				"message_id": result.get("message_id"),
+				"submission_id": result.get("submission_id"),
+				"failed_section": result.get("failed_section"),
 				"registry_status": result.get("status"),
 				"registry_error_code": result.get("error_code"),
 			},
@@ -439,9 +459,36 @@ def register_farmer():
 		else _("Farmer submitted for registration."),
 		data={
 			"correlation_id": result.get("correlation_id"),
+			"submission_id": result.get("submission_id"),
 			"event_id": result.get("event_id"),
 			"status": result.get("status"),
 			"message_id": result.get("message_id"),
 			"duplicate": bool(result.get("duplicate")),
 		},
 	)
+
+
+@route(
+	"/farmers/registrations/documents",
+	methods=("POST",),
+	status=201,
+	summary="Upload a farmer identity document for registration",
+)
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def upload_registration_document(**kwargs):
+	"""Upload the farmer's identity document to the Farmer Registry.
+
+	multipart/form-data with field "file" (PDF, JPEG or PNG, up to 5 MB).
+	Returns {"document_id", "file_name", "size"}; send document_id as
+	identity_document_id in POST /farmers. Needed for intake-mode registration.
+	"""
+	ctx = require_roles(*REGISTER_ROLES)
+	request = getattr(frappe.local, "request", None)
+	upload = request.files.get("file") if request is not None and request.files else None
+	if upload is None:
+		frappe.throw(_("file is required (multipart/form-data)."), frappe.ValidationError)
+	out = farmers.upload_registration_document(
+		upload.read(), upload.filename, upload.mimetype or upload.content_type, ctx
+	)
+	return success_response(data=out, message=_("Document uploaded."))

@@ -11,13 +11,14 @@ from frappe import _
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
-from da_services.integrations.farmer_registry import get_farmer_registry_client
+from da_services.integrations.farmer_registry import get_farmer_registry_client, intake
 from da_services.integrations.farmer_registry.client import FarmerRegistryClientError, FarmerRegistryError
 from da_services.integrations.farmer_registry.mapper import (
 	cache_registration_state,
 	da_form_to_ingest_payload,
 	farmer_to_reference_dict,
 	reference_dict_to_profile,
+	registration_message_id,
 )
 from da_services.services import constants as C
 from da_services.services.pending_actions import derive_pending_actions_batch
@@ -790,33 +791,72 @@ def _record_registration_failure(event, message: str) -> None:
 	frappe.db.commit()
 
 
-def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
-	"""Register a new farmer through the Farmer Registry ingest pipeline.
+REGISTER_MODES = ("ingest", "intake")
 
-	Maps the DA registration form to the registry ingest envelope, submits it,
-	and records the attempt as a DA Integration Event for traceability. The
-	registry processes ingestion asynchronously, so a correlation_id is returned
-	rather than a finished farmer; the farmer appears after Woreda approval.
+
+def _register_mode() -> str:
+	mode = str(frappe.conf.get("farmer_registry_register_mode") or "ingest").strip().lower()
+	if mode not in REGISTER_MODES:
+		frappe.throw(
+			_("farmer_registry_register_mode must be one of: {0}").format(", ".join(REGISTER_MODES)),
+			frappe.ValidationError,
+		)
+	return mode
+
+
+def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
+	"""Register a new farmer in the Farmer Registry.
+
+	Two paths, chosen by site config ``farmer_registry_register_mode``:
+
+	- "ingest" (default): one ingest-data call, processed asynchronously; the
+	  result carries a correlation_id.
+	- "intake": the intake form path the staff portal uses (see
+	  integrations/farmer_registry/intake.py): each form section is saved into
+	  one draft, which is then finalized for approval; the result carries the
+	  registry submission_id.
+
+	Either way the attempt is recorded as a DA Integration Event, and the
+	farmer appears in the registry after Woreda approval.
 
 	Args:
-	    form_data: DA registration form (see mapper.da_form_to_ingest_payload).
+	    form_data: validated DA registration form (FarmerRegistrationForm dump).
 	    ctx: Scope context of the submitting user (for audit attribution).
 
 	Returns:
 	    {
 	        "success": bool,
 	        "message_id": str,
-	        "correlation_id": str | None,
+	        "correlation_id": str | None,   # ingest
+	        "submission_id": str | None,    # intake
 	        "status": str,
 	        "event_id": str,
+	        "error_code": str | None,
 	        "error_message": str | None,
+	        "duplicate": bool,
 	    }
 	"""
 	if not isinstance(form_data, dict) or not form_data.get("first_name"):
 		frappe.throw(_("Farmer first name is required."), frappe.ValidationError)
 
-	payload = da_form_to_ingest_payload(form_data)
-	message_id = payload["header"]["message_id"]
+	mode = _register_mode()
+	client = get_farmer_registry_client()
+
+	if mode == "intake":
+		form_data = {"enumerator_name": frappe.utils.get_fullname(frappe.session.user), **form_data}
+		# Mapping needs the registry's form layout, code lists and places, so a
+		# bad form is rejected here, before anything is recorded or sent.
+		try:
+			sections = intake.build_plan(client, form_data)
+		except intake.IntakeFormError as exc:
+			frappe.throw(
+				_("Invalid registration form: {0}").format("; ".join(exc.problems)), frappe.ValidationError
+			)
+		message_id = registration_message_id(form_data)
+		payload = {"mode": "intake", "message_id": message_id, "form": form_data, "sections": sections}
+	else:
+		payload = da_form_to_ingest_payload(form_data)
+		message_id = payload["header"]["message_id"]
 
 	# Idempotency: with a client_op_id the message_id is deterministic, so a
 	# retried submission finds its earlier event instead of registering twice.
@@ -828,10 +868,12 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 			as_dict=True,
 		)
 		if existing and existing.status in ("Processing", "Completed"):
+			reference = existing.external_reference or None
 			return {
 				"success": existing.status == "Completed",
 				"message_id": message_id,
-				"correlation_id": existing.external_reference or None,
+				"correlation_id": reference if mode == "ingest" else None,
+				"submission_id": reference if mode == "intake" else None,
 				"status": "DUPLICATE",
 				"event_id": existing.name,
 				"error_message": None,
@@ -851,10 +893,15 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	)
 	event.insert(ignore_permissions=True)
 
-	# farmer_registry_backend selects the live Staff API or the mock client.
-	client = get_farmer_registry_client()
+	def keep_draft(submission_id: str) -> None:
+		# Recorded as soon as the draft exists, so a later failure still points at it.
+		event.db_set("external_reference", submission_id, update_modified=False)
+
 	try:
-		result = client.register_farmer(payload)
+		if mode == "intake":
+			result = intake.submit_plan(client, payload["sections"], on_draft=keep_draft)
+		else:
+			result = client.register_farmer(payload)
 	except FarmerRegistryClientError as exc:
 		# 4xx: the request was wrong (auth, roles, payload). Not retryable.
 		_record_registration_failure(event, str(exc))
@@ -870,19 +917,24 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 		_record_registration_failure(event, str(exc))
 		raise
 
+	reference = result.get("submission_id") if mode == "intake" else result.get("correlation_id")
 	if result.get("success"):
 		event.db_set("status", "Completed", update_modified=False)
-		event.db_set("external_reference", result.get("correlation_id") or "", update_modified=False)
+		event.db_set("external_reference", reference or "", update_modified=False)
 	else:
-		_record_registration_failure(event, result.get("error_message") or "Ingest rejected")
+		failed_section = result.get("failed_section")
+		message = result.get("error_message") or "Registration rejected"
+		_record_registration_failure(event, f"{failed_section}: {message}" if failed_section else message)
 		return {
 			"success": False,
 			"message_id": message_id,
 			"correlation_id": result.get("correlation_id"),
+			"submission_id": result.get("submission_id"),
 			"status": result.get("status"),
 			"event_id": event.name,
 			"error_code": result.get("error_code"),
 			"error_message": result.get("error_message"),
+			"failed_section": failed_section,
 			"duplicate": False,
 		}
 	frappe.db.commit()
@@ -891,8 +943,37 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 		"success": bool(result.get("success")),
 		"message_id": message_id,
 		"correlation_id": result.get("correlation_id"),
+		"submission_id": result.get("submission_id"),
 		"status": result.get("status"),
 		"event_id": event.name,
 		"error_message": result.get("error_message"),
 		"duplicate": False,
 	}
+
+
+ALLOWED_DOCUMENT_TYPES = {"application/pdf", "image/jpeg", "image/png"}
+MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
+
+
+def upload_registration_document(
+	content: bytes, filename: str, content_type: str | None, ctx: ScopeContext
+) -> dict:
+	"""Upload a farmer's identity document to the registry before registration.
+
+	Returns {"document_id", "file_name", "size"}; pass document_id as
+	identity_document_id in POST /farmers.
+	"""
+	content_type = (content_type or "").split(";")[0].strip().lower()
+	if content_type not in ALLOWED_DOCUMENT_TYPES:
+		frappe.throw(_("Document must be a PDF, JPEG or PNG file."), frappe.ValidationError)
+	if not content:
+		frappe.throw(_("Document is empty."), frappe.ValidationError)
+	if len(content) > MAX_DOCUMENT_BYTES:
+		frappe.throw(_("Document is larger than 5 MB."), frappe.ValidationError)
+
+	client = get_farmer_registry_client()
+	try:
+		document_id = client.upload_document(filename or "identity-document", content, content_type)
+	except FarmerRegistryClientError as exc:
+		frappe.throw(_("Farmer Registry rejected the document: {0}").format(exc), frappe.ValidationError)
+	return {"document_id": document_id, "file_name": filename, "size": len(content)}

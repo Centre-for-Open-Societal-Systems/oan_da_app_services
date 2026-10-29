@@ -157,6 +157,70 @@ class FarmerRegistryClient(ABC):
 		"""
 		pass
 
+	# -- Intake form registration ------------------------------------------
+	# Section-by-section registration, the path the staff portal uses:
+	# upload the identity document, save each form section into one draft
+	# submission, then finalize it for approval. See intake.py.
+
+	@abstractmethod
+	def render_intake_form(self) -> dict:
+		"""Return the configured intake form: {form_id, register_id, tabs: [{sections: [...]}]}."""
+		pass
+
+	@abstractmethod
+	def get_registers(self) -> list[dict]:
+		"""Return every register as [{register_id, register_mnemonic, ...}]."""
+		pass
+
+	@abstractmethod
+	def get_attribute_values(self, attribute_id: str) -> list[dict]:
+		"""Return a Master Data code list: [{value_id, value_code, value_display, ...}]."""
+		pass
+
+	@abstractmethod
+	def get_geo_levels(self) -> list[dict]:
+		"""Return Master Data geo levels: [{level_id, level_mnemonic}] (region, zone, woreda, kebele)."""
+		pass
+
+	@abstractmethod
+	def get_geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
+		"""Return the places on one geo level, optionally under a parent place."""
+		pass
+
+	@abstractmethod
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""Upload a file to the registry document store and return its document_id."""
+		pass
+
+	@abstractmethod
+	def save_intake_section(self, section: dict) -> dict:
+		"""Save one section into a draft intake submission.
+
+		Args:
+		    section: {submission_id (None for the first section), form_id,
+		        register_id, section_id, section_register_id, section_payload,
+		        documents (optional)}.
+
+		Returns:
+		    {"success", "submission_id", "status", "error_code", "error_message"}
+		"""
+		pass
+
+	@abstractmethod
+	def finalize_intake_submission(self, submission_id: str) -> dict:
+		"""Finalize a draft submission so it goes for approval.
+
+		Returns:
+		    {"success", "submission_id", "draft_status", "approval_status",
+		     "status", "error_code", "error_message"}
+		"""
+		pass
+
+	@abstractmethod
+	def get_intake_submission(self, submission_id: str) -> dict | None:
+		"""Read a submission back (draft_status, approval_status, section_payloads)."""
+		pass
+
 
 def get_farmer_registry_client() -> FarmerRegistryClient:
 	"""Factory: returns the configured Farmer Registry client.

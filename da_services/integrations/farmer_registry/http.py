@@ -16,6 +16,16 @@ Staff API endpoints used:
     change-requests/create_change_request   -> update_farmer (one change request per section)
     input-mechanism-data/ingest-data        -> register_farmer
     ingestion-data/search_in_ingestion_data -> get_ingest_status
+
+Intake form registration (farmer_registry_register_mode = "intake"):
+    intake-form-metadata/render_intake_form             -> render_intake_form
+    register-metadata/get_all_registers                 -> get_registers
+    documents/upload_documents                          -> upload_document (multipart)
+    intake-form-data/save_intake_form_submission        -> save_intake_section
+    intake-form-data/finalize_intake_form_submission    -> finalize_intake_submission
+    intake-form-data/get_intake_form_submission         -> get_intake_submission
+    Master Data attributes/get_attribute_values         -> get_attribute_values
+    Master Data geo/get_all_geo_levels, get_geo_level_values
 """
 
 from dataclasses import dataclass, field
@@ -93,6 +103,8 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 	def __init__(self):
 		self.base_url = str(frappe.conf.get("farmer_registry_url", "") or "").rstrip("/")
+		# Code lists and places for the intake form; same staff token and envelope.
+		self.master_data_url = str(frappe.conf.get("farmer_registry_master_data_url", "") or "").rstrip("/")
 		self.api_key = frappe.conf.get("farmer_registry_api_key")
 		self.timeout = _positive_timeout(frappe.conf.get("farmer_registry_timeout"))
 
@@ -228,14 +240,17 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			empty_filter="",
 		)
 
-	def _staff_post(self, path: str, request_payload: dict, *, action: str, **pagination) -> StaffResponse:
+	def _staff_post(
+		self, path: str, request_payload: dict, *, action: str, base_url: str | None = None, **pagination
+	) -> StaffResponse:
 		"""POST an enveloped request to the Staff API and parse the envelope back.
 
 		Raises FarmerRegistryServerError on network failure, and the 4xx/5xx
 		mapping from _raise_for_status. A 200 with response_status ERROR is
 		returned as a StaffResponse so callers can treat "not found" specially.
+		base_url points the same call at another OpenG2P service (Master Data).
 		"""
-		url = f"{self.base_url}{path}"
+		url = f"{base_url or self.base_url}{path}"
 		headers, cookies = self._auth_and_csrf_headers()
 		try:
 			response = requests.post(
@@ -562,3 +577,137 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if isinstance(payload, list):
 			return payload
 		return [payload] if payload else []
+
+	# ------------------------------------------------------------------ intake form
+
+	def _master_data_post(self, path: str, request_payload: dict, *, action: str) -> list:
+		if not self.master_data_url.startswith(("http://", "https://")):
+			raise FarmerRegistryError(
+				"Farmer Registry HTTP client misconfigured: farmer_registry_master_data_url must be an http(s) URL"
+			)
+		res = self._staff_post(
+			path, request_payload, action=action, base_url=self.master_data_url, page_size=1000
+		)
+		if not res.ok:
+			self._reject(res, action)
+		return res.payload or []
+
+	def render_intake_form(self) -> dict:
+		if not self.ingest_intake_form_id:
+			raise FarmerRegistryError(
+				"Farmer Registry HTTP client misconfigured: farmer_registry_ingest.intake_form_id is required"
+			)
+		res = self._staff_post(
+			"/intake-form-metadata/render_intake_form",
+			{"form_id": self.ingest_intake_form_id},
+			action="render intake form",
+		)
+		if not res.ok:
+			self._reject(res, "render intake form")
+		return dict(res.payload or {})
+
+	def get_registers(self) -> list[dict]:
+		res = self._staff_post(
+			"/register-metadata/get_all_registers", {}, action="list registers", page_size=100
+		)
+		if not res.ok:
+			self._reject(res, "list registers")
+		return list(res.payload or [])
+
+	def get_attribute_values(self, attribute_id: str) -> list[dict]:
+		payload = self._master_data_post(
+			"/attributes/get_attribute_values",
+			{"attribute_id": attribute_id},
+			action=f"read code list {attribute_id}",
+		)
+		if isinstance(payload, dict):
+			payload = payload.get("attribute_values") or []
+		return list(payload)
+
+	def get_geo_levels(self) -> list[dict]:
+		return list(self._master_data_post("/geo/get_all_geo_levels", {}, action="read geo levels"))
+
+	def get_geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
+		request = {"level_id": level_id}
+		if parent_level_value_id:
+			request["parent_level_value_id"] = parent_level_value_id
+		return list(
+			self._master_data_post("/geo/get_geo_level_values", request, action=f"read places {level_id}")
+		)
+
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""POST /documents/upload_documents as multipart (field "documents")."""
+		url = f"{self.base_url}/documents/upload_documents"
+		headers, cookies = self._auth_and_csrf_headers()
+		headers.pop("Content-Type", None)  # requests sets the multipart boundary
+		try:
+			response = requests.post(
+				url,
+				headers=headers,
+				cookies=cookies,
+				files={"documents": (filename, content, content_type)},
+				timeout=self.timeout,
+			)
+		except requests.RequestException as e:
+			frappe.log_error(
+				title="Farmer Registry HTTP Error", message=f"Could not reach {url} (upload): {e!s}"
+			)
+			raise FarmerRegistryServerError(f"Farmer Registry unreachable: {e!s}") from e
+
+		self._raise_for_status(response, "upload document")
+		try:
+			data = response.json()
+		except ValueError as e:
+			raise FarmerRegistryServerError("Farmer Registry returned non-JSON for upload document") from e
+		header = data.get("response_header") or {}
+		if header.get("response_status") != "SUCCESS":
+			raise FarmerRegistryClientError(
+				f"Farmer Registry rejected upload document: {header.get('response_error_message') or header.get('response_error_code') or 'unknown error'}",
+				status_code=200,
+				body=header.get("response_error_code"),
+			)
+		payload = (data.get("response_body") or {}).get("response_payload")
+		docs = payload if isinstance(payload, list) else (payload or {}).get("documents") or []
+		document_id = (docs[0] or {}).get("document_id") if docs else None
+		if not document_id:
+			raise FarmerRegistryServerError("Farmer Registry upload returned no document_id")
+		return str(document_id)
+
+	@staticmethod
+	def _intake_result(res: StaffResponse) -> dict:
+		payload = res.payload if isinstance(res.payload, dict) else {}
+		return {
+			"success": res.ok,
+			"submission_id": payload.get("submission_id"),
+			"draft_status": payload.get("draft_status"),
+			"approval_status": payload.get("approval_status"),
+			"status": res.status,
+			"error_code": res.error_code,
+			"error_message": res.error_message,
+		}
+
+	def save_intake_section(self, section: dict) -> dict:
+		res = self._staff_post(
+			"/intake-form-data/save_intake_form_submission", section, action="save intake section"
+		)
+		return self._intake_result(res)
+
+	def finalize_intake_submission(self, submission_id: str) -> dict:
+		res = self._staff_post(
+			"/intake-form-data/finalize_intake_form_submission",
+			{"submission_id": submission_id},
+			action="finalize intake submission",
+		)
+		return self._intake_result(res)
+
+	def get_intake_submission(self, submission_id: str) -> dict | None:
+		res = self._staff_post(
+			"/intake-form-data/get_intake_form_submission",
+			{"submission_id": submission_id},
+			action="read intake submission",
+		)
+		if not res.ok:
+			if res.not_found:
+				return None
+			self._reject(res, "read intake submission")
+		return dict(res.payload or {})
