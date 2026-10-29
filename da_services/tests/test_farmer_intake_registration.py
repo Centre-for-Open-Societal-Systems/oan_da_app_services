@@ -334,6 +334,23 @@ class TestRegistrationDocumentUpload(IntegrationTestCase):
 		self.assertEqual(out["status"], "success", out)
 		self.assertTrue(out["data"]["document_id"].startswith("mock-doc-"))
 
+	def test_file_name_is_made_registry_safe(self):
+		"""Phone photos arrive as "WhatsApp Image 2026-10-29 at 7.46.44 PM.jpeg"; the registry wants one dot."""
+		from da_services.services.farmers import registry_document_name
+
+		self.assertEqual(
+			registry_document_name("WhatsApp Image 2026-10-29 at 7.46.44 PM.jpeg", "image/jpeg"),
+			"WhatsApp-Image-2026-10-29-at-7-46-44-PM.jpg",
+		)
+		self.assertEqual(registry_document_name("fayda.pdf", "application/pdf"), "fayda.pdf")
+		self.assertEqual(registry_document_name("", "image/png"), "identity-document.png")
+		self.assertEqual(registry_document_name("C:\\Users\\x\\my id..png", "image/png"), "my-id.png")
+		out = self._upload(
+			{"file": (BytesIO(b"\xff\xd8\xff"), "WhatsApp Image 2026-10-29 at 7.46.44 PM.jpeg", "image/jpeg")}
+		)
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["file_name"], "WhatsApp-Image-2026-10-29-at-7-46-44-PM.jpg")
+
 	def test_other_file_types_are_rejected(self):
 		out = self._upload({"file": (BytesIO(b"MZ"), "id.exe", "application/octet-stream")})
 		self.assertEqual(out["status"], "error")
