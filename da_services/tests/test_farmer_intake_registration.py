@@ -131,7 +131,7 @@ class TestIntakeMapping(IntegrationTestCase):
 		sections = _by_section(_plan())
 		self.assertEqual(
 			sections["oan_farmer_documents"]["documents"],
-			[{"document_id": "doc-123", "label": "identity_document_1"}],
+			[{"document_id": "doc-00000123", "label": "identity_document_1"}],
 		)
 		self.assertNotIn("documents", sections["oan_farmer_name"])
 
