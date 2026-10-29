@@ -16,6 +16,8 @@ from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryServerError,
 )
 from da_services.integrations.farmer_registry.mapper import (
+	cache_registration_state,
+	farmer_to_reference_dict,
 	merge_tab_records,
 	registry_record_to_farmer,
 	search_row_to_list_item,
@@ -260,6 +262,22 @@ class TestHttpReadPath(IntegrationTestCase):
 	def test_get_farmer_not_found_returns_none(self, _post):
 		self.assertIsNone(self.client.get_farmer("missing"))
 
+	def test_register_data_not_found_code_is_not_found(self):
+		from da_services.integrations.farmer_registry.http import StaffResponse
+
+		res = StaffResponse(
+			status="ERROR",
+			error_code="REGISTER_DATA_NOT_FOUND",
+			error_message="REGISTER_DATA_NOT_FOUND",
+			payload=None,
+		)
+		self.assertTrue(res.not_found)
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_find_internal_id_matches_the_farmer_number(self, _post):
+		self.assertEqual(self.client.find_internal_id("FR-000101"), "frm-1")
+		self.assertIsNone(self.client.find_internal_id("FR-missing"))
+
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_get_farmer_reports_sections_it_could_not_fetch(self, _post):
 		"""A tab failure yields a partial record that says so, not a silently blank one."""
@@ -361,6 +379,14 @@ class TestReadMappers(IntegrationTestCase):
 		self.assertEqual(record["gender"], "MALE")
 		self.assertEqual(len(record["_phones"]), 2)
 		self.assertNotIn("documents", record.get("_lists", {}))
+
+	def test_active_registry_state_is_stored_as_approved(self):
+		from da_services.integrations.farmer_registry.schemas import Farmer
+
+		self.assertEqual(cache_registration_state("ACTIVE"), "APPROVED")
+		self.assertEqual(cache_registration_state("REJECTED"), "REJECTED")
+		ref = farmer_to_reference_dict(Farmer(farmer_id="frm-1", state="ACTIVE"))
+		self.assertEqual(ref["registration_state"], "APPROVED")
 
 	def test_record_to_farmer_tolerates_missing_tabs(self):
 		farmer = registry_record_to_farmer(dict(SUBJECT), "frm-1")

@@ -13,6 +13,22 @@ from .schemas import Farmer, FarmerListItem, Plot
 INGEST_SENDER_ID = "farmer-partner"
 INGEST_STAFF_SIGNATURE = "STAFF_AUTHENTICATED"
 
+# DA Farmer Reference.registration_state. The live staff register uses ACTIVE
+# for a current farmer; that value is not one of these options.
+_CACHE_REGISTRATION_STATES = frozenset({"DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED", "INACTIVE"})
+_REGISTRY_STATE_ALIASES = {"ACTIVE": "APPROVED"}
+
+
+def cache_registration_state(state: str | None) -> str:
+	"""Return a registration_state the DA Farmer Reference select will accept."""
+	value = (state or "").strip()
+	if value in _CACHE_REGISTRATION_STATES:
+		return value
+	upper = value.upper()
+	if upper in _CACHE_REGISTRATION_STATES:
+		return upper
+	return _REGISTRY_STATE_ALIASES.get(upper, "APPROVED")
+
 
 def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	"""Build the Farmer Registry ingest envelope from a DA registration form.
@@ -154,7 +170,7 @@ def farmer_to_reference_dict(farmer: Farmer) -> dict[str, Any]:
 		"household_size": farmer.household_size,
 		"total_land_hectares": farmer.total_land_area,
 		"land_ownership_type": farmer.land_ownership,
-		"registration_state": farmer.state,
+		"registration_state": cache_registration_state(farmer.state),
 		"registered_at": farmer.registration_date,
 		"source_of_income": farmer.source_of_income,
 		"is_psnp_beneficiary": farmer.is_psnp_user,

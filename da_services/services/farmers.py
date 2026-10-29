@@ -14,6 +14,7 @@ from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.client import FarmerRegistryClientError, FarmerRegistryError
 from da_services.integrations.farmer_registry.mapper import (
+	cache_registration_state,
 	da_form_to_ingest_payload,
 	farmer_to_reference_dict,
 	reference_dict_to_profile,
@@ -684,7 +685,7 @@ def _upsert_farmer_reference(item, *, kebele_code: str | None = None) -> None:
 		"woreda": item.woreda,
 		"kebele": kebele_code or item.kebele,
 		"total_land_hectares": item.total_land_area,
-		"registration_state": item.state,
+		"registration_state": cache_registration_state(item.state),
 		"registered_at": item.registration_date,
 		"last_synced_at": frappe.utils.now_datetime(),
 	}

@@ -1,0 +1,15 @@
+{
+  "crop_registry_backend": "mock",
+  "crop_registry_staff_url": "https://staff-crop.development.oanstaging.com",
+  "crop_registry_timeout": 30,
+  "crop_registry_register_mnemonic": "CropSown",
+  "crop_registry_form_name_contains": "Planning",
+  "crop_registry_sender_app": "OAN_REGISTRY_API_TEST",
+  "crop_registry_keycloak": {
+    "token_url": "https://keycloak.development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+    "client_id": "staff-portal",
+    "client_secret": "replace-me",
+    "username": "replace-me",
+    "password": "replace-me"
+  }
+}
