@@ -149,15 +149,22 @@ class TestRegisterIdempotency(IntegrationTestCase):
 
 	def setUp(self):
 		# Idempotency is a local queue concern. The live registry rejects this
-		# fixture payload, so the case stays on the mock client.
+		# fixture payload, so the case stays on the mock client, on the ingest
+		# path (a site switched to intake must not change this test).
 		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
+		self._saved_mode = frappe.conf.get("farmer_registry_register_mode")
 		frappe.conf.farmer_registry_backend = "mock"
+		frappe.conf.farmer_registry_register_mode = "ingest"
 
 	def tearDown(self):
-		if self._farmer_backend is None:
-			frappe.conf.pop("farmer_registry_backend", None)
-		else:
-			frappe.conf.farmer_registry_backend = self._farmer_backend
+		for key, value in (
+			("farmer_registry_backend", self._farmer_backend),
+			("farmer_registry_register_mode", self._saved_mode),
+		):
+			if value is None:
+				frappe.conf.pop(key, None)
+			else:
+				frappe.conf[key] = value
 
 	def test_duplicate_submission_returns_first_event(self):
 		import uuid
