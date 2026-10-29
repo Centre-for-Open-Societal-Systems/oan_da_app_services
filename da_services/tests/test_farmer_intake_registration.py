@@ -43,7 +43,7 @@ FORM = {
 			}
 		],
 	},
-	"identity_document_id": "doc-123",
+	"identity_document_id": "doc-00000123",
 	"lands": [{"ownership": "owner", "area_hectare": 1.5}],
 	"crops": [{"name": "teff", "planted_date": "2026-07-01", "season": "meher"}],
 	"livestock": [{"animal": "cattle", "count": 3, "system": "mixed"}],
