@@ -15,8 +15,15 @@ from da_services.integrations.grievance.auth import (
 	login_form_action,
 	login_local,
 )
-from da_services.integrations.grievance.client import HttpGrievanceClient
+from da_services.integrations.grievance.client import (
+	GrievanceRejected,
+	GrievanceServiceError,
+	GrievanceServiceUnavailable,
+	HttpGrievanceClient,
+)
 from da_services.integrations.grievance.mapper import (
+	location_text,
+	normalize_summary,
 	ticket_from_duplicate,
 	to_upstream_submission,
 )
@@ -180,6 +187,14 @@ class TestUpstreamMapping(unittest.TestCase):
 		text = "This submission has already been filed as B-001-0012-0."
 		self.assertEqual(ticket_from_duplicate(text), "B-001-0012-0")
 
+	def test_mock_summary_counts_fixtures(self):
+		summary = MockGrievanceClient().get_summary()
+		self.assertEqual(summary["cards"][0], {"status": "All", "count": 3})
+		statuses = {card["status"]: card["count"] for card in summary["cards"]}
+		self.assertEqual(statuses["Open"], 1)
+		self.assertEqual(statuses["In Progress"], 1)
+		self.assertEqual(statuses["Resolved"], 1)
+
 	def test_mock_replay_returns_the_same_ticket(self):
 		client = MockGrievanceClient()
 		first = client.submit_grievance(_submission())
@@ -211,6 +226,7 @@ class TestHttpClient(unittest.TestCase):
 								"service_category": "Inputs",
 								"submitter_name": "Agent Walk-in Farmer",
 								"submitted_on": "2026-10-27T10:00:00Z",
+								"location": "Kebele 01, Adama, East Shewa, Oromia",
 							}
 						],
 						"pagination": {"total_count": 1},
@@ -276,6 +292,8 @@ class TestHttpClient(unittest.TestCase):
 		self.assertEqual(total, 1)
 		self.assertEqual(items[0].ticket_number, ticket)
 		self.assertEqual(items[0].category, "Inputs")
+		self.assertEqual(items[0].location, "Kebele 01, Adama, East Shewa, Oromia")
+		self.assertNotIn("priority", items[0].to_dict())
 		list_call = request.call_args_list[1]
 		self.assertNotIn("complainant_id", list_call.kwargs["params"])
 		self.assertEqual(list_call.kwargs["params"]["sort_order"], "desc")
@@ -285,6 +303,7 @@ class TestHttpClient(unittest.TestCase):
 		self.assertEqual(detail.category, "Inputs")
 		self.assertEqual(detail.subcategory, "Fertilizer Shortage")
 		self.assertEqual(detail.sla_consumed_percent, 12)
+		self.assertNotIn("priority", detail.to_dict())
 		self.assertEqual(
 			request.call_args_list[2].args[1], f"https://grievance.example/api/v1/grievances/{ticket}"
 		)
@@ -298,6 +317,83 @@ class TestHttpClient(unittest.TestCase):
 		self.assertEqual(timeline[0]["detail"], "filed")
 
 	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_list_forwards_filters_and_reads_location(self, request):
+		request.return_value = _Response(
+			200,
+			{
+				"status": "success",
+				"data": {
+					"items": [
+						{
+							"ticket_number": "B-014-0007-6",
+							"status": "Submitted",
+							"description": "Seed arrived late.",
+							"service_category": "Inputs",
+							"submitter_name": "Agent Walk-in Farmer",
+							"administrative_hierarchy": {
+								"kebele": "Kebele 01",
+								"woreda": "Adama",
+								"zone": "East Shewa",
+								"region": "Oromia",
+							},
+						}
+					],
+					"pagination": {"total_count": 1},
+				},
+			},
+		)
+		items, total = self._client().list_grievances(
+			page=2,
+			page_size=10,
+			status="Submitted,In Progress",
+			region=["ET04", "ET05"],
+			zone="East Shewa",
+			kebele="Kebele 01",
+			category="Inputs",
+			department="Agriculture",
+			channel="Web Portal",
+			escalated="0",
+			is_anonymous=False,
+			sort_by="creation",
+			sort_order="asc",
+			search="seed",
+		)
+		self.assertEqual(total, 1)
+		self.assertEqual(items[0].location, "Kebele 01, Adama, East Shewa, Oromia")
+		params = request.call_args.kwargs["params"]
+		self.assertEqual(params["page"], 2)
+		self.assertEqual(params["page_size"], 10)
+		self.assertEqual(params["status"], "Submitted,In Progress")
+		self.assertEqual(params["region"], "ET04,ET05")
+		self.assertEqual(params["zone"], "East Shewa")
+		self.assertEqual(params["kebele"], "Kebele 01")
+		self.assertEqual(params["category"], "Inputs")
+		self.assertEqual(params["department"], "Agriculture")
+		self.assertEqual(params["channel"], "Web Portal")
+		self.assertEqual(params["escalated"], "0")
+		self.assertEqual(params["is_anonymous"], "0")
+		self.assertEqual(params["sort_by"], "creation")
+		self.assertEqual(params["sort_order"], "asc")
+		self.assertEqual(params["search"], "seed")
+		self.assertNotIn("complainant_id", params)
+
+	def test_location_falls_back_to_area_names(self):
+		self.assertEqual(
+			location_text({"woreda": "Adama", "region": "Oromia"}),
+			"Adama, Oromia",
+		)
+		summary = normalize_summary(
+			{
+				"ticket_number": "B-1",
+				"status": "Submitted",
+				"submitter_name": "Farmer",
+				"description": "Late seed delivery for the season.",
+				"administrative_hierarchy": {"woreda": "Adama", "region": "Oromia"},
+			}
+		)
+		self.assertEqual(summary["location"], "Adama, Oromia")
+
+	@patch("da_services.integrations.grievance.client.requests.request")
 	def test_repeated_uuid_returns_the_named_ticket(self, request):
 		request.return_value = _Response(
 			417,
@@ -306,6 +402,46 @@ class TestHttpClient(unittest.TestCase):
 		result = self._client().submit_grievance(_submission())
 		self.assertTrue(result.accepted)
 		self.assertEqual(result.ticket_number, "B-014-0007-6")
+
+	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_summary_passes_through_a_success_payload(self, request):
+		cards = {
+			"cards": [
+				{"status": "All", "label": "All", "count": 4, "order": 1, "is_terminal": False},
+				{"status": "In Progress", "label": "In Progress", "count": 2, "order": 2, "is_terminal": False},
+			]
+		}
+		request.return_value = _Response(
+			200,
+			{"status": "success", "message": "Grievance status summary fetched successfully", "data": cards},
+		)
+		summary = self._client().get_summary()
+		self.assertEqual(summary, cards)
+		self.assertEqual(request.call_args.args[0], "GET")
+		self.assertEqual(request.call_args.args[1], "https://grievance.example/api/v1/grievances/summary")
+		self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer static-token")
+
+	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_summary_upstream_http_failure(self, request):
+		request.return_value = _Response(503, {"status": "error", "message": "upstream down"})
+		with self.assertRaises(GrievanceServiceUnavailable):
+			self._client().get_summary()
+
+	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_summary_rejects_http_200_error_body(self, request):
+		request.return_value = _Response(
+			200,
+			{"status": "error", "message": "Not permitted to read grievances."},
+		)
+		with self.assertRaises(GrievanceRejected) as raised:
+			self._client().get_summary()
+		self.assertIn("Not permitted", str(raised.exception))
+
+	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_summary_rejects_a_non_object_success_body(self, request):
+		request.return_value = _Response(200, {"status": "success", "data": ["not", "a", "summary"]})
+		with self.assertRaises(GrievanceServiceError):
+			self._client().get_summary()
 
 	@patch("da_services.integrations.grievance.client.requests.request")
 	def test_options_are_public(self, request):

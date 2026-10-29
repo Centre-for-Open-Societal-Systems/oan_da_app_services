@@ -143,7 +143,7 @@ class TestMockGrievanceClient(IntegrationTestCase):
 	def test_options_returns_categories(self):
 		opts = self.client.get_options()
 		self.assertIn("categories", opts)
-		self.assertIn("priorities", opts)
+		self.assertNotIn("priorities", opts)
 		self.assertIn("statuses", opts)
 
 	def test_default_backend_is_mock(self):
@@ -203,7 +203,6 @@ class TestQueueProcessor(IntegrationTestCase):
 				"description": "",
 				"category": "",
 				"subcategory": "",
-				"priority": "Medium",
 				"region": None,
 				"woreda": None,
 				"attachments": [],
@@ -369,7 +368,6 @@ class TestGrievanceAPI(IntegrationTestCase):
 				"description": "Test via API",
 				"category": "Supply Chain",
 				"subcategory": "Input Delivery",
-				"priority": "High",
 			},
 			user=SUPERVISOR,
 		)

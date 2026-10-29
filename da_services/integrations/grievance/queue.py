@@ -88,6 +88,7 @@ def _dispatch(event_type: str, payload: dict):
 	"""Route an event to the right client method."""
 	client = get_client()
 	if event_type == "Grievance Submit":
+		payload.pop("priority", None)
 		return client.submit_grievance(GrievanceSubmission(**payload))
 	if event_type == "Grievance Action":
 		return client.take_action(GrievanceAction(**payload))

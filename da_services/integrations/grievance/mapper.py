@@ -83,14 +83,23 @@ def to_upstream_submission(submission: GrievanceSubmission) -> dict:
 	}
 
 
-def _priority(payload: dict) -> str:
-	if "priority" in payload and payload["priority"] is not None:
-		return payload["priority"]
-	return "Medium"
-
-
 def _ticket(payload: dict) -> str:
 	return str(payload.get("ticket_id") or payload.get("ticket_number") or "")
+
+
+def location_text(payload: dict) -> str | None:
+	"""Comma-separated place, leaf to root, matching the grievance list ``location`` field."""
+	location = payload.get("location")
+	if isinstance(location, str) and location.strip():
+		return location.strip()
+	hierarchy = payload.get("administrative_hierarchy")
+	source = hierarchy if isinstance(hierarchy, dict) else payload
+	parts: list[str] = []
+	for level in ("kebele", "woreda", "zone", "region"):
+		name = source.get(level)
+		if isinstance(name, str) and name and name not in parts:
+			parts.append(name)
+	return ", ".join(parts) if parts else None
 
 
 def normalize_summary(payload: dict) -> dict:
@@ -105,11 +114,16 @@ def normalize_summary(payload: dict) -> dict:
 		"ticket_number": payload.get("ticket_number") or ticket,
 		"subject": subject,
 		"status": payload.get("status") or "",
-		"priority": payload.get("priority") or "",
 		"category": payload.get("service_category") or payload.get("category") or "",
 		"complainant_name": payload.get("submitter_name") or payload.get("complainant_name") or "",
 		"created_at": payload.get("submitted_on") or payload.get("created_at"),
 		"updated_at": payload.get("updated_at"),
+		"location": location_text(payload),
+		"kebele": payload.get("kebele"),
+		"woreda": payload.get("woreda"),
+		"zone": payload.get("zone"),
+		"region": payload.get("region"),
+		"administrative_hierarchy": payload.get("administrative_hierarchy"),
 	}
 
 
@@ -144,7 +158,6 @@ def normalize_case(payload: dict) -> dict:
 		"subject": subject,
 		"description": description,
 		"status": payload.get("status") or "",
-		"priority": payload.get("priority") or "",
 		"category": (summary or {}).get("service_category")
 		or payload.get("service_category")
 		or payload.get("category")
@@ -209,7 +222,6 @@ def to_options(payload: dict) -> dict:
 				categories[first].append(type_name)
 	return {
 		"categories": [{"value": name, "subcategories": types} for name, types in categories.items()],
-		"priorities": list(payload.get("priorities") or []),
 		"statuses": [
 			_label(item, "status", "name", "value") or item for item in (payload.get("statuses") or [])
 		],
@@ -238,12 +250,12 @@ def to_grievance_summary(payload: dict) -> GrievanceSummary:
 		ticket_id=ticket,
 		subject=payload.get("subject") or "",
 		status=payload.get("status") or "",
-		priority=_priority(payload),
 		category=payload.get("category") or "",
 		complainant_name=payload.get("complainant_name") or "",
 		created_at=payload.get("created_at"),
 		updated_at=payload.get("updated_at"),
 		ticket_number=payload.get("ticket_number") or ticket,
+		location=location_text(payload),
 	)
 
 
@@ -258,7 +270,6 @@ def to_grievance_detail(payload: dict) -> GrievanceDetail:
 		subject=payload.get("subject") or "",
 		description=payload.get("description") or "",
 		status=payload.get("status") or "",
-		priority=_priority(payload),
 		category=payload.get("category") or "",
 		subcategory=payload.get("subcategory") or "",
 		complainant_id=str(payload.get("complainant_id") or ""),

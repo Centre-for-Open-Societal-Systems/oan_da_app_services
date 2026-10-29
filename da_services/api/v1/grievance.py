@@ -31,6 +31,17 @@ grievance_route = prefixed("/api/v1/da-services")
 _UNAVAILABLE_MSG = _("Grievance Service is currently unavailable. Try again shortly.")
 _UPSTREAM_MSG = _("Grievance Service could not complete the request. Try again shortly.")
 
+# Filters for fields the list itself returns: status, category, location,
+# and the created_at window. search matches subject, ticket, and complainant name.
+_LIST_FILTERS = (
+	"status",
+	"category",
+	"location",
+	"from_date",
+	"to_date",
+	"search",
+)
+
 
 def _upstream_error() -> dict:
 	"""Log an upstream fault and return a stable envelope. The client never sees the cause."""
@@ -45,36 +56,25 @@ def _upstream_error() -> dict:
 def list_grievances():
 	ctx = require_roles(*C.GRIEVANCE_ROLES)
 
-	status_filter = frappe.form_dict.get("status")
-	page = int(frappe.form_dict.get("page", 1))
-	page_size = min(int(frappe.form_dict.get("page_size", 20)), 100)
+	page = int(frappe.form_dict.get("page", 1) or 1)
+	page_size = int(frappe.form_dict.get("page_size", 10) or 10)
 
 	kwargs: dict = {"page": page, "page_size": page_size}
-	if status_filter:
-		kwargs["status"] = status_filter
-	for name in (
-		"service_category",
-		"grievance_type",
-		"search",
-		"administrative_area",
-		"from_date",
-		"to_date",
-	):
+	for name in _LIST_FILTERS:
 		value = frappe.form_dict.get(name)
-		if value:
-			kwargs[name] = value
+		if value is None or value == "":
+			continue
+		kwargs[name] = value
 
 	if ctx.has_any_role(C.ROLE_DA):
 		da_ids = list(ctx.da_ids)
 		if da_ids:
 			kwargs["complainant_id"] = da_ids if len(da_ids) > 1 else da_ids[0]
-	elif not ctx.unrestricted:
-		if ctx.woreda_scopes:
-			woredas = list(ctx.woreda_scopes)
-			kwargs["woreda"] = woredas if len(woredas) > 1 else woredas[0]
-		elif ctx.region_scopes:
-			regions = list(ctx.region_scopes)
-			kwargs["region"] = regions if len(regions) > 1 else regions[0]
+	elif not ctx.unrestricted and not _constrain_area_scope(kwargs, ctx):
+		return success_response(
+			data=[],
+			meta={"page": page, "page_size": page_size, "total": 0},
+		)
 
 	try:
 		client = get_client()
@@ -103,7 +103,6 @@ def submit_grievance():
 	description = body.get("description", "").strip()
 	category = body.get("category", "").strip()
 	subcategory = body.get("subcategory", "").strip()
-	priority = body.get("priority", "Medium").strip()
 	raised_for = body.get("raised_for", "Self").strip()
 	farmer_id = (body.get("farmer_id") or "").strip() or None
 	client_op_id = (body.get("client_op_id") or "").strip() or None
@@ -136,7 +135,6 @@ def submit_grievance():
 		subcategory=subcategory,
 		subject=subject,
 		description=description,
-		priority=priority,
 		raised_for=raised_for,
 		farmer_id=farmer_id,
 		attachments=body.get("attachments") or [],
@@ -184,6 +182,25 @@ def submit_grievance():
 				"message": "Grievance queued for submission — the service is temporarily unavailable.",
 			},
 		)
+	except GrievanceServiceError:
+		return _upstream_error()
+
+
+@grievance_route("/grievances/summary", methods=("GET",), summary="Grievance status summary")
+@frappe.whitelist()
+@handle_api_errors
+def get_grievance_summary():
+	"""KPI cards from the Grievance Service, passed through on success."""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	try:
+		client = get_client()
+		return success_response(data=client.get_summary())
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
 	except GrievanceServiceError:
 		return _upstream_error()
 
@@ -264,6 +281,49 @@ def retry_sync():
 	return success_response(
 		data={"retried": retried, "count": len(retried)},
 	)
+
+
+def _split_values(value) -> list[str]:
+	if value is None or value == "":
+		return []
+	if isinstance(value, (list, tuple)):
+		return [str(item).strip() for item in value if str(item).strip()]
+	return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _intersect_scope(requested, allowed: frozenset[str]) -> list[str]:
+	"""Values the caller asked for that their grant also covers.
+
+	No request means the whole grant. A request outside the grant is an empty list.
+	"""
+	requested_values = _split_values(requested)
+	if not requested_values:
+		return sorted(allowed)
+	return [value for value in requested_values if value in allowed]
+
+
+def _constrain_area_scope(kwargs: dict, ctx) -> bool:
+	"""Narrow region, zone, and woreda to the caller's grant.
+
+	Returns False when a requested area is entirely outside that grant.
+	"""
+	if ctx.woreda_scopes:
+		allowed = _intersect_scope(kwargs.get("woreda"), ctx.woreda_scopes)
+		if not allowed:
+			return False
+		kwargs["woreda"] = allowed if len(allowed) > 1 else allowed[0]
+	elif ctx.region_scopes:
+		allowed = _intersect_scope(kwargs.get("region"), ctx.region_scopes)
+		if not allowed:
+			return False
+		kwargs["region"] = allowed if len(allowed) > 1 else allowed[0]
+
+	if ctx.zone_scopes and kwargs.get("zone") is not None:
+		allowed = _intersect_scope(kwargs.get("zone"), ctx.zone_scopes)
+		if not allowed:
+			return False
+		kwargs["zone"] = allowed if len(allowed) > 1 else allowed[0]
+	return True
 
 
 def _resolve_complainant_identity(ctx) -> tuple[str, str]:

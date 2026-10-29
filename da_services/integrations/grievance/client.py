@@ -87,8 +87,13 @@ class GrievanceClient(ABC):
 		administrative_area: str | None = None,
 		from_date: str | None = None,
 		to_date: str | None = None,
+		**filters,
 	) -> tuple[list[GrievanceSummary], int]:
-		"""Scoped grievance list. Returns (items, total_count)."""
+		"""Scoped grievance list. Returns (items, total_count).
+
+		``filters`` carries the rest of the upstream list query: category, type,
+		department, zone, kebele, channel, escalated, submitter, sort, and limit.
+		"""
 
 	@abstractmethod
 	def get_grievance(self, ticket_id: str) -> GrievanceDetail:
@@ -104,15 +109,24 @@ class GrievanceClient(ABC):
 
 	@abstractmethod
 	def get_options(self) -> dict:
-		"""Fetch category / priority / status options for form dropdowns."""
+		"""Fetch category and status options for form dropdowns."""
+
+	@abstractmethod
+	def get_summary(self) -> dict:
+		"""KPI cards from the grievance service. The payload is not remapped."""
 
 
-def _csv(value: str | list[str] | None) -> str | None:
+def _query_param(value) -> str | None:
+	"""One query value. Lists are comma-separated, which the upstream parser accepts."""
+	if isinstance(value, bool):
+		return "1" if value else "0"
 	if value is None:
 		return None
-	if isinstance(value, list):
-		return ",".join(value)
-	return value
+	if isinstance(value, (list, tuple)):
+		parts = [str(item).strip() for item in value if str(item).strip()]
+		return ",".join(parts) or None
+	text = str(value).strip()
+	return text or None
 
 
 class HttpGrievanceClient(GrievanceClient):
@@ -201,24 +215,28 @@ class HttpGrievanceClient(GrievanceClient):
 		administrative_area: str | None = None,
 		from_date: str | None = None,
 		to_date: str | None = None,
+		**filters,
 	) -> tuple[list[GrievanceSummary], int]:
 		# complainant_id is a DA Registry id. The agent token's own scope is the list.
 		del complainant_id
-		# Review Officer R1: page, page_size, sort_order. No sort_by.
-		params = {"page": page, "page_size": page_size, "sort_order": "desc"}
-		for key, value in (
-			("region", _csv(region)),
-			("woreda", _csv(woreda)),
-			("status", status),
-			("service_category", service_category),
-			("grievance_type", grievance_type),
-			("search", search),
-			("administrative_area", administrative_area),
-			("from_date", from_date),
-			("to_date", to_date),
-		):
-			if value:
-				params[key] = value
+		params: dict = {"page": page, "page_size": page_size}
+		named = {
+			"region": region,
+			"woreda": woreda,
+			"status": status,
+			"service_category": service_category,
+			"grievance_type": grievance_type,
+			"search": search,
+			"administrative_area": administrative_area,
+			"from_date": from_date,
+			"to_date": to_date,
+			**filters,
+		}
+		params["sort_order"] = _query_param(named.pop("sort_order", None)) or "desc"
+		for key, value in named.items():
+			encoded = _query_param(value)
+			if encoded is not None:
+				params[key] = encoded
 		data = self._request("GET", "/v1/grievances", params=params)
 		if not isinstance(data, dict):
 			data = {}
@@ -267,6 +285,15 @@ class HttpGrievanceClient(GrievanceClient):
 		if not isinstance(data, dict):
 			return {}
 		return to_options(data)
+
+	def get_summary(self) -> dict:
+		"""GET /v1/grievances/summary. A 200 body with an error is refused, not forwarded."""
+		data = self._request("GET", "/v1/grievances/summary")
+		if isinstance(data, dict) and (data.get("exception") or data.get("exc") or data.get("exc_type")):
+			raise GrievanceRejected(error_text(data) or "Grievance summary failed")
+		if not isinstance(data, dict):
+			raise GrievanceServiceError("Grievance summary response was not an object")
+		return data
 
 
 def get_client() -> GrievanceClient:

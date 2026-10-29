@@ -24,7 +24,6 @@ class GrievanceSubmission:
 	subcategory: str = ""
 	subject: str = ""
 	description: str = ""
-	priority: str = "Medium"
 	raised_for: str = "Self"
 	farmer_id: str | None = None
 	attachments: list[str] = field(default_factory=list)
@@ -65,12 +64,12 @@ class GrievanceSummary:
 	ticket_id: str
 	subject: str
 	status: str
-	priority: str
 	category: str
 	complainant_name: str
 	created_at: str | None = None
 	updated_at: str | None = None
 	ticket_number: str | None = None
+	location: str | None = None
 
 	def to_dict(self) -> dict:
 		return asdict(self)
@@ -84,7 +83,6 @@ class GrievanceDetail:
 	subject: str
 	description: str
 	status: str
-	priority: str
 	category: str
 	subcategory: str
 	complainant_id: str

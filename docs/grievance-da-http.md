@@ -29,14 +29,17 @@ Officer actions (resolve, reopen, close, reassign) are not exposed on the DA rou
 | `GET /api/v1/da-services/grievances/{ticket}` | `GET /v1/grievances/{ticket_number}`, then `GET /v1/grievances/{ticket_number}/timeline` on 404 |
 | `GET /api/v1/da-services/grievances/{ticket}/timeline` | `GET /v1/grievances/{ticket_number}/timeline` |
 | `GET /api/v1/da-services/grievances` | `GET /v1/grievances` |
+| `GET /api/v1/da-services/grievances/summary` | `GET /v1/grievances/summary` |
 | `GET /api/v1/da-services/grievances/options` | `GET /v1/submitters/options` (no bearer token) |
 | `POST /api/v1/da-services/grievances/sync/retry` | Retries a failed DA Integration Event. DA Services Admin only. |
 
 A successful submit returns `data.ticket_number` as both `ticket_id` and `ticket_number`. The timeline read is the case when the bare ticket GET is missing: summary, submitter, SLA, and timeline. Timeline rows map `created_on`, `entry_type`, `author_name`, and `body` to `timestamp`, `action`, `actor`, and `detail`.
 
-List requests send `page`, `page_size`, and `sort_order=desc`. Items are `data.items`. The total is `data.pagination.total_count`. Optional filters are `status`, `service_category`, `grievance_type`, `search`, `administrative_area`, `from_date`, and `to_date`. `complainant_id` is not sent: a Development Agent's list is limited by the agent token. Scoped callers who are not Development Agents forward `region` or `woreda`.
+List requests send `page`, `page_size`, and `sort_order=desc`. Items are `data` rows with `status`, `category`, `location`, `created_at`, and the other list fields. Optional filters are `status`, `category`, `location`, `from_date`, `to_date`, and `search`. `complainant_id` is not sent: a Development Agent's list is limited by the agent token. Scoped callers who are not Development Agents still have `region` or `woreda` narrowed to their grant.
 
-Options map `service_categories` and `grievance_types` into `categories`, and also return `priorities` and `statuses`.
+Options map `service_categories` and `grievance_types` into `categories`, and also return `statuses`.
+
+Summary returns the upstream `data` object unchanged. An HTTP error, or a `200` body whose `status` is `error`, is not returned as a summary.
 
 ### Submit body
 
