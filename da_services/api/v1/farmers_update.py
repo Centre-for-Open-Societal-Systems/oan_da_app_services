@@ -121,6 +121,10 @@ def update_farmer_profile(farmer_id: str):
 	# Validate farmer_id
 	if not farmer_id or not isinstance(farmer_id, str):
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
+	# The path may carry the Farmer-ID people see (FR-…); the registry wants the internal id.
+	from da_services.services.farmers import resolve_farmer_id
+
+	farmer_id = resolve_farmer_id(farmer_id)
 
 	# Get update fields from request body
 	# Use silent=True to return None on malformed JSON instead of raising 500
@@ -203,8 +207,9 @@ def get_farmer_update_status(farmer_id: str):
 
 	# Scope check: Ensure farmer is linked to the current DA
 	# (same check as in update_farmer_profile)
-	from da_services.services.farmers import get_farmer_profile
+	from da_services.services.farmers import get_farmer_profile, resolve_farmer_id
 
+	farmer_id = resolve_farmer_id(farmer_id)
 	try:
 		get_farmer_profile(farmer_id, ctx)  # Will throw if not in scope
 	except frappe.DoesNotExistError:

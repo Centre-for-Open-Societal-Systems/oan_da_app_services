@@ -302,7 +302,8 @@ def get_farmer_profile(farmer_id: str):
 	if not farmer_id or not isinstance(farmer_id, str):
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
-	profile = farmers.get_farmer_profile(farmer_id, ctx)
+	# The path may carry the Farmer-ID people see (FR-…); the registry wants the internal id.
+	profile = farmers.get_farmer_profile(farmers.resolve_farmer_id(farmer_id), ctx)
 	return success_response(data=profile)
 
 
@@ -346,6 +347,7 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 
 	# Scope check: Ensure farmer is in user's scope before showing visits
 	# This prevents a DA from reading another DA's farmer visits
+	farmer_id = farmers.resolve_farmer_id(farmer_id)
 	farmers.get_farmer_profile(farmer_id, ctx)
 
 	# Validate pagination
@@ -411,7 +413,7 @@ def check_farmer_permissions(farmer_id: str):
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
-	permissions = farmers.check_farmer_edit_permissions(farmer_id, ctx)
+	permissions = farmers.check_farmer_edit_permissions(farmers.resolve_farmer_id(farmer_id), ctx)
 	return success_response(data=permissions)
 
 
@@ -452,6 +454,7 @@ def get_farmer_plots(farmer_id: str):
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	# Scope check: Ensure farmer is in user's scope before showing plots
+	farmer_id = farmers.resolve_farmer_id(farmer_id)
 	farmers.get_farmer_profile(farmer_id, ctx)
 
 	# Get plots from Farmer Registry
