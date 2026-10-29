@@ -1,10 +1,11 @@
 """v1: Farmer profile and listing APIs (DA-40, DA-39).
 
-GET /api/v1/da-services/farmers
+GET /api/v1/da-services/farmers                (?search_text= searches the live registry, DA-272)
 GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
 GET /api/v1/da-services/farmers/{id}/permissions
 GET /api/v1/da-services/farmers/{id}/plots
+GET /api/v1/da-services/farmers/{id}/change-requests   (DA-272)
 POST /api/v1/da-services/farmers
 POST /api/v1/da-services/farmers/registrations/documents
 
@@ -29,6 +30,10 @@ from pydantic import ValidationError as PydanticValidationError
 
 from da_services.api.router import route
 from da_services.integrations.farmer_registry import get_farmer_registry_client
+from da_services.integrations.farmer_registry.client import (
+	FarmerRegistryClientError,
+	FarmerRegistryServerError,
+)
 from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
 from da_services.services import constants as C
 from da_services.services import farmers
@@ -40,12 +45,24 @@ READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 # Roles that may register a new farmer (Executive is read-only)
 REGISTER_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 
+_REGISTRY_UNAVAILABLE = _("Farmer Registry is unavailable. Try again shortly.")
+
 
 @route("/farmers", methods=("GET",), summary="List farmers with scope selector")
 @frappe.whitelist()
 @handle_api_errors
-def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, start=None):
-	"""List farmers visible to the user with scope enforcement (DA-40, DA-39).
+def list_farmers(
+	woreda=None,
+	kebele=None,
+	state=None,
+	da_id=None,
+	limit=None,
+	start=None,
+	search_text=None,
+	page=None,
+	page_size=None,
+):
+	"""List farmers visible to the user with scope enforcement (DA-40, DA-39, DA-272).
 
 	Scope selector:
 	- Development Agent: Only linked farmers
@@ -60,6 +77,12 @@ def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, s
 	- da_id: Filter by linked DA
 	- limit: Page size (default 50, max 500)
 	- start: Offset (default 0)
+	- page / page_size: 1-based alternative to limit / start (registry style)
+	- search_text: Free text (name, Farmer-ID, phone). When given, the live
+	  Farmer register is searched inside the caller's scope instead of the
+	  DA Farmer Reference cache, so newly registered farmers are found too.
+	  Supervisors of several Woredas, Zone and Region officers must pass
+	  ``woreda`` with it. ``da_id`` does not apply to a live search.
 
 	Returns:
 	    {
@@ -103,9 +126,21 @@ def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, s
 	state = state or frappe.form_dict.get("state")
 	da_id = da_id or frappe.form_dict.get("da_id")
 
+	search_text = (search_text or frappe.form_dict.get("search_text") or "").strip()
+	page = page or frappe.form_dict.get("page")
+	page_size = page_size or frappe.form_dict.get("page_size")
+
 	try:
-		limit = cint(limit or frappe.form_dict.get("limit") or 50)
-		start = cint(start or frappe.form_dict.get("start") or 0)
+		if page or page_size:
+			# Registry-style paging; converted to limit / start for the cache path.
+			page = cint(page or 1)
+			limit = cint(page_size or limit or frappe.form_dict.get("limit") or 50)
+			if page < 1:
+				frappe.throw(_("Page must be >= 1."), frappe.ValidationError)
+			start = (page - 1) * limit
+		else:
+			limit = cint(limit or frappe.form_dict.get("limit") or 50)
+			start = cint(start or frappe.form_dict.get("start") or 0)
 	except ValueError, TypeError:
 		frappe.throw(_("Pagination parameters must be integers."), frappe.ValidationError)
 
@@ -113,6 +148,37 @@ def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, s
 		frappe.throw(_("Limit must be between 1 and 500."), frappe.ValidationError)
 	if start < 0:
 		frappe.throw(_("Start must be >= 0."), frappe.ValidationError)
+
+	if search_text:
+		try:
+			found = farmers.search_farmers(
+				ctx,
+				search_text=search_text,
+				woreda=woreda,
+				kebele=kebele,
+				state=state,
+				page=start // limit + 1,
+				page_size=limit,
+			)
+		except FarmerRegistryClientError as exc:
+			frappe.throw(str(exc), frappe.ValidationError)
+		except FarmerRegistryServerError:
+			frappe.response["http_status_code"] = 503
+			return error_response(str(_REGISTRY_UNAVAILABLE), "SERVICE_UNAVAILABLE")
+		return success_response(
+			data={
+				"farmers": found["farmers"],
+				"total": found["total"],
+				"page": {
+					"limit": limit,
+					"start": start,
+					"page": found["page"],
+					"page_size": found["page_size"],
+					"number_of_pages": found["number_of_pages"],
+				},
+				"source": "registry",
+			}
+		)
 
 	# Get farmers
 	farmer_list, total = farmers.list_farmers(
@@ -129,9 +195,60 @@ def list_farmers(woreda=None, kebele=None, state=None, da_id=None, limit=None, s
 		data={
 			"farmers": farmer_list,
 			"total": total,
-			"page": {"limit": limit, "start": start},
+			"page": {
+				"limit": limit,
+				"start": start,
+				"page": start // limit + 1,
+				"page_size": limit,
+				"number_of_pages": (total + limit - 1) // limit,
+			},
+			"source": "cache",
 		}
 	)
+
+
+@route(
+	"/farmers/<farmer_id>/change-requests",
+	methods=("GET",),
+	summary="List change requests raised on a farmer in the registry",
+)
+@frappe.whitelist()
+@handle_api_errors
+def get_farmer_change_requests(farmer_id: str, status=None, tab=None):
+	"""Change requests the Farmer Registry holds for this farmer (DA-272).
+
+	Every PATCH /farmers/{id} becomes a registry change request that a Woreda
+	officer approves; this shows where each one stands. Staff-portal edits on
+	the same farmer appear here too.
+
+	Query parameters:
+	- status: PENDING | APPROVED | REJECTED (all when omitted)
+	- tab: farmer | location | household | land | crop | livestock (all when omitted)
+
+	Returns:
+	    {"farmer_id", "total", "change_requests": [
+	        {"change_request_id", "status", "tab_id", "section_id", "source",
+	         "created_by", "created_at", "approved_by", "approved_at",
+	         "verifications_required", "verifications_done"}]}
+
+	404 when the farmer does not exist, 403 when outside the caller's scope.
+	"""
+	ctx = require_roles(*READ_ROLES)
+	if not farmer_id:
+		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
+	status = (status or frappe.form_dict.get("status") or "").strip().upper() or None
+	tab = (tab or frappe.form_dict.get("tab") or "").strip().lower() or None
+	if status and status not in ("PENDING", "APPROVED", "REJECTED"):
+		frappe.throw(_("status must be PENDING, APPROVED or REJECTED."), frappe.ValidationError)
+
+	try:
+		data = farmers.get_farmer_change_requests(farmer_id, ctx, status=status, tab=tab)
+	except FarmerRegistryClientError as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except FarmerRegistryServerError:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_REGISTRY_UNAVAILABLE), "SERVICE_UNAVAILABLE")
+	return success_response(data=data)
 
 
 @route("/farmers/<farmer_id>/profile", methods=("GET",), summary="Get farmer profile")

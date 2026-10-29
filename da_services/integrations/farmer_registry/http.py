@@ -66,6 +66,18 @@ DEFAULT_TABS: dict[str, str] = {
 # Registry messages that mean "no such record" rather than a failure
 _NOT_FOUND_MARKERS = ("not found", "does not exist", "no record")
 
+# Discovered register / intake form ids; see HTTPFarmerRegistryClient.register_id
+ID_CACHE_PREFIX = "da_services:farmer_registry:ids"
+ID_CACHE_TTL = 60 * 60
+# The Farmer intake form on dev is "farmer_ingestion_intake"; matched ignoring spaces, _ and -.
+DEFAULT_INTAKE_FORM_CONTAINS = "Farmer Ingestion"
+
+
+def _squash(value: object) -> str:
+	"""Lower-case alphanumerics only, the way the registry collection matches form names."""
+	return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
 def _positive_timeout(value: object, default: float = 30) -> float:
 	if isinstance(value, bool) or not isinstance(value, (int, float, str)):
 		return default
@@ -113,12 +125,17 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if self.api_key:
 			self.headers["Authorization"] = f"Bearer {self.api_key}"
 
-		# Register / intake / tab identifiers for the Farmer register.
+		# Register / intake / tab identifiers for the Farmer register. The ids are
+		# optional: when absent they are discovered from the registry
+		# (get_all_registers / get_all_intake_forms) and cached for an hour, so a
+		# redeployed registry does not need a site_config change.
 		ingest = frappe.conf.get("farmer_registry_ingest", {}) or {}
 		self.ingest_data_model = ingest.get("data_model", "FARMER_ODK_MODEL")
-		self.ingest_register_id = ingest.get("register_id")
-		self.ingest_intake_form_id = ingest.get("intake_form_id")
-		self.register_id = ingest.get("register_id")
+		self._configured_register_id = ingest.get("register_id") or None
+		self._configured_intake_form_id = ingest.get("intake_form_id") or None
+		self.intake_form_contains = str(
+			frappe.conf.get("farmer_registry_intake_form_contains") or DEFAULT_INTAKE_FORM_CONTAINS
+		)
 		self.tabs = {**DEFAULT_TABS, **(ingest.get("tabs") or {})}
 
 		# Staff IAM login and/or Keycloak client-credentials. Tokens are cached
@@ -161,8 +178,6 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 				"set farmer_registry_keycloak (staff login or service account) or farmer_registry_api_key"
 			)
 
-		if not self.register_id:
-			problems.append("farmer_registry_ingest.register_id (Farmer register id) is required")
 		if not self.ingest_data_model:
 			problems.append("farmer_registry_ingest.data_model is required")
 
@@ -309,6 +324,64 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			name = None
 		return name or code_or_name
 
+	# ------------------------------------------------------------------ registry ids
+
+	def _cached_id(self, kind: str, discover) -> str:
+		"""An id discovered from the registry, cached per staff host for an hour."""
+		key = f"{ID_CACHE_PREFIX}:{kind}:{self.base_url}"
+		value = frappe.cache.get_value(key)
+		if not value:
+			value = discover()
+			frappe.cache.set_value(key, value, expires_in_sec=ID_CACHE_TTL)
+		return str(value)
+
+	@property
+	def register_id(self) -> str:
+		"""The Farmer register id: configured, else the register named "Farmer"."""
+		if self._configured_register_id:
+			return self._configured_register_id
+
+		def discover() -> str:
+			wanted = self.REGISTER_MNEMONIC.lower()
+			for row in self.get_registers():
+				if str(row.get("register_mnemonic") or "").lower() == wanted and row.get("register_id"):
+					return str(row["register_id"])
+			raise FarmerRegistryError(f"Farmer Registry has no register named {self.REGISTER_MNEMONIC}")
+
+		return self._cached_id("register_id", discover)
+
+	@property
+	def intake_form_id(self) -> str:
+		"""The Farmer intake form id: configured, else the one form whose mnemonic
+		contains farmer_registry_intake_form_contains (spaces, _ and - ignored)."""
+		if self._configured_intake_form_id:
+			return self._configured_intake_form_id
+
+		def discover() -> str:
+			wanted = _squash(self.intake_form_contains)
+			forms = [
+				f
+				for f in self.get_intake_forms()
+				if str(f.get("register_id") or "") == self.register_id
+				and f.get("form_id")
+				and (not wanted or wanted in _squash(f.get("form_mnemonic")))
+			]
+			if len(forms) != 1:
+				names = ", ".join(str(f.get("form_mnemonic")) for f in forms) or "none"
+				raise FarmerRegistryError(
+					"Farmer Registry intake form could not be chosen: "
+					f"{len(forms)} form(s) match {self.intake_form_contains!r} ({names}); "
+					"set farmer_registry_intake_form_contains or farmer_registry_ingest.intake_form_id"
+				)
+			return str(forms[0]["form_id"])
+
+		return self._cached_id("intake_form_id", discover)
+
+	@staticmethod
+	def clear_id_cache() -> None:
+		"""Forget discovered register / form ids (after a registry redeploy)."""
+		frappe.cache.delete_keys(ID_CACHE_PREFIX)
+
 	def _tab_records(self, farmer_id: str, tab_key: str, *, action: str) -> list:
 		"""Rows of one register tab for a farmer (list of RegisterTabRecordData dicts)."""
 		tab_id = self.tabs.get(tab_key)
@@ -451,6 +524,99 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		total = res.pagination.get("number_of_items")
 		return items, int(total) if total is not None else len(items)
 
+	def search_farmers(
+		self,
+		*,
+		search_text: str = "",
+		filter_by: dict | None = None,
+		page: int = 1,
+		page_size: int = 50,
+	) -> dict:
+		"""One page of search_in_a_register with the registry's page metadata.
+
+		filter_by takes DA codes for woreda / kebele and passes any other key
+		through as a registry filter. Kebele is narrowed here as in list_farmers.
+		"""
+		page = max(1, int(page or 1))
+		page_size = max(1, min(int(page_size or 50), 500))
+
+		filters: dict = {}
+		for key, value in (filter_by or {}).items():
+			if value in (None, ""):
+				continue
+			if key in ("woreda", "kebele"):
+				name = self._area_name(value)
+				if name:
+					filters[f"{key}_name"] = name
+			else:
+				filters[key] = value
+
+		res = self._staff_post(
+			"/register-data/search_in_a_register",
+			{"register_id": self.register_id},
+			action="search farmers",
+			page=page,
+			page_size=page_size,
+			filter_by=filters or None,
+			search_text=search_text or "",
+		)
+		rows: list = []
+		if res.ok:
+			rows = [r for r in (res.payload or []) if isinstance(r, dict)]
+		elif not res.not_found:
+			self._reject(res, "search farmers")
+
+		items = [search_row_to_list_item(row) for row in rows]
+		kebele_name = filters.get("kebele_name")
+		if kebele_name and any(i.kebele for i in items):
+			items = [i for i in items if not i.kebele or i.kebele == kebele_name]
+
+		total = res.pagination.get("number_of_items")
+		pages = res.pagination.get("number_of_pages")
+		return {
+			"items": items,
+			"page": page,
+			"page_size": page_size,
+			"total": int(total) if total is not None else len(items),
+			"number_of_pages": int(pages) if pages else (1 if items else 0),
+		}
+
+	def get_change_requests(
+		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
+	) -> list[dict]:
+		"""Change requests on a farmer, one get_change_requests call per tab.
+
+		The registry keys change requests by tab, so all configured tabs are
+		read unless one tab key is given. A tab with none returns an empty list.
+		"""
+		if tab:
+			tab_id = self.tabs.get(tab)
+			if not tab_id:
+				raise FarmerRegistryClientError(f"Unknown farmer tab {tab!r}", status_code=400)
+			tab_ids = [tab_id]
+		else:
+			tab_ids = list(dict.fromkeys(self.tabs.values()))
+
+		rows: list[dict] = []
+		for tab_id in tab_ids:
+			res = self._staff_post(
+				"/change-requests/get_change_requests",
+				{"subject_register_id": self.register_id, "subject_record_id": farmer_id, "tab_id": tab_id},
+				action="get change requests",
+				page_size=100,
+			)
+			if not res.ok:
+				if res.not_found:
+					continue
+				self._reject(res, "get change requests")
+			rows.extend(r for r in (res.payload or []) if isinstance(r, dict))
+
+		if status:
+			wanted = status.strip().upper()
+			rows = [r for r in rows if str(r.get("approval_status") or "").upper() == wanted]
+		rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+		return rows
+
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
 		"""Land Details rows for a farmer (Lands tab)."""
 		plots: list[Plot] = []
@@ -520,11 +686,11 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			raise FarmerRegistryError("Invalid ingest payload: missing 'message'")
 
 		url = f"{self.base_url}/input-mechanism-data/ingest-data"
-		params = {"data_model": self.ingest_data_model}
-		if self.ingest_register_id:
-			params["register_id"] = self.ingest_register_id
-		if self.ingest_intake_form_id:
-			params["intake_form_id"] = self.ingest_intake_form_id
+		params = {
+			"data_model": self.ingest_data_model,
+			"register_id": self.register_id,
+			"intake_form_id": self.intake_form_id,
+		}
 
 		headers, cookies = self._auth_and_csrf_headers()
 
@@ -593,13 +759,9 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		return res.payload or []
 
 	def render_intake_form(self) -> dict:
-		if not self.ingest_intake_form_id:
-			raise FarmerRegistryError(
-				"Farmer Registry HTTP client misconfigured: farmer_registry_ingest.intake_form_id is required"
-			)
 		res = self._staff_post(
 			"/intake-form-metadata/render_intake_form",
-			{"form_id": self.ingest_intake_form_id},
+			{"form_id": self.intake_form_id},
 			action="render intake form",
 		)
 		if not res.ok:
@@ -612,7 +774,20 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		)
 		if not res.ok:
 			self._reject(res, "list registers")
-		return list(res.payload or [])
+		return [r for r in (res.payload or []) if isinstance(r, dict)]
+
+	def get_intake_forms(self) -> list[dict]:
+		res = self._staff_post(
+			"/intake-form-metadata/get_all_intake_forms",
+			{"register_id": self.register_id},
+			action="list intake forms",
+			page_size=100,
+		)
+		if not res.ok:
+			if res.not_found:
+				return []
+			self._reject(res, "list intake forms")
+		return [f for f in (res.payload or []) if isinstance(f, dict)]
 
 	def get_attribute_values(self, attribute_id: str) -> list[dict]:
 		payload = self._master_data_post(

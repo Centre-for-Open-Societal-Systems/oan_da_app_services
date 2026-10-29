@@ -266,6 +266,107 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(len(farmers), 1)
 		self.assertEqual(farmers[0]["kebele"], "Bako 01")
 
+	# -- DA-272: live search, change requests, registry metadata ---------------
+
+	def test_list_farmers_search_text_asks_the_registry(self):
+		"""search_text bypasses the cache: the mock registry is searched in the caller's Woreda."""
+		frappe.set_user(SUP)
+
+		from da_services.api.v1.farmers import list_farmers
+
+		result = list_farmers(search_text="almaz", page=1, page_size=10)
+		self.assertEqual(result["status"], "success")
+		self.assertEqual(result["data"]["source"], "registry")
+		farmers = result["data"]["farmers"]
+		self.assertEqual([f["farmer_id"] for f in farmers], [self.farmer2_id])
+		self.assertEqual(farmers[0]["farmer_name"], "Almaz Tesfaye")
+		self.assertEqual(farmers[0]["registration_state"], "APPROVED")
+		self.assertEqual(result["data"]["total"], 1)
+		self.assertEqual(result["data"]["page"]["page"], 1)
+		self.assertEqual(result["data"]["page"]["page_size"], 10)
+		self.assertEqual(result["data"]["page"]["number_of_pages"], 1)
+
+	def test_list_farmers_search_stays_inside_woreda_scope(self):
+		"""Chaltu (ET03) is in the mock registry but outside the Supervisor's Woreda."""
+		frappe.set_user(SUP)
+
+		from da_services.api.v1.farmers import list_farmers
+
+		result = list_farmers(search_text="chaltu")
+		self.assertEqual(result["data"]["farmers"], [])
+		self.assertEqual(result["data"]["total"], 0)
+
+	def test_list_farmers_search_as_da_narrows_to_assigned_kebele(self):
+		"""DA1 is posted to Bako 01: Almaz (Bako 02) is not returned even on a name match."""
+		frappe.set_user(DA1)
+
+		from da_services.api.v1.farmers import list_farmers
+
+		self.assertEqual(
+			[f["farmer_id"] for f in list_farmers(search_text="abebe")["data"]["farmers"]], [self.farmer1_id]
+		)
+		self.assertEqual(list_farmers(search_text="almaz")["data"]["farmers"], [])
+
+	def test_list_farmers_page_params_map_to_offsets(self):
+		"""page / page_size are accepted on the cache path too."""
+		frappe.set_user(SUP)
+
+		from da_services.api.v1.farmers import list_farmers
+
+		result = list_farmers(page=2, page_size=1)
+		self.assertEqual(len(result["data"]["farmers"]), 1)
+		self.assertEqual(result["data"]["total"], 2)
+		self.assertEqual(
+			result["data"]["page"], {"limit": 1, "start": 1, "page": 2, "page_size": 1, "number_of_pages": 2}
+		)
+		self.assertEqual(result["data"]["source"], "cache")
+
+	def test_change_requests_for_farmer_in_scope(self):
+		frappe.set_user(SUP)
+
+		from da_services.api.v1.farmers import get_farmer_change_requests
+
+		result = get_farmer_change_requests(self.farmer1_id)
+		self.assertEqual(result["status"], "success")
+		rows = result["data"]["change_requests"]
+		self.assertEqual([r["change_request_id"] for r in rows], ["cr-001-pending", "cr-001-approved"])
+		self.assertEqual(rows[0]["status"], "PENDING")
+		self.assertEqual(rows[0]["tab_id"], "farmer_location_tab")
+		self.assertEqual(result["data"]["total"], 2)
+
+		pending = get_farmer_change_requests("FR-000101", status="pending")["data"]["change_requests"]
+		self.assertEqual([r["change_request_id"] for r in pending], ["cr-001-pending"])
+
+	def test_change_requests_scope_and_validation(self):
+		frappe.set_user(SUP)
+
+		from da_services.api.v1.farmers import get_farmer_change_requests
+
+		# handle_api_errors turns the raised errors into error envelopes.
+		denied = get_farmer_change_requests(self.farmer3_id)
+		self.assertEqual((denied["status"], denied["code"]), ("error", "PERMISSION_DENIED"))
+		missing = get_farmer_change_requests("farmer-uuid-404")
+		self.assertEqual((missing["status"], missing["code"]), ("error", "NOT_FOUND"))
+		bad = get_farmer_change_requests(self.farmer1_id, status="maybe")
+		self.assertEqual((bad["status"], bad["code"]), ("error", "VALIDATION_ERROR"))
+
+	def test_registries_registers_and_intake_form(self):
+		frappe.set_user(DA1)
+
+		from da_services.api.v1.registries import get_intake_form, list_registers
+
+		registers = list_registers("farmer")["data"]
+		self.assertEqual(registers["registry"], "farmer")
+		self.assertIn("Farmer", [r["register_mnemonic"] for r in registers["registers"]])
+		self.assertEqual(registers["total"], len(registers["registers"]))
+
+		layout = get_intake_form("farmer")["data"]
+		self.assertEqual(layout["form_id"], "mock-intake-form")
+		self.assertEqual(layout["sections"][0]["register_mnemonic"], "Household")
+
+		unknown = list_registers("passport")
+		self.assertEqual((unknown["status"], unknown["code"]), ("error", "NOT_FOUND"))
+
 	def test_get_farmer_profile_success(self):
 		"""Get farmer profile with merged visit data."""
 		frappe.set_user(DA1)

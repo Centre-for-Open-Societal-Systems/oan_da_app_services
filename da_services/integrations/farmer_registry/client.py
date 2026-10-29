@@ -74,6 +74,29 @@ class FarmerRegistryClient(ABC):
 		pass
 
 	@abstractmethod
+	def search_farmers(
+		self,
+		*,
+		search_text: str = "",
+		filter_by: dict | None = None,
+		page: int = 1,
+		page_size: int = 50,
+	) -> dict:
+		"""Search the Farmer register live (DA-272).
+
+		Args:
+		    search_text: Free text the registry matches on name / ids
+		    filter_by: {woreda, kebele, state} as DA codes; translated to the
+		        registry's *_name filters by the implementation
+		    page: 1-based page number (registry current_page)
+		    page_size: Rows per page
+
+		Returns:
+		    {"items": [FarmerListItem], "page", "page_size", "total", "number_of_pages"}
+		"""
+		pass
+
+	@abstractmethod
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
 		"""Get land plots for a farmer.
 
@@ -82,6 +105,23 @@ class FarmerRegistryClient(ABC):
 
 		Returns:
 		    List of Plot objects
+		"""
+		pass
+
+	@abstractmethod
+	def get_change_requests(
+		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
+	) -> list[dict]:
+		"""Change requests raised against a farmer (DA-272).
+
+		Calls ``/change-requests/get_change_requests`` per register tab and
+		returns the raw rows, newest first.
+
+		Args:
+		    farmer_id: Farmer Registry internal_record_id
+		    tab: One tab key (farmer, location, household, land, crop, livestock);
+		        all tabs when omitted
+		    status: Keep only this approval_status (PENDING, APPROVED, REJECTED)
 		"""
 		pass
 
@@ -170,6 +210,11 @@ class FarmerRegistryClient(ABC):
 	@abstractmethod
 	def get_registers(self) -> list[dict]:
 		"""Return every register as [{register_id, register_mnemonic, ...}]."""
+		pass
+
+	@abstractmethod
+	def get_intake_forms(self) -> list[dict]:
+		"""Return the intake forms of the Farmer register: [{form_id, form_mnemonic, register_id, ...}]."""
 		pass
 
 	@abstractmethod

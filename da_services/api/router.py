@@ -80,6 +80,7 @@ def _register() -> None:
 		notifications,
 		profile_self,
 		rbac,
+		registries,
 		visits,
 	)
 
