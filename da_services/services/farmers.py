@@ -1136,9 +1136,30 @@ def upload_registration_document(
 	if len(content) > MAX_DOCUMENT_BYTES:
 		frappe.throw(_("Document is larger than 5 MB."), frappe.ValidationError)
 
+	safe_name = registry_document_name(filename, content_type)
 	client = get_farmer_registry_client()
 	try:
-		document_id = client.upload_document(filename or "identity-document", content, content_type)
+		document_id = client.upload_document(safe_name, content, content_type)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(_("Farmer Registry rejected the document: {0}").format(exc), frappe.ValidationError)
-	return {"document_id": document_id, "file_name": filename, "size": len(content)}
+	return {"document_id": document_id, "file_name": safe_name, "size": len(content)}
+
+
+_DOCUMENT_EXTENSIONS = {"application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png"}
+
+
+def registry_document_name(filename: str | None, content_type: str) -> str:
+	"""A file name the registry accepts: one extension, no spaces or extra dots.
+
+	The registry rejects "WhatsApp Image 2026-10-29 at 7.46.44 PM.jpeg" as
+	"multiple extensions", so the stem is reduced to [A-Za-z0-9_-] and the
+	extension comes from the content type.
+	"""
+	ext = _DOCUMENT_EXTENSIONS.get(content_type, "bin")
+	stem = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+	if "." in stem:
+		stem = stem.rsplit(".", 1)[0]
+	stem = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in stem).strip("-_")
+	while "--" in stem:
+		stem = stem.replace("--", "-")
+	return f"{stem[:80] or 'identity-document'}.{ext}"
