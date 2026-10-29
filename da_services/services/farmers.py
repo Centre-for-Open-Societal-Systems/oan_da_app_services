@@ -15,8 +15,10 @@ from da_services.integrations.farmer_registry import get_farmer_registry_client,
 from da_services.integrations.farmer_registry.client import FarmerRegistryClientError, FarmerRegistryError
 from da_services.integrations.farmer_registry.mapper import (
 	cache_registration_state,
+	change_request_to_dict,
 	da_form_to_ingest_payload,
 	farmer_to_reference_dict,
+	list_item_to_dict,
 	reference_dict_to_profile,
 	registration_message_id,
 )
@@ -39,6 +41,33 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 
 	Returns:
 	    Complete profile dict for frontend
+
+	Raises:
+	    DoesNotExistError: Farmer not found
+	    PermissionError: Farmer not in scope
+	"""
+	ref = _require_farmer_in_scope(farmer_id, ctx)
+
+	# Get visit data (last visit, pending tasks)
+	visit_data = _get_farmer_visit_data(farmer_id)
+
+	# Check if farmer is editable by current DA
+	can_edit = _can_edit_farmer(farmer_id, ctx)
+
+	# Merge all data into profile
+	profile = reference_dict_to_profile(ref, visit_data)
+	# Sections the registry could not deliver on a fresh fetch (empty on cache hits
+	# and complete reads); the UI can show "partial data" instead of blanks.
+	profile["incomplete_sections"] = list(ref.get("incomplete_sections") or [])
+	profile["can_edit"] = can_edit
+	da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
+	profile["is_linked"] = _is_farmer_linked_to_da(farmer_id, da_ids_list)
+
+	return profile
+
+
+def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
+	"""The cached farmer reference, after the 404 / 403 checks every farmer read shares.
 
 	Raises:
 	    DoesNotExistError: Farmer not found
@@ -75,22 +104,150 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 				else:
 					frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
 
-	# Get visit data (last visit, pending tasks)
-	visit_data = _get_farmer_visit_data(farmer_id)
+	return ref
 
-	# Check if farmer is editable by current DA
-	can_edit = _can_edit_farmer(farmer_id, ctx)
 
-	# Merge all data into profile
-	profile = reference_dict_to_profile(ref, visit_data)
-	# Sections the registry could not deliver on a fresh fetch (empty on cache hits
-	# and complete reads); the UI can show "partial data" instead of blanks.
-	profile["incomplete_sections"] = list(ref.get("incomplete_sections") or [])
-	profile["can_edit"] = can_edit
-	da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-	profile["is_linked"] = _is_farmer_linked_to_da(farmer_id, da_ids_list)
+def resolve_farmer_id(farmer_id: str) -> str:
+	"""Accept the registry's internal id or the Farmer-ID shown in the UI (FR-…)."""
+	if frappe.db.exists("DA Farmer Reference", farmer_id):
+		return farmer_id
+	cached = frappe.db.get_value("DA Farmer Reference", {"reg_id": farmer_id}, "name")
+	if cached:
+		return cached
+	finder = getattr(get_farmer_registry_client(), "find_internal_id", None)
+	found = finder(farmer_id) if finder else None
+	return found or farmer_id
 
-	return profile
+
+def get_farmer_change_requests(
+	farmer_id: str, ctx: ScopeContext, *, status: str | None = None, tab: str | None = None
+) -> dict:
+	"""Change requests the registry holds for a farmer (DA-272).
+
+	The farmer must be readable by the caller (same 404 / 403 rules as the
+	profile). ``status`` keeps one approval_status; ``tab`` one register tab.
+	"""
+	internal_id = resolve_farmer_id(farmer_id)
+	_require_farmer_in_scope(internal_id, ctx)
+	rows = get_farmer_registry_client().get_change_requests(internal_id, tab=tab, status=status)
+	return {
+		"farmer_id": farmer_id,
+		"change_requests": [change_request_to_dict(r) for r in rows],
+		"total": len(rows),
+	}
+
+
+def search_farmers(
+	ctx: ScopeContext,
+	*,
+	search_text: str = "",
+	woreda: str | None = None,
+	kebele: str | None = None,
+	state: str | None = None,
+	page: int = 1,
+	page_size: int = 50,
+) -> dict:
+	"""Search the live Farmer register within the caller's scope (DA-272).
+
+	Unlike list_farmers this does not read the DA Farmer Reference cache: the
+	registry is asked directly with search_text, so a farmer registered
+	yesterday is found. Scope is applied as a registry filter, so a restricted
+	caller always searches inside one Woreda:
+
+	- DA: their assigned Kebeles' Woreda, narrowed to those Kebeles
+	- Supervisor with one Woreda: that Woreda
+	- Supervisor with several Woredas, Zone or Region officers: ``woreda`` is required
+	- Admin: whatever filters were asked for
+	"""
+	filter_by: dict = {}
+	keep_kebeles: set[str] | None = None
+
+	if ctx.unrestricted:
+		filter_by.update({"woreda": woreda, "kebele": kebele})
+	elif ctx.has_any_role(C.ROLE_DA):
+		assigned = _get_da_assigned_kebeles(list(ctx.da_ids) if ctx.da_ids else [])
+		if not assigned:
+			return _empty_search_page(page, page_size)
+		if kebele:
+			if kebele not in assigned:
+				return _empty_search_page(page, page_size)
+			assigned = [kebele]
+		scope_woreda = woreda or (next(iter(ctx.woreda_scopes)) if len(ctx.woreda_scopes) == 1 else None)
+		if scope_woreda and ctx.woreda_scopes and scope_woreda not in ctx.woreda_scopes:
+			frappe.throw(_("Woreda {0} is not in your scope.").format(scope_woreda), frappe.PermissionError)
+		filter_by["woreda"] = scope_woreda
+		if len(assigned) == 1:
+			filter_by["kebele"] = assigned[0]
+		else:
+			keep_kebeles = set(assigned) | set(_area_names(assigned))
+	else:
+		if woreda:
+			_require_woreda_in_scope(ctx, woreda)
+		elif len(ctx.woreda_scopes) == 1:
+			woreda = next(iter(ctx.woreda_scopes))
+		else:
+			frappe.throw(
+				_("Pass a woreda to search in: your scope covers more than one Woreda."),
+				frappe.ValidationError,
+			)
+		filter_by.update({"woreda": woreda, "kebele": kebele})
+	if state:
+		filter_by["state"] = state
+
+	result = get_farmer_registry_client().search_farmers(
+		search_text=search_text, filter_by=filter_by, page=page, page_size=page_size
+	)
+	items = result.get("items") or []
+	if keep_kebeles is not None and any(i.kebele for i in items):
+		items = [i for i in items if not i.kebele or i.kebele in keep_kebeles]
+	return {
+		"farmers": [list_item_to_dict(i) for i in items],
+		"total": int(result.get("total") or 0),
+		"page": int(result.get("page") or page),
+		"page_size": int(result.get("page_size") or page_size),
+		"number_of_pages": int(result.get("number_of_pages") or 0),
+	}
+
+
+def _empty_search_page(page: int, page_size: int) -> dict:
+	return {"farmers": [], "total": 0, "page": page, "page_size": page_size, "number_of_pages": 0}
+
+
+def _area_names(codes: list) -> list[str]:
+	"""English names of DA Administrative Areas, for matching the registry's *_name values."""
+	if not codes:
+		return []
+	rows = frappe.get_all("DA Administrative Area", filters={"name": ("in", list(codes))}, fields=["name_en"])
+	return [r.name_en for r in rows if r.name_en]
+
+
+def _require_woreda_in_scope(ctx: ScopeContext, woreda: str) -> None:
+	"""A Woreda a Supervisor / Zone / Region officer may search in; raises otherwise."""
+	if ctx.woreda_scopes:
+		if woreda not in ctx.woreda_scopes:
+			frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
+		return
+	if ctx.zone_scopes:
+		woreda_zone = ancestors_of(woreda).get("zone")
+		if not woreda_zone:
+			frappe.throw(
+				_(
+					"Woreda {0} is not in the administrative master data (no Zone known); "
+					"ask an Administrator to load it before filtering by it."
+				).format(woreda),
+				frappe.ValidationError,
+			)
+		if woreda_zone not in ctx.zone_scopes:
+			frappe.throw(_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError)
+		return
+	if ctx.region_scopes:
+		woreda_region = ancestors_of(woreda).get("region") or (
+			woreda.split("-")[0] if "-" in woreda else None
+		)
+		if woreda_region and woreda_region not in ctx.region_scopes:
+			frappe.throw(_("Woreda {0} is not in your Region scope.").format(woreda), frappe.PermissionError)
+		return
+	frappe.throw(_("You do not have scope to search by Woreda."), frappe.PermissionError)
 
 
 def list_farmers(

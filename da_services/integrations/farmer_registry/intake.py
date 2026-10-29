@@ -124,6 +124,11 @@ def _has_identity_document_widget(ui_schema: Any) -> bool:
 	return False
 
 
+def load_registers(client: FarmerRegistryClient) -> list[dict]:
+	"""Every register of the registry (get_all_registers), cached with the layout."""
+	return _cached(_cache_key(client, "registers"), LAYOUT_TTL, client.get_registers)
+
+
 def load_layout(client: FarmerRegistryClient) -> dict:
 	"""The intake form as {form_id, register_id, sections: [...]}, sections in save order.
 
@@ -133,7 +138,7 @@ def load_layout(client: FarmerRegistryClient) -> dict:
 
 	def load() -> dict:
 		form = client.render_intake_form()
-		mnemonics = {r.get("register_id"): r.get("register_mnemonic") for r in client.get_registers()}
+		mnemonics = {r.get("register_id"): r.get("register_mnemonic") for r in load_registers(client)}
 		sections = []
 		for tab in form.get("tabs") or []:
 			for s in tab.get("sections") or []:

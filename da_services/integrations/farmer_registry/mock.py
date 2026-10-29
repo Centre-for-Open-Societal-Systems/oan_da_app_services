@@ -12,6 +12,51 @@ from .schemas import Farmer, FarmerListItem, Plot
 
 # Intake form fixtures, trimmed from the dev registry and Master Data (28 Oct 2026).
 MOCK_INTAKE_FORM_ID = "mock-intake-form"
+MOCK_TABS = {
+	"farmer": "farmer_farmer_tab",
+	"location": "farmer_location_tab",
+	"household": "farmer_household_link_tab",
+	"land": "farmer_land_tab",
+	"crop": "farmer_crop_tab",
+	"livestock": "farmer_livestock_tab",
+}
+# Change requests as /change-requests/get_change_requests returns them (DA-272)
+MOCK_CHANGE_REQUESTS = {
+	"farmer-uuid-001": [
+		{
+			"change_request_id": "cr-001-approved",
+			"record_name": "Abebe Kebede",
+			"register_id": "reg-farmer",
+			"register_mnemonic": "Farmer",
+			"tab_id": "farmer_farmer_tab",
+			"section_id": "farmer_name",
+			"source_partner_id": "Registry Staff Portal UI",
+			"created_by": "Nina Patel",
+			"created_at": "2026-10-20T09:00:00",
+			"no_of_verifications_required": 0,
+			"no_of_verifications_done": 0,
+			"approval_status": "APPROVED",
+			"approved_by": "Nina Patel",
+			"approved_at": "2026-10-20T10:00:00",
+		},
+		{
+			"change_request_id": "cr-001-pending",
+			"record_name": "Abebe Kebede",
+			"register_id": "reg-farmer",
+			"register_mnemonic": "Farmer",
+			"tab_id": "farmer_location_tab",
+			"section_id": "farmer_location",
+			"source_partner_id": "DA_SERVICES",
+			"created_by": "da.demo@da.local",
+			"created_at": "2026-10-28T14:30:00",
+			"no_of_verifications_required": 1,
+			"no_of_verifications_done": 0,
+			"approval_status": "PENDING",
+			"approved_by": None,
+			"approved_at": None,
+		},
+	]
+}
 MOCK_INTAKE_REGISTERS = {
 	"Farmer": "reg-farmer",
 	"FarmerPhone": "reg-phone",
@@ -240,9 +285,71 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 
 		return items, total
 
+	def search_farmers(
+		self,
+		*,
+		search_text: str = "",
+		filter_by: dict | None = None,
+		page: int = 1,
+		page_size: int = 50,
+	) -> dict:
+		"""Search mock farmers by name / ids with the same filters as list_farmers."""
+		page = max(1, int(page or 1))
+		page_size = max(1, int(page_size or 50))
+		filters = filter_by or {}
+		farmers = list(MOCK_FARMERS.values())
+		if filters.get("woreda"):
+			farmers = [f for f in farmers if f.woreda_name == filters["woreda"]]
+		if filters.get("kebele"):
+			farmers = [f for f in farmers if f.kebele_name == filters["kebele"]]
+		if filters.get("state"):
+			farmers = [f for f in farmers if f.state == filters["state"]]
+		needle = (search_text or "").strip().lower()
+		if needle:
+			farmers = [
+				f
+				for f in farmers
+				if needle in " ".join(filter(None, (f.record_name, f.reg_id, f.farmer_id, f.phone))).lower()
+			]
+		total = len(farmers)
+		start = (page - 1) * page_size
+		items = [
+			FarmerListItem(
+				farmer_id=f.farmer_id,
+				reg_id=f.reg_id,
+				name=f.record_name or f"{f.given_name} {f.family_name}",
+				phone=f.phone,
+				kebele=f.kebele_name,
+				woreda=f.woreda_name,
+				region=f.region_name,
+				total_land_area=f.total_land_area,
+				state=f.state,
+				registration_date=f.registration_date,
+			)
+			for f in farmers[start : start + page_size]
+		]
+		return {
+			"items": items,
+			"page": page,
+			"page_size": page_size,
+			"total": total,
+			"number_of_pages": (total + page_size - 1) // page_size,
+		}
+
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
 		"""Get mock plots for a farmer."""
 		return MOCK_PLOTS.get(farmer_id, [])
+
+	def get_change_requests(
+		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
+	) -> list[dict]:
+		"""Change requests from fixtures, newest first."""
+		rows = list(MOCK_CHANGE_REQUESTS.get(farmer_id, []))
+		if tab:
+			rows = [r for r in rows if r.get("tab_id") == MOCK_TABS.get(tab)]
+		if status:
+			rows = [r for r in rows if r.get("approval_status") == status.strip().upper()]
+		return sorted(rows, key=lambda r: r.get("created_at") or "", reverse=True)
 
 	def update_farmer(self, farmer_id: str, updates: dict, expected_version: int | None = None) -> dict:
 		"""Mock update with version conflict simulation (for DA-41).
@@ -355,6 +462,16 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 	def get_registers(self) -> list[dict]:
 		return [
 			{"register_id": rid, "register_mnemonic": name} for name, rid in MOCK_INTAKE_REGISTERS.items()
+		]
+
+	def get_intake_forms(self) -> list[dict]:
+		return [
+			{
+				"form_id": MOCK_INTAKE_FORM_ID,
+				"form_mnemonic": "farmer_ingestion_intake",
+				"register_id": MOCK_INTAKE_REGISTERS["Farmer"],
+				"used_only_in_ingestion_pipeline": True,
+			}
 		]
 
 	def get_attribute_values(self, attribute_id: str) -> list[dict]:

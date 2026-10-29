@@ -149,6 +149,43 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+def change_request_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+	"""Map one get_change_requests row -> the DA change-request view.
+
+	approval_status is what the Woreda officer has done with it: PENDING,
+	APPROVED or REJECTED.
+	"""
+	return {
+		"change_request_id": row.get("change_request_id"),
+		"status": row.get("approval_status"),
+		"tab_id": row.get("tab_id"),
+		"section_id": row.get("section_id"),
+		"source": row.get("source_partner_id"),
+		"created_by": row.get("created_by"),
+		"created_at": row.get("created_at"),
+		"approved_by": row.get("approved_by"),
+		"approved_at": row.get("approved_at"),
+		"verifications_required": row.get("no_of_verifications_required"),
+		"verifications_done": row.get("no_of_verifications_done"),
+	}
+
+
+def list_item_to_dict(item: FarmerListItem) -> dict[str, Any]:
+	"""Map a FarmerListItem -> the same keys the cached /farmers rows carry."""
+	return {
+		"farmer_id": item.farmer_id,
+		"reg_id": item.reg_id,
+		"farmer_name": item.name,
+		"phone": item.phone,
+		"kebele": item.kebele,
+		"woreda": item.woreda,
+		"region": item.region,
+		"total_land_hectares": item.total_land_area,
+		"registration_state": cache_registration_state(item.state),
+		"registered_at": item.registration_date,
+	}
+
+
 def farmer_to_reference_dict(farmer: Farmer) -> dict[str, Any]:
 	"""Map Farmer Registry schema → DA Farmer Reference fields.
 

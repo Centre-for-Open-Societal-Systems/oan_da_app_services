@@ -162,6 +162,37 @@ SEARCH_ROWS = [
 ]
 
 
+CHANGE_REQUESTS = {
+	"farmer_farmer_tab": [
+		{
+			"change_request_id": "cr-old",
+			"tab_id": "farmer_farmer_tab",
+			"section_id": "farmer_name",
+			"approval_status": "APPROVED",
+			"created_at": "2026-10-20T09:00:00",
+		}
+	],
+	"farmer_location_tab": [
+		{
+			"change_request_id": "cr-new",
+			"tab_id": "farmer_location_tab",
+			"section_id": "farmer_location",
+			"approval_status": "PENDING",
+			"created_at": "2026-10-28T14:30:00",
+		}
+	],
+}
+REGISTERS = [
+	{"register_id": "hh-reg", "register_mnemonic": "Household"},
+	{"register_id": REGISTER_ID, "register_mnemonic": "Farmer"},
+]
+INTAKE_FORMS = [
+	{"form_id": "other-form", "form_mnemonic": "farmer_partner_intake", "register_id": REGISTER_ID},
+	{"form_id": "the-form", "form_mnemonic": "farmer_ingestion_intake", "register_id": REGISTER_ID},
+	{"form_id": "hh-form", "form_mnemonic": "farmer_ingestion_intake", "register_id": "hh-reg"},
+]
+
+
 def _route(url, json=None, **_):
 	"""Fake Staff API: answer by path."""
 	if url.endswith("/register-data/get_subject_record"):
@@ -191,6 +222,15 @@ def _route(url, json=None, **_):
 	if url.endswith("/change-requests/create_change_request"):
 		_route.last_change = json
 		return _Resp(_envelope({"change_request_id": "CR-77"}))
+	if url.endswith("/change-requests/get_change_requests"):
+		payload = json["request_body"]["request_payload"]
+		_route.change_request_tabs.append(payload["tab_id"])
+		return _Resp(_envelope(CHANGE_REQUESTS.get(payload["tab_id"], [])))
+	if url.endswith("/register-metadata/get_all_registers"):
+		_route.register_calls += 1
+		return _Resp(_envelope(REGISTERS))
+	if url.endswith("/intake-form-metadata/get_all_intake_forms"):
+		return _Resp(_envelope(INTAKE_FORMS))
 	if url.endswith("/forbidden"):
 		return _Resp(
 			_envelope(None, status="ERROR", error="Forbidden. Insufficient resource_access roles."), 403
@@ -198,6 +238,10 @@ def _route(url, json=None, **_):
 	if url.endswith("/down"):
 		return _Resp({"detail": "gateway"}, 503)
 	raise AssertionError(f"unexpected url {url}")
+
+
+_route.register_calls = 0
+_route.change_request_tabs = []
 
 
 class TestHttpReadPath(IntegrationTestCase):
@@ -329,6 +373,90 @@ class TestHttpReadPath(IntegrationTestCase):
 	def test_list_farmers_narrows_by_kebele_client_side(self, _post):
 		items, _ = self.client.list_farmers(kebele="Bako 02")
 		self.assertEqual([i.farmer_id for i in items], ["frm-2"])
+
+	# -- search_farmers (DA-272) -------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_passes_text_and_returns_page_metadata(self, _post):
+		page = self.client.search_farmers(
+			search_text="Abebe", filter_by={"woreda": "Bako Tibe", "state": "APPROVED"}, page=2, page_size=10
+		)
+		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1", "frm-2"])
+		self.assertEqual(
+			(page["page"], page["page_size"], page["total"], page["number_of_pages"]), (2, 10, 2, 1)
+		)
+		pag = _route.last_search["request_body"]["pagination_request"]
+		self.assertEqual(pag["search_text"], "Abebe")
+		self.assertEqual((pag["current_page"], pag["page_size"]), (2, 10))
+		self.assertEqual(pag["filter_by"], {"woreda_name": "Bako Tibe", "state": "APPROVED"})
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_clamps_page_size(self, _post):
+		page = self.client.search_farmers(page=0, page_size=5000)
+		self.assertEqual((page["page"], page["page_size"]), (1, 500))
+
+	# -- change requests (DA-272) ------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_change_requests_reads_every_tab_newest_first(self, _post):
+		_route.change_request_tabs = []
+		rows = self.client.get_change_requests("frm-1")
+		self.assertEqual([r["change_request_id"] for r in rows], ["cr-new", "cr-old"])
+		self.assertEqual(len(_route.change_request_tabs), 6)
+		payload = _post.call_args_list[0][1]["json"]["request_body"]["request_payload"]
+		self.assertEqual(payload["subject_register_id"], REGISTER_ID)
+		self.assertEqual(payload["subject_record_id"], "frm-1")
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_change_requests_filters_by_tab_and_status(self, _post):
+		_route.change_request_tabs = []
+		rows = self.client.get_change_requests("frm-1", tab="location", status="pending")
+		self.assertEqual([r["change_request_id"] for r in rows], ["cr-new"])
+		self.assertEqual(_route.change_request_tabs, ["farmer_location_tab"])
+		self.assertEqual(self.client.get_change_requests("frm-1", tab="location", status="APPROVED"), [])
+
+	def test_get_change_requests_rejects_unknown_tab(self):
+		with self.assertRaises(FarmerRegistryClientError):
+			self.client.get_change_requests("frm-1", tab="passport")
+
+	# -- discovered ids (DA-272) -------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_register_and_intake_form_ids_are_discovered_and_cached(self, _post):
+		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+
+		frappe.conf.farmer_registry_ingest = {"data_model": "FARMER_ODK_MODEL"}
+		HTTPFarmerRegistryClient.clear_id_cache()
+		_route.register_calls = 0
+		client = HTTPFarmerRegistryClient()
+		self.assertEqual(client.register_id, REGISTER_ID)
+		self.assertEqual(client.intake_form_id, "the-form")
+		# A second client on the same host reads the cache, not the registry.
+		HTTPFarmerRegistryClient().register_id
+		self.assertEqual(_route.register_calls, 1)
+		HTTPFarmerRegistryClient.clear_id_cache()
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_intake_form_discovery_needs_one_match(self, _post):
+		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+
+		frappe.conf.farmer_registry_ingest = {"data_model": "FARMER_ODK_MODEL"}
+		frappe.conf.farmer_registry_intake_form_contains = "farmer"
+		HTTPFarmerRegistryClient.clear_id_cache()
+		try:
+			with self.assertRaises(FarmerRegistryError) as ctx:
+				HTTPFarmerRegistryClient().intake_form_id
+			self.assertIn("2 form(s) match", str(ctx.exception))
+		finally:
+			frappe.conf.pop("farmer_registry_intake_form_contains", None)
+			HTTPFarmerRegistryClient.clear_id_cache()
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_intake_forms_queries_the_farmer_register(self, _post):
+		forms = self.client.get_intake_forms()
+		self.assertEqual(len(forms), 3)
+		payload = _post.call_args_list[-1][1]["json"]["request_body"]["request_payload"]
+		self.assertEqual(payload, {"register_id": REGISTER_ID})
 
 	# -- plots --------------------------------------------------------------
 
