@@ -148,6 +148,7 @@ permission_query_conditions = {
 	"DA Notification": "da_services.permissions.da_notification_query_conditions",
 	"DA Kebele Assignment": "da_services.permissions.da_kebele_assignment_query_conditions",
 	"DA Profile Change Request": "da_services.permissions.da_profile_change_request_query_conditions",
+	"DA Leave Request": "da_services.permissions.da_leave_request_query_conditions",
 	"DA Farmer Link": "da_services.permissions.da_farmer_link_query_conditions",
 	"DA Farmer Reference": "da_services.permissions.da_farmer_reference_query_conditions",
 }
@@ -159,6 +160,7 @@ has_permission = {
 	"DA Notification": "da_services.permissions.has_da_notification_permission",
 	"DA Kebele Assignment": "da_services.permissions.has_da_kebele_assignment_permission",
 	"DA Profile Change Request": "da_services.permissions.has_da_profile_change_request_permission",
+	"DA Leave Request": "da_services.permissions.has_da_leave_request_permission",
 	"DA Farmer Link": "da_services.permissions.has_da_farmer_link_permission",
 	"DA Farmer Reference": "da_services.permissions.has_da_farmer_reference_permission",
 }
@@ -185,6 +187,10 @@ scheduler_events = {
 			"da_services.services.farmer_updates.process_pending_farmer_updates",
 		],
 	},
+	# Start approved leaves on their first day; end active leaves after their last day.
+	"daily": [
+		"da_services.services.leave.process_leave_schedule",
+	],
 }
 
 # Testing

@@ -105,6 +105,17 @@ def has_da_profile_change_request_permission(doc, ptype: str = "read", user: str
 	return has_da_scoped_permission(doc, ptype, user)
 
 
+def da_leave_request_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Leave Request", user)
+
+
+def has_da_leave_request_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	# Writes go through services/leave.py; Desk/REST stays read-only for everyone in scope.
+	if ptype != "read" and not _is_unrestricted(user or frappe.session.user):
+		return False
+	return has_da_scoped_permission(doc, ptype, user)
+
+
 def da_visit_query_conditions(user: str | None = None) -> str:
 	return da_scoped_query_conditions("DA Visit", user)
 
