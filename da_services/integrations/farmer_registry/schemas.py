@@ -191,6 +191,22 @@ class LivestockItem(BaseModel):
 	system: str = Field("mixed", description="mixed | intensive | extensive")
 
 
+def _check_person_name(v):
+	"""The registry's name rule: letters only, with spaces, apostrophes and hyphens.
+
+	Checked here so a digit in a name is a 400 with the field named, instead of
+	a 502 after the registry has already created a draft.
+	"""
+	if v is None:
+		return None
+	s = str(v).strip()
+	if s == "":
+		return None
+	if not all(ch.isalpha() or ch in " '-" for ch in s):
+		raise ValueError("use letters only (spaces, apostrophes and hyphens allowed)")
+	return s
+
+
 def _norm_gender_value(v):
 	if v is None or v == "":
 		return None
@@ -215,6 +231,11 @@ class HouseholdMemberItem(BaseModel):
 	relationship: str = Field(
 		..., description="spouse | child | parent | sibling | other_relative | non_relative"
 	)
+
+	@field_validator("first_name", "father_name", "grandfather_name", mode="before")
+	@classmethod
+	def _check_names(cls, v):
+		return _check_person_name(v)
 
 	@field_validator("gender", mode="before")
 	@classmethod
@@ -280,6 +301,11 @@ class FarmerRegistrationForm(BaseModel):
 	client_op_id: str | None = Field(
 		None, pattern=r"^[A-Za-z0-9_-]{8,64}$", description="Idempotency key chosen by the client"
 	)
+
+	@field_validator("first_name", "father_name", "grandfather_name", mode="before")
+	@classmethod
+	def _check_names(cls, v):
+		return _check_person_name(v)
 
 	@field_validator("gender", mode="before")
 	@classmethod
