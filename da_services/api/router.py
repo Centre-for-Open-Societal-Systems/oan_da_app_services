@@ -72,6 +72,7 @@ def _register() -> None:
 		assignments,
 		da,
 		dashboard,
+		experts,
 		farmer_links,
 		farmers,
 		farmers_update,
