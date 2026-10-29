@@ -147,6 +147,17 @@ class TestRegistrationForm(IntegrationTestCase):
 class TestRegisterIdempotency(IntegrationTestCase):
 	"""Same client_op_id twice → one DA Integration Event, second call flagged duplicate (review item 3)."""
 
+	def setUp(self):
+		# Ingest-path form; a site switched to intake must not change this test.
+		self._saved_mode = frappe.conf.get("farmer_registry_register_mode")
+		frappe.conf.farmer_registry_register_mode = "ingest"
+
+	def tearDown(self):
+		if self._saved_mode is None:
+			frappe.conf.pop("farmer_registry_register_mode", None)
+		else:
+			frappe.conf.farmer_registry_register_mode = self._saved_mode
+
 	def test_duplicate_submission_returns_first_event(self):
 		import uuid
 		from unittest.mock import patch
