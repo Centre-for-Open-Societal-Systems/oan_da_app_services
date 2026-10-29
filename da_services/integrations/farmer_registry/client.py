@@ -266,6 +266,11 @@ class FarmerRegistryClient(ABC):
 		"""Read a submission back (draft_status, approval_status, section_payloads)."""
 		pass
 
+	@abstractmethod
+	def delete_intake_submission(self, submission_id: str) -> bool:
+		"""Delete a draft submission the DA side gave up on. False when it no longer exists."""
+		pass
+
 
 def get_farmer_registry_client() -> FarmerRegistryClient:
 	"""Factory: returns the configured Farmer Registry client.

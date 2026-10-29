@@ -231,6 +231,11 @@ def _route(url, json=None, **_):
 		return _Resp(_envelope(REGISTERS))
 	if url.endswith("/intake-form-metadata/get_all_intake_forms"):
 		return _Resp(_envelope(INTAKE_FORMS))
+	if url.endswith("/intake-form-data/delete_intake_form_submission"):
+		sid = json["request_body"]["request_payload"]["submission_id"]
+		if sid == "gone":
+			return _Resp(_envelope(None, status="ERROR", error=f"INTAKE_FORM_NOT_FOUND: {sid}"))
+		return _Resp(_envelope({"submission_id": sid}))
 	if url.endswith("/forbidden"):
 		return _Resp(
 			_envelope(None, status="ERROR", error="Forbidden. Insufficient resource_access roles."), 403
@@ -467,6 +472,13 @@ class TestHttpReadPath(IntegrationTestCase):
 		finally:
 			frappe.conf.pop("farmer_registry_intake_form_contains", None)
 			HTTPFarmerRegistryClient.clear_id_cache()
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_delete_intake_submission(self, _post):
+		self.assertTrue(self.client.delete_intake_submission("draft-1"))
+		self.assertFalse(self.client.delete_intake_submission("gone"))
+		payload = _post.call_args_list[0][1]["json"]["request_body"]["request_payload"]
+		self.assertEqual(payload, {"submission_id": "draft-1"})
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_get_intake_forms_queries_the_farmer_register(self, _post):

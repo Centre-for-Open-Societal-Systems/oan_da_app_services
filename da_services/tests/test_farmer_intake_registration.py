@@ -14,7 +14,9 @@ from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
 from da_services.integrations.farmer_registry import intake
+from da_services.integrations.farmer_registry.client import FarmerRegistryServerError
 from da_services.integrations.farmer_registry.mock import MockFarmerRegistryClient
+from da_services.services import constants as C
 
 FORM = {
 	"first_name": "Abebe",
@@ -256,7 +258,8 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 			frappe.db.count("DA Integration Event", {"event_type": "Farmer Registration"}), before
 		)
 
-	def test_rejected_section_fails_the_event_and_keeps_the_draft(self):
+	def test_rejected_section_fails_the_event_and_deletes_the_draft(self):
+		"""The half-filled draft would show up as a second farmer to registry staff; it is removed."""
 		client = MockFarmerRegistryClient()
 		real_save = client.save_intake_section
 		client.save_intake_section = lambda s: (
@@ -274,8 +277,67 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 			as_dict=True,
 		)
 		self.assertEqual(event.status, "Failed")
-		self.assertEqual(event.last_error, "oan_farmer_phones: Phone Number: bad")
 		self.assertTrue(event.external_reference.startswith("mock-sub-"))
+		self.assertEqual(
+			event.last_error,
+			f"oan_farmer_phones: Phone Number: bad (draft {event.external_reference} deleted)",
+		)
+		self.assertEqual(client.deleted_submissions, {event.external_reference})
+
+	def test_draft_delete_failure_is_noted_not_raised(self):
+		client = MockFarmerRegistryClient()
+		real_save = client.save_intake_section
+		client.save_intake_section = lambda s: (
+			{"success": False, "status": "ERROR", "error_code": "V", "error_message": "bad"}
+			if s["section_id"] == "oan_farmer_phones"
+			else real_save(s)
+		)
+
+		def boom(_id):
+			raise FarmerRegistryServerError("registry down")
+
+		client.delete_intake_submission = boom
+		result = self._register(FORM, client)
+		self.assertFalse(result["success"])
+		last_error = frappe.db.get_value("DA Integration Event", result["event_id"], "last_error")
+		self.assertIn("kept: registry down", last_error)
+
+	def test_registration_details_route(self):
+		from types import SimpleNamespace
+
+		from da_services.api.v1 import farmers as api
+
+		client = MockFarmerRegistryClient()
+		submitted = self._register(FORM, client)
+		admin = SimpleNamespace(unrestricted=True, has_any_role=lambda *r: False)
+		with (
+			patch.object(api, "require_roles", return_value=admin),
+			patch("da_services.services.farmers.get_farmer_registry_client", return_value=client),
+		):
+			out = api.get_registration(submitted["submission_id"])
+			self.assertEqual(out["status"], "success", out)
+			data = out["data"]
+			self.assertEqual(data["status"], "PENDING_APPROVAL")
+			self.assertEqual(data["record_name"], "Abebe Tesfaye")
+			self.assertEqual(data["event"]["event_id"], submitted["event_id"])
+			self.assertEqual(data["event"]["status"], "Completed")
+			self.assertEqual(
+				[s["section_id"] for s in data["sections"]], ["oan_farmer_name", "oan_farmer_phones"]
+			)
+			self.assertNotIn("search_text", data["sections"][0]["records"][0])
+			self.assertEqual(data["sections"][1]["records"][0]["phone_number"], "911234567")
+
+			missing = api.get_registration("not-a-mock-submission")
+			self.assertEqual((missing["status"], missing["code"]), ("error", "NOT_FOUND"))
+
+		# A DA sees only their own submissions; an unknown one is 404, not a registry call.
+		da = SimpleNamespace(unrestricted=False, has_any_role=lambda *r: C.ROLE_DA in r)
+		with (
+			patch.object(api, "require_roles", return_value=da),
+			patch("da_services.services.farmers.get_farmer_registry_client", return_value=client),
+		):
+			not_ours = api.get_registration("mock-sub-someone-else")
+			self.assertEqual((not_ours["status"], not_ours["code"]), ("error", "NOT_FOUND"))
 
 	def test_route_returns_502_with_failed_section(self):
 		from da_services.api.v1 import farmers as api

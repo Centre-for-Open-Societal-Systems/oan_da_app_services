@@ -170,6 +170,72 @@ def change_request_to_dict(row: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+# Registry bookkeeping on every intake record row; not useful to a DA screen.
+_RECORD_NOISE = frozenset(
+	{
+		"search_text",
+		"record_status_reason",
+		"application_reference",
+		"created_by",
+		"created_at",
+		"last_approved_at",
+		"last_approved_by",
+		"record_image_document_id",
+		"link_foundational_id",
+	}
+)
+
+
+def registration_status(submission: dict[str, Any]) -> str:
+	"""DRAFT | PENDING_APPROVAL | APPROVED | REJECTED from the registry's two status fields."""
+	approval = str(submission.get("approval_status") or "").upper()
+	if approval in ("APPROVED", "REJECTED"):
+		return approval
+	if str(submission.get("draft_status") or "").upper() == "FINAL":
+		return "PENDING_APPROVAL"
+	return "DRAFT"
+
+
+def registration_to_dict(submission: dict[str, Any]) -> dict[str, Any]:
+	"""Map get_intake_form_submission -> the DA registration view (DA-272).
+
+	Keeps the submission header, and every saved section with its rows minus
+	the registry's bookkeeping columns.
+	"""
+	sections = []
+	for section in submission.get("section_payloads") or []:
+		if not isinstance(section, dict):
+			continue
+		sections.append(
+			{
+				"section_id": section.get("section_id"),
+				"section_register_id": section.get("section_register_id"),
+				"is_list": bool(section.get("is_list")),
+				"records": [
+					{k: v for k, v in rec.items() if k not in _RECORD_NOISE}
+					for rec in (section.get("records") or [])
+					if isinstance(rec, dict)
+				],
+				"documents": list(section.get("documents") or []),
+			}
+		)
+	return {
+		"submission_id": submission.get("submission_id"),
+		"application_reference": submission.get("application_reference"),
+		"record_name": submission.get("record_name"),
+		"status": registration_status(submission),
+		"draft_status": submission.get("draft_status"),
+		"approval_status": submission.get("approval_status"),
+		"form_id": submission.get("form_id"),
+		"register_id": submission.get("register_id"),
+		"created_by": submission.get("created_by"),
+		"finalized_at": submission.get("finalized_at"),
+		"approved_by": submission.get("approved_by"),
+		"approved_at": submission.get("approved_at"),
+		"sections": sections,
+	}
+
+
 def list_item_to_dict(item: FarmerListItem) -> dict[str, Any]:
 	"""Map a FarmerListItem -> the same keys the cached /farmers rows carry."""
 	return {

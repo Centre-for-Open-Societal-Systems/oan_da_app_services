@@ -8,6 +8,7 @@ GET /api/v1/da-services/farmers/{id}/plots
 GET /api/v1/da-services/farmers/{id}/change-requests   (DA-272)
 POST /api/v1/da-services/farmers
 POST /api/v1/da-services/farmers/registrations/documents
+GET /api/v1/da-services/farmers/registrations/{submission_id}   (DA-272)
 
 DA-39: Adds pending action state (system-derived chip) to farmer list.
 
@@ -586,6 +587,42 @@ def register_farmer():
 			"duplicate": bool(result.get("duplicate")),
 		},
 	)
+
+
+@route(
+	"/farmers/registrations/<submission_id>",
+	methods=("GET",),
+	summary="Read a farmer registration back from the registry",
+)
+@frappe.whitelist()
+@handle_api_errors
+def get_registration(submission_id: str):
+	"""Everything the registry holds for one registration (DA-272).
+
+	Use the ``submission_id`` returned by POST /farmers. Until registry staff
+	approve it the farmer exists only here, not in /farmers or /profile.
+
+	Returns:
+	    {"submission_id", "application_reference", "record_name",
+	     "status": DRAFT | PENDING_APPROVAL | APPROVED | REJECTED,
+	     "draft_status", "approval_status", "finalized_at", "approved_by", "approved_at",
+	     "sections": [{"section_id", "section_register_id", "is_list", "records": [...], "documents": [...]}],
+	     "event": {"event_id", "status", "last_error", "submitted_by", "submitted_at"} | null}
+
+	Admin reads any submission; other roles only ones made through DA
+	Services, and a DA only their own. 404 when unknown.
+	"""
+	ctx = require_roles(*READ_ROLES)
+	if not submission_id:
+		frappe.throw(_("submission_id is required."), frappe.ValidationError)
+	try:
+		data = farmers.get_registration(submission_id, ctx)
+	except FarmerRegistryClientError as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except FarmerRegistryServerError:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_REGISTRY_UNAVAILABLE), "SERVICE_UNAVAILABLE")
+	return success_response(data=data)
 
 
 @route(
