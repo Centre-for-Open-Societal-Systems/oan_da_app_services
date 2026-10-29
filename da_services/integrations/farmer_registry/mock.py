@@ -529,9 +529,59 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 		}
 
 	def get_intake_submission(self, submission_id: str) -> dict | None:
-		if not submission_id.startswith("mock-sub-"):
+		if not submission_id.startswith("mock-sub-") or submission_id in self.deleted_submissions:
 			return None
-		return {"submission_id": submission_id, "draft_status": "FINAL", "approval_status": "PENDING"}
+		return {
+			"submission_id": submission_id,
+			"application_reference": "2026OCT29-000001",
+			"record_name": "Abebe Tesfaye",
+			"form_id": MOCK_INTAKE_FORM_ID,
+			"register_id": MOCK_INTAKE_REGISTERS["Farmer"],
+			"draft_status": "FINAL",
+			"approval_status": "PENDING",
+			"finalized_at": "2026-10-29T15:04:59",
+			"approved_by": None,
+			"approved_at": None,
+			"section_payloads": [
+				{
+					"section_id": "oan_farmer_name",
+					"section_register_id": MOCK_INTAKE_REGISTERS["Farmer"],
+					"is_list": False,
+					"records": [
+						{
+							"internal_record_id": "mock-farmer-row",
+							"functional_record_id": None,
+							"record_name": "Abebe Tesfaye",
+							"first_name": "Abebe",
+							"middle_name": "Kebede",
+							"last_name": "Tesfaye",
+							"search_text": "Abebe Kebede Tesfaye",
+							"created_by": "Admin User",
+						}
+					],
+					"documents": [],
+				},
+				{
+					"section_id": "oan_farmer_phones",
+					"section_register_id": MOCK_INTAKE_REGISTERS["FarmerPhone"],
+					"is_list": True,
+					"records": [{"internal_record_id": "mock-phone-row", "phone_number": "911234567"}],
+					"documents": [],
+				},
+			],
+		}
+
+	@property
+	def deleted_submissions(self) -> set:
+		if not hasattr(self, "_deleted_submissions"):
+			self._deleted_submissions = set()
+		return self._deleted_submissions
+
+	def delete_intake_submission(self, submission_id: str) -> bool:
+		if not submission_id.startswith("mock-sub-") or submission_id in self.deleted_submissions:
+			return False
+		self.deleted_submissions.add(submission_id)
+		return True
 
 	def get_ingest_status(self, correlation_id: str) -> list[dict]:
 		"""Mock ingestion status: report a single PROCESSED row."""

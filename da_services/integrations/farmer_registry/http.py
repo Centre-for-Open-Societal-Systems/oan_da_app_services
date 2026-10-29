@@ -898,3 +898,16 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 				return None
 			self._reject(res, "read intake submission")
 		return dict(res.payload or {})
+
+	def delete_intake_submission(self, submission_id: str) -> bool:
+		"""POST /intake-form-data/delete_intake_form_submission; False when already gone."""
+		res = self._staff_post(
+			"/intake-form-data/delete_intake_form_submission",
+			{"submission_id": submission_id},
+			action="delete intake submission",
+		)
+		if not res.ok:
+			if res.not_found:
+				return False
+			self._reject(res, "delete intake submission")
+		return True

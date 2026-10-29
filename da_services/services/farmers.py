@@ -21,6 +21,7 @@ from da_services.integrations.farmer_registry.mapper import (
 	list_item_to_dict,
 	reference_dict_to_profile,
 	registration_message_id,
+	registration_to_dict,
 )
 from da_services.services import constants as C
 from da_services.services.pending_actions import derive_pending_actions_batch
@@ -1069,7 +1070,8 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 			result = client.register_farmer(payload)
 	except FarmerRegistryClientError as exc:
 		# 4xx: the request was wrong (auth, roles, payload). Not retryable.
-		_record_registration_failure(event, str(exc))
+		note = _discard_failed_draft(client, event.get("external_reference")) if mode == "intake" else ""
+		_record_registration_failure(event, f"{exc!s}{note}")
 		frappe.throw(
 			_("Farmer Registry rejected the registration: {0}").format(exc),
 			frappe.ValidationError,
@@ -1089,7 +1091,13 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 	else:
 		failed_section = result.get("failed_section")
 		message = result.get("error_message") or "Registration rejected"
-		_record_registration_failure(event, f"{failed_section}: {message}" if failed_section else message)
+		# A section the registry rejected leaves a half-filled draft behind, which
+		# registry staff would see as a second "farmer". Remove it; the event keeps
+		# its id for diagnosis.
+		note = _discard_failed_draft(client, result.get("submission_id")) if mode == "intake" else ""
+		_record_registration_failure(
+			event, f"{failed_section}: {message}{note}" if failed_section else f"{message}{note}"
+		)
 		return {
 			"success": False,
 			"message_id": message_id,
@@ -1114,6 +1122,60 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 		"error_message": result.get("error_message"),
 		"duplicate": False,
 	}
+
+
+def _discard_failed_draft(client, submission_id: str | None) -> str:
+	"""Delete the registry draft of a failed intake registration; returns a note for last_error."""
+	if not submission_id:
+		return ""
+	try:
+		deleted = client.delete_intake_submission(submission_id)
+	except Exception as exc:
+		frappe.log_error(
+			title="Farmer registration draft not deleted",
+			message=f"{submission_id}: {exc!s}\n{frappe.get_traceback()}",
+		)
+		return f" (draft {submission_id} kept: {exc!s})"
+	return f" (draft {submission_id} {'deleted' if deleted else 'already gone'})"
+
+
+def get_registration(submission_id: str, ctx: ScopeContext) -> dict:
+	"""A registration as the registry holds it right now (DA-272).
+
+	Before approval the farmer exists only as an intake submission, so the
+	profile / search routes cannot show it; this reads the submission back
+	with every saved section. Restricted callers see only submissions made
+	through DA Services, and a DA only their own.
+	"""
+	event = frappe.db.get_value(
+		"DA Integration Event",
+		{"event_type": "Farmer Registration", "external_reference": submission_id},
+		["name", "status", "last_error", "owner", "creation"],
+		as_dict=True,
+	)
+	if not ctx.unrestricted:
+		if not event:
+			frappe.throw(_("Registration {0} not found.").format(submission_id), frappe.DoesNotExistError)
+		if ctx.has_any_role(C.ROLE_DA) and event.owner != frappe.session.user:
+			frappe.throw(_("Registration is not yours."), frappe.PermissionError)
+
+	submission = get_farmer_registry_client().get_intake_submission(submission_id)
+	if not submission:
+		frappe.throw(_("Registration {0} not found.").format(submission_id), frappe.DoesNotExistError)
+
+	out = registration_to_dict(submission)
+	out["event"] = (
+		{
+			"event_id": event.name,
+			"status": event.status,
+			"last_error": event.last_error,
+			"submitted_by": event.owner,
+			"submitted_at": event.creation,
+		}
+		if event
+		else None
+	)
+	return out
 
 
 ALLOWED_DOCUMENT_TYPES = {"application/pdf", "image/jpeg", "image/png"}
