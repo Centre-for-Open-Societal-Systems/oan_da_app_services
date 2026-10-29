@@ -206,11 +206,19 @@ def search_farmers(
 		"page": int(result.get("page") or page),
 		"page_size": int(result.get("page_size") or page_size),
 		"number_of_pages": int(result.get("number_of_pages") or 0),
+		"filtered_client_side": bool(result.get("filtered_client_side")),
 	}
 
 
 def _empty_search_page(page: int, page_size: int) -> dict:
-	return {"farmers": [], "total": 0, "page": page, "page_size": page_size, "number_of_pages": 0}
+	return {
+		"farmers": [],
+		"total": 0,
+		"page": page,
+		"page_size": page_size,
+		"number_of_pages": 0,
+		"filtered_client_side": False,
+	}
 
 
 def _area_names(codes: list) -> list[str]:
