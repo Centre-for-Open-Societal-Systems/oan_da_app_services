@@ -288,7 +288,9 @@ class FarmerRegistrationForm(BaseModel):
 	is_psnp_user: bool | None = None
 	household: HouseholdInfo | None = None
 	identity_document_id: str | None = Field(
-		None, max_length=100, description="document_id from POST /farmers/registrations/documents"
+		None,
+		pattern=r"^[A-Za-z0-9-]{8,100}$",
+		description="document_id from POST /farmers/registrations/documents (a registry uuid)",
 	)
 	identity_document_type: str = Field(
 		"fayda", max_length=60, description="fayda | kebele_woreda_id | passport | ..."

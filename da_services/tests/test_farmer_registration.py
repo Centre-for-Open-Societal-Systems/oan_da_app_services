@@ -129,6 +129,17 @@ class TestRegistrationForm(IntegrationTestCase):
 		with self.assertRaises(ValidationError):
 			self._form(household={"size": 2, "members": [member]})
 
+	def test_identity_document_id_must_look_like_a_registry_id(self):
+		"""A typo'd or empty id reached the registry as DOCUMENT_NOT_FOUND; reject it at the boundary."""
+		from pydantic import ValidationError
+
+		for bad in ("", "1234", "<DOC_ID>", "991729cf 079e"):
+			with self.assertRaises(ValidationError, msg=bad):
+				self._form(identity_document_id=bad)
+		ok = self._form(identity_document_id="991729cf-079e-437c-976b-7aba0e00126f")
+		self.assertEqual(ok.identity_document_id, "991729cf-079e-437c-976b-7aba0e00126f")
+		self.assertIsNone(self._form(identity_document_id=None).identity_document_id)
+
 	def test_rejects_bad_phone_kebele_and_location(self):
 		from pydantic import ValidationError
 
