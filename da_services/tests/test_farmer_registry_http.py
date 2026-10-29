@@ -372,16 +372,33 @@ class TestHttpReadPath(IntegrationTestCase):
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_search_farmers_passes_text_and_returns_page_metadata(self, _post):
 		page = self.client.search_farmers(
-			search_text="Abebe", filter_by={"woreda": "Bako Tibe", "state": "APPROVED"}, page=2, page_size=10
+			search_text="Abebe", filter_by={"state": "APPROVED"}, page=2, page_size=10
 		)
 		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1", "frm-2"])
 		self.assertEqual(
 			(page["page"], page["page_size"], page["total"], page["number_of_pages"]), (2, 10, 2, 1)
 		)
+		self.assertFalse(page["filtered_client_side"])
 		pag = _route.last_search["request_body"]["pagination_request"]
 		self.assertEqual(pag["search_text"], "Abebe")
 		self.assertEqual((pag["current_page"], pag["page_size"]), (2, 10))
-		self.assertEqual(pag["filter_by"], {"woreda_name": "Bako Tibe", "state": "APPROVED"})
+		self.assertEqual(pag["filter_by"], {"state": "APPROVED"})
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_reapplies_area_filters_and_fails_closed(self, _post):
+		"""The registry may ignore filter_by: rows outside the asked Woreda, or with no Woreda, are dropped."""
+		page = self.client.search_farmers(filter_by={"woreda": "Bako Tibe"})
+		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1"])
+		self.assertTrue(page["filtered_client_side"])
+		self.assertEqual(
+			_route.last_search["request_body"]["pagination_request"]["filter_by"],
+			{"woreda_name": "Bako Tibe"},
+		)
+		self.assertEqual(self.client.search_farmers(filter_by={"woreda": "Nowhere"})["items"], [])
+		self.assertEqual(
+			[i.farmer_id for i in self.client.search_farmers(filter_by={"kebele": "Bako 02"})["items"]],
+			["frm-2"],
+		)
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_search_farmers_clamps_page_size(self, _post):

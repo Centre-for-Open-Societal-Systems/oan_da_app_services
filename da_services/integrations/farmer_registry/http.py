@@ -567,9 +567,18 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			self._reject(res, "search farmers")
 
 		items = [search_row_to_list_item(row) for row in rows]
-		kebele_name = filters.get("kebele_name")
-		if kebele_name and any(i.kebele for i in items):
-			items = [i for i in items if not i.kebele or i.kebele == kebele_name]
+		# The dev registry (29 Oct 2026) returns the same rows whatever filter_by
+		# says, and kebele_name is not whitelisted anyway. Area filters are the
+		# caller's scope, so they are re-applied here and fail closed: a row that
+		# names another area, or no area at all, is dropped.
+		narrowed = False
+		for key, attr in (("woreda_name", "woreda"), ("kebele_name", "kebele")):
+			wanted = filters.get(key)
+			if not wanted:
+				continue
+			kept = [i for i in items if getattr(i, attr) == wanted]
+			narrowed = narrowed or len(kept) != len(items)
+			items = kept
 
 		total = res.pagination.get("number_of_items")
 		pages = res.pagination.get("number_of_pages")
@@ -579,6 +588,9 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			"page_size": page_size,
 			"total": int(total) if total is not None else len(items),
 			"number_of_pages": int(pages) if pages else (1 if items else 0),
+			# True when rows were dropped here; total / number_of_pages are then
+			# the registry's unfiltered figures.
+			"filtered_client_side": narrowed,
 		}
 
 	def get_change_requests(

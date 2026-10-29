@@ -175,6 +175,9 @@ def list_farmers(
 					"page": found["page"],
 					"page_size": found["page_size"],
 					"number_of_pages": found["number_of_pages"],
+					# True when scope was applied here because the registry ignored the
+					# filter; total / number_of_pages are then the registry's figures.
+					"filtered_client_side": found["filtered_client_side"],
 				},
 				"source": "registry",
 			}
