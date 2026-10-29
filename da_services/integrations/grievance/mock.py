@@ -277,7 +277,9 @@ class MockGrievanceClient(GrievanceClient):
 			filtered = [r for r in filtered if r.get("subcategory") in types]
 		if administrative_area:
 			areas = _choices(administrative_area)
-			filtered = [r for r in filtered if r.get("woreda") in areas or r.get("administrative_area") in areas]
+			filtered = [
+				r for r in filtered if r.get("woreda") in areas or r.get("administrative_area") in areas
+			]
 		if from_date:
 			filtered = [r for r in filtered if (r.get("created_at") or "") >= str(from_date)]
 		if to_date:

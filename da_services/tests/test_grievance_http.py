@@ -408,7 +408,13 @@ class TestHttpClient(unittest.TestCase):
 		cards = {
 			"cards": [
 				{"status": "All", "label": "All", "count": 4, "order": 1, "is_terminal": False},
-				{"status": "In Progress", "label": "In Progress", "count": 2, "order": 2, "is_terminal": False},
+				{
+					"status": "In Progress",
+					"label": "In Progress",
+					"count": 2,
+					"order": 2,
+					"is_terminal": False,
+				},
 			]
 		}
 		request.return_value = _Response(
