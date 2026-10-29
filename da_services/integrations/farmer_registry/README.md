@@ -45,6 +45,31 @@ Responses come back as `{"response_header": {"response_status": "SUCCESS|ERROR",
 | `register_farmer(payload)` | `input-mechanism-data/ingest-data?data_model&register_id&intake_form_id` | Async: returns a `correlation_id`; the farmer lands in the Intake Form and gets an FR-id after Woreda approval. |
 | `get_ingest_status(correlation_id)` | `ingestion-data/search_in_ingestion_data` | Pipeline rows for a submission. |
 
+### Registration through the intake form (`farmer_registry_register_mode: "intake"`)
+
+Since the 26 Oct 2026 registry deploy, `ingest-data` on `FARMER_ODK_MODEL` needs
+an RS256 partner signature, so `STAFF_AUTHENTICATED` is rejected (401, surfaced
+as `SYS-ERR-001`). The intake mode registers the way the staff portal does
+(`intake.py`):
+
+1. The frontend uploads the identity document: `POST /farmers/registrations/documents`
+   -> registry `documents/upload_documents` -> `document_id`.
+2. `POST /farmers` with `identity_document_id`. The service reads the form layout
+   (`intake-form-metadata/render_intake_form` + `register-metadata/get_all_registers`),
+   the code lists (Master Data `attributes/get_attribute_values`) and checks the
+   kebele (Master Data `geo/*`); all cached.
+3. Each section is saved into one draft (`intake-form-data/save_intake_form_submission`,
+   Household first), then `finalize_intake_form_submission` sends it for approval.
+   The DA Integration Event keeps the registry `submission_id` from the first save.
+
+The intake form needs more than ingest: `grandfather_name` (registry last name),
+`gender`, `date_of_birth`, `marital_status`, `education_level`, `kebele` as a
+Master Data id (`ET04080101`) and `identity_document_id`. The farmer is the
+household head; `household.size` must equal 1 + `household.members`. Missing or
+unknown values are listed together in one 400. A registry validation message
+(e.g. a household rule) comes back as a 502 `FARMER_REGISTRY_REJECTED` with the
+section that failed.
+
 Auth: a Keycloak **client-credentials** token (service account) cached per worker
 behind a lock, plus the double-submit CSRF pair (`X-CSRF-Token` header == cookie)
 the staff middleware requires on POST. HTTP 4xx raises

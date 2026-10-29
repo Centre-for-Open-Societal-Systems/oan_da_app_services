@@ -191,12 +191,55 @@ class LivestockItem(BaseModel):
 	system: str = Field("mixed", description="mixed | intensive | extensive")
 
 
+def _norm_gender_value(v):
+	if v is None or v == "":
+		return None
+	s = str(v).strip().lower()
+	if s in ("m", "male"):
+		return "male"
+	if s in ("f", "female"):
+		return "female"
+	if s == "other":
+		return "other"
+	raise ValueError("gender must be male, female or other")
+
+
+class HouseholdMemberItem(BaseModel):
+	"""A household member other than the farmer (the farmer is always the head)."""
+
+	first_name: str = Field(..., min_length=1, max_length=100)
+	father_name: str | None = Field(None, max_length=100)
+	grandfather_name: str = Field(..., min_length=1, max_length=100)
+	gender: str = Field(..., description="male | female | other")
+	date_of_birth: date
+	relationship: str = Field(
+		..., description="spouse | child | parent | sibling | other_relative | non_relative"
+	)
+
+	@field_validator("gender", mode="before")
+	@classmethod
+	def _norm_gender(cls, v):
+		return _norm_gender_value(v)
+
+
+class HouseholdInfo(BaseModel):
+	"""The farmer's household. size counts the farmer, so size == 1 + len(members)."""
+
+	size: int | None = Field(None, ge=1, le=100)
+	number_of_children: int | None = Field(None, ge=0, le=100)
+	other_land_owner: bool = False
+	members: list[HouseholdMemberItem] = Field(default_factory=list, max_length=99)
+
+
 class FarmerRegistrationForm(BaseModel):
 	"""Body of POST /farmers.
 
 	Mirrors the fields the DA Register Farmer form collects. Unknown keys are
 	ignored so the frontend can send UI-only fields; known keys are typed and
 	range-checked here so the service and mapper never see malformed input.
+
+	The intake form path (farmer_registry_register_mode = "intake") needs more
+	than ingest did; intake.py checks those fields and names what is missing.
 	"""
 
 	model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
@@ -209,9 +252,26 @@ class FarmerRegistrationForm(BaseModel):
 	phone: str | None = Field(None, pattern=r"^\+?\d{9,15}$")
 	region: str | None = Field(None, max_length=20)
 	woreda: str | None = Field(None, pattern=r"^\d{1,12}$", description="Master Data woreda code")
-	kebele: str | None = Field(None, pattern=r"^\d{1,15}$", description="Master Data kebele code")
-	national_id: str | None = Field(None, pattern=r"^\d{10,20}$", description="Fayda / national id")
+	kebele: str | None = Field(
+		None,
+		pattern=r"^(ET)?\d{1,15}$",
+		description="Kebele code: Master Data id (ET04080101) for intake, numeric P-code for ingest",
+	)
+	national_id: str | None = Field(None, pattern=r"^\d{10,20}$", description="Fayda FAN (16) or FIN (12)")
+	fayda_rid: str | None = Field(None, pattern=r"^\d{29}$", description="Fayda registration slip id")
 	location: str | None = Field(None, description='"lat lon [alt [accuracy]]"')
+	marital_status: str | None = Field(None, max_length=40, description="single | married | widowed | ...")
+	education_level: str | None = Field(None, max_length=40, description="illiterate | primary | ...")
+	income_sources: list[str] = Field(default_factory=list, max_length=10)
+	disabled: bool = False
+	is_psnp_user: bool | None = None
+	household: HouseholdInfo | None = None
+	identity_document_id: str | None = Field(
+		None, max_length=100, description="document_id from POST /farmers/registrations/documents"
+	)
+	identity_document_type: str = Field(
+		"fayda", max_length=60, description="fayda | kebele_woreda_id | passport | ..."
+	)
 	lands: list[LandItem] = Field(default_factory=list, max_length=50)
 	crops: list[CropItem] = Field(default_factory=list, max_length=50)
 	livestock: list[LivestockItem] = Field(default_factory=list, max_length=50)
@@ -224,16 +284,7 @@ class FarmerRegistrationForm(BaseModel):
 	@field_validator("gender", mode="before")
 	@classmethod
 	def _norm_gender(cls, v):
-		if v is None or v == "":
-			return None
-		s = str(v).strip().lower()
-		if s in ("m", "male"):
-			return "male"
-		if s in ("f", "female"):
-			return "female"
-		if s == "other":
-			return "other"
-		raise ValueError("gender must be male, female or other")
+		return _norm_gender_value(v)
 
 	@field_validator("location")
 	@classmethod

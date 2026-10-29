@@ -4,10 +4,61 @@ Returns fixture data matching the OpenG2P Farmer Registry schema. Safe to use
 without a live Farmer Registry instance.
 """
 
+import uuid
 from datetime import date, datetime
 
 from .client import FarmerRegistryClient, FarmerRegistryError
 from .schemas import Farmer, FarmerListItem, Plot
+
+# Intake form fixtures, trimmed from the dev registry and Master Data (28 Oct 2026).
+MOCK_INTAKE_FORM_ID = "mock-intake-form"
+MOCK_INTAKE_REGISTERS = {
+	"Farmer": "reg-farmer",
+	"FarmerPhone": "reg-phone",
+	"Household": "reg-household",
+	"HouseholdMember": "reg-member",
+	"Land": "reg-land",
+	"Crop": "reg-crop",
+	"FarmInputs": "reg-inputs",
+	"Livestock": "reg-livestock",
+}
+MOCK_CODE_LISTS = {
+	"GENDER": [("FEMALE", "Female"), ("MALE", "Male"), ("OTHER", "Other")],
+	"MARITAL_STATUS": [
+		("SINGLE", "Single"),
+		("MARRIED", "Married"),
+		("WIDOWED", "Widowed"),
+		("DIVORCED", "Divorced"),
+	],
+	"EDUCATION_LEVEL": [
+		("ILLITERATE", "Illiterate"),
+		("CAN_READ_AND_WRITE", "Can read and write"),
+		("PRIMARY", "Primary"),
+		("HIGHER_EDUCATION", "Higher education"),
+	],
+	"SOURCE_OF_INCOME": [
+		("SOI_CROP_PRODUCTION", "Crop Production"),
+		("SOI_LIVESTOCK_PRODUCTION", "Livestock Production"),
+		("SOI_GOVERNMENT_NGO_SUPPORT", "Government / NGO Support"),
+		("SOI_OTHERS", "Others"),
+	],
+	"RELATIONSHIP_TO_HEAD": [("SELF", "Self (head)"), ("SPOUSE", "Spouse"), ("CHILD", "Child")],
+	"IDENTITY_DOCUMENT_TYPE": [("IDDOC_FAYDA", "Fayda credential"), ("IDDOC_PASSPORT", "Ethiopian passport")],
+	"LAND_OWNERSHIP_TYPE": [("OWNER", "Owner"), ("TENANT", "Tenant"), ("CROP_SHARE", "Crop share")],
+	"CROP_COMMODITY": [("CROP_TEFF", "Teff for testing"), ("CROP_MAIZE", "Maize")],
+	"CROP_SEASON": [("SEASON_MEHER", "Meher (main rains)"), ("SEASON_BELG", "Belg (short rains)")],
+	"LIVESTOCK_TYPE": [("LSTK_CATTLE", "CATTLE"), ("LSTK_GOAT", "GOAT")],
+	"LIVESTOCK_SYSTEM": [("MIXED", "Mixed"), ("INDUSTRIAL", "Industrial")],
+}
+MOCK_GEO_LEVELS = ("country", "region", "zone", "woreda", "kebele")
+# level_value_id -> (level_id, name, parent)
+MOCK_PLACES = {
+	"ET04": ("l1", "Oromia", None),
+	"ET0408": ("l2", "Arsi", "ET04"),
+	"ET040801": ("l3", "Merti", "ET0408"),
+	"ET04080101": ("l4", "Abomsa_01", "ET040801"),
+	"ET04080102": ("l4", "Abomsa_02", "ET040801"),
+}
 
 # Mock farmer data matching Farmer Registry schema
 MOCK_FARMERS = {
@@ -260,6 +311,110 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 			"error_code": None,
 			"error_message": None,
 		}
+
+	# -- intake form (shape of the dev farmer_ingestion_intake form, trimmed) ----
+
+	def render_intake_form(self) -> dict:
+		def section(section_id, register_id, order, is_list=False, ui=None):
+			return {
+				"section_id": section_id,
+				"section_register_id": register_id,
+				"section_order": order,
+				"is_list": is_list,
+				"section_ui_schema": ui or {},
+			}
+
+		farmer = MOCK_INTAKE_REGISTERS["Farmer"]
+		documents_ui = {"widgets": [{"widget-data-path": f"{farmer}.identity_document_1"}]}
+		return {
+			"form_id": MOCK_INTAKE_FORM_ID,
+			"register_id": farmer,
+			"tabs": [
+				{
+					"tab_id": "intake",
+					"sections": [
+						section("oan_farmer_name", farmer, 21),
+						section("oan_farmer_phones", MOCK_INTAKE_REGISTERS["FarmerPhone"], 27, True),
+						section("oan_household_information", MOCK_INTAKE_REGISTERS["Household"], 33),
+						section(
+							"household_member_section", MOCK_INTAKE_REGISTERS["HouseholdMember"], 35, True
+						),
+						section("oan_farmer_location", farmer, 40),
+						section("oan_farmer_lands", MOCK_INTAKE_REGISTERS["Land"], 50, True),
+						section("oan_farmer_crops_intake", MOCK_INTAKE_REGISTERS["Crop"], 60, True),
+						section(
+							"oan_farmer_farm_inputs_intake", MOCK_INTAKE_REGISTERS["FarmInputs"], 70, True
+						),
+						section("oan_farmer_livestock_intake", MOCK_INTAKE_REGISTERS["Livestock"], 80, True),
+						section("oan_farmer_documents", farmer, 100, ui=documents_ui),
+					],
+				}
+			],
+		}
+
+	def get_registers(self) -> list[dict]:
+		return [
+			{"register_id": rid, "register_mnemonic": name} for name, rid in MOCK_INTAKE_REGISTERS.items()
+		]
+
+	def get_attribute_values(self, attribute_id: str) -> list[dict]:
+		return [
+			{"value_id": code, "value_code": code, "value_display": display}
+			for code, display in MOCK_CODE_LISTS.get(attribute_id, [])
+		]
+
+	def get_geo_levels(self) -> list[dict]:
+		return [{"level_id": f"l{i}", "level_mnemonic": name} for i, name in enumerate(MOCK_GEO_LEVELS)]
+
+	def get_geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
+		return [
+			{
+				"level_id": level_id,
+				"level_value_id": vid,
+				"level_value_mnemonic": name,
+				"parent_level_value_id": parent,
+			}
+			for vid, (lid, name, parent) in MOCK_PLACES.items()
+			if lid == level_id and parent == parent_level_value_id
+		]
+
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		if not content:
+			raise FarmerRegistryError("Empty document")
+		return f"mock-doc-{uuid.uuid4()}"
+
+	def save_intake_section(self, section: dict) -> dict:
+		if not section.get("section_payload"):
+			return {
+				"success": False,
+				"submission_id": section.get("submission_id"),
+				"status": "ERROR",
+				"error_code": "MOCK-ERR",
+				"error_message": f"{section.get('section_id')}: no records",
+			}
+		return {
+			"success": True,
+			"submission_id": section.get("submission_id") or f"mock-sub-{uuid.uuid4()}",
+			"status": "SUCCESS",
+			"error_code": None,
+			"error_message": None,
+		}
+
+	def finalize_intake_submission(self, submission_id: str) -> dict:
+		return {
+			"success": True,
+			"submission_id": submission_id,
+			"draft_status": "FINAL",
+			"approval_status": "PENDING",
+			"status": "SUCCESS",
+			"error_code": None,
+			"error_message": None,
+		}
+
+	def get_intake_submission(self, submission_id: str) -> dict | None:
+		if not submission_id.startswith("mock-sub-"):
+			return None
+		return {"submission_id": submission_id, "draft_status": "FINAL", "approval_status": "PENDING"}
 
 	def get_ingest_status(self, correlation_id: str) -> list[dict]:
 		"""Mock ingestion status: report a single PROCESSED row."""

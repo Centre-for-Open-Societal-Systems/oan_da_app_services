@@ -30,6 +30,16 @@ def cache_registration_state(state: str | None) -> str:
 	return _REGISTRY_STATE_ALIASES.get(upper, "APPROVED")
 
 
+def registration_message_id(form: dict[str, Any]) -> str:
+	"""Our reference for one registration attempt.
+
+	A client-supplied idempotency key becomes the id, so a retried submission
+	is recognised instead of registering twice.
+	"""
+	op_id = form.get("client_op_id")
+	return f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
+
+
 def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	"""Build the Farmer Registry ingest envelope from a DA registration form.
 
@@ -128,14 +138,10 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	if form.get("farmer_reference_id"):
 		payload["farmer_reference_id"] = form["farmer_reference_id"]
 
-	# A client-supplied idempotency key becomes the message_id, so a retried
-	# submission reaches the registry with the same id instead of a new one.
-	op_id = form.get("client_op_id")
-	message_id = f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
 	# The Staff API wraps this object as {"body": ...}, so these fields are $.body.header.*.
 	return {
 		"header": {
-			"message_id": message_id,
+			"message_id": registration_message_id(form),
 			"sender_id": INGEST_SENDER_ID,
 			"signature": INGEST_STAFF_SIGNATURE,
 		},
