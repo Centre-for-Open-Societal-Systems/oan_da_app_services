@@ -109,6 +109,26 @@ class TestRegistrationForm(IntegrationTestCase):
 
 			FarmerRegistrationForm(**data)
 
+	def test_names_follow_the_registry_letters_only_rule(self):
+		"""The registry rejects "suresh1" after creating a draft; catch it at the boundary instead."""
+		from pydantic import ValidationError
+
+		for bad in ({"first_name": "suresh1"}, {"father_name": "K3bede"}, {"grandfather_name": "Tes@faye"}):
+			with self.assertRaises(ValidationError, msg=bad) as ctx:
+				self._form(**bad)
+			self.assertIn("letters only", str(ctx.exception))
+		ok = self._form(first_name="DA-TEST Abebe", father_name="O'Connor", grandfather_name="Tesfaye Haile")
+		self.assertEqual(ok.first_name, "DA-TEST Abebe")
+		member = {
+			"first_name": "Almaz1",
+			"grandfather_name": "Haile",
+			"gender": "female",
+			"date_of_birth": "1990-01-01",
+			"relationship": "spouse",
+		}
+		with self.assertRaises(ValidationError):
+			self._form(household={"size": 2, "members": [member]})
+
 	def test_rejects_bad_phone_kebele_and_location(self):
 		from pydantic import ValidationError
 
@@ -178,9 +198,16 @@ class TestRegisterRegistryRejection(IntegrationTestCase):
 
 	def setUp(self):
 		frappe.response.pop("http_status_code", None)
+		# These cases exercise the ingest path; a site switched to intake must not change them.
+		self._saved_mode = frappe.conf.get("farmer_registry_register_mode")
+		frappe.conf.farmer_registry_register_mode = "ingest"
 
 	def tearDown(self):
 		frappe.response.pop("http_status_code", None)
+		if self._saved_mode is None:
+			frappe.conf.pop("farmer_registry_register_mode", None)
+		else:
+			frappe.conf.farmer_registry_register_mode = self._saved_mode
 
 	def _client(self, result):
 		from unittest.mock import MagicMock
