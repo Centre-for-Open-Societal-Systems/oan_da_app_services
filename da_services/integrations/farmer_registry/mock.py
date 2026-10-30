@@ -95,6 +95,9 @@ MOCK_CODE_LISTS = {
 	"CROP_SEASON": [("SEASON_MEHER", "Meher (main rains)"), ("SEASON_BELG", "Belg (short rains)")],
 	"LIVESTOCK_TYPE": [("LSTK_CATTLE", "CATTLE"), ("LSTK_GOAT", "GOAT")],
 	"LIVESTOCK_SYSTEM": [("MIXED", "Mixed"), ("INDUSTRIAL", "Industrial")],
+	"FARMER_CLUSTER_ROLE": [("LEAD", "Lead"), ("MEMBER", "Member")],
+	"DISABILITY_DOMAIN": [("VISION", "Vision"), ("MOBILITY", "Mobility")],
+	"DISABILITY_SEVERITY": [("SOME_DIFFICULTY", "Some difficulty"), ("CANNOT_DO_AT_ALL", "Cannot do at all")],
 }
 MOCK_GEO_LEVELS = ("country", "region", "zone", "woreda", "kebele")
 # level_value_id -> (level_id, name, parent)

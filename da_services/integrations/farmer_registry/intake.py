@@ -73,6 +73,9 @@ CODE_LISTS = (
 	"CROP_SEASON",
 	"LIVESTOCK_TYPE",
 	"LIVESTOCK_SYSTEM",
+	"FARMER_CLUSTER_ROLE",
+	"DISABILITY_DOMAIN",
+	"DISABILITY_SEVERITY",
 )
 
 
@@ -285,6 +288,27 @@ def _check_form(form: dict) -> list[str]:
 		)
 	if (form.get("crops") or form.get("livestock")) and not form.get("lands"):
 		problems.append("lands: crops and livestock must belong to a land; add at least one land")
+	# The registry asks what "other" is before it accepts the socio-economic section.
+	if (
+		any(
+			str(s).strip().lower() in ("other", "others", "soi_others")
+			for s in form.get("income_sources") or []
+		)
+		and not (form.get("income_source_other") or "").strip()
+	):
+		problems.append("income_source_other is required when income_sources includes other (say what it is)")
+	# Conditional answers the registry form requires (render_intake_form "require" actions).
+	if form.get("disabled"):
+		for key in ("disability_type", "disability_severity"):
+			if not form.get(key):
+				problems.append(f"{key} is required when disabled is true")
+	membership = form.get("membership") or {}
+	for flag, name in (
+		("is_primary_cooperative_member", "primary_cooperative_name"),
+		("is_cooperative_union_member", "cooperative_union_name"),
+	):
+		if membership.get(flag) and not (membership.get(name) or "").strip():
+			problems.append(f"membership.{name} is required when membership.{flag} is true")
 	return problems
 
 
@@ -341,7 +365,14 @@ def build_intake_sections(
 		"income_sources": [
 			code("SOURCE_OF_INCOME", s, "income_sources") for s in form.get("income_sources") or []
 		],
+		"source_of_income_other": (form.get("income_source_other") or "").strip() or None,
 		"disabled": bool(form.get("disabled")),
+		"disability_type": code("DISABILITY_DOMAIN", form["disability_type"], "disability_type")
+		if form.get("disabled") and form.get("disability_type")
+		else None,
+		"disability_severity": code("DISABILITY_SEVERITY", form["disability_severity"], "disability_severity")
+		if form.get("disabled") and form.get("disability_severity")
+		else None,
 		"is_household_head": True,
 		"is_farmer": True,
 		"has_national_id": bool(form.get("national_id")),
@@ -476,7 +507,16 @@ def build_intake_sections(
 		"is_cooperative_union_member": bool(member_of.get("is_cooperative_union_member")),
 		"cooperative_union_name": member_of.get("cooperative_union_name"),
 		"is_farmer_cluster_member": bool(member_of.get("is_farmer_cluster_member")),
-		"farmer_cluster_role": member_of.get("farmer_cluster_role"),
+		"farmer_cluster_role": code(
+			"FARMER_CLUSTER_ROLE", member_of["farmer_cluster_role"], "membership.farmer_cluster_role"
+		)
+		if member_of.get("farmer_cluster_role")
+		else None,
+		"primary_commodity": code(
+			"CROP_COMMODITY", member_of["primary_commodity"], "membership.primary_commodity"
+		)
+		if member_of.get("primary_commodity")
+		else None,
 	}
 	membership = {k: v for k, v in membership.items() if v is not None}
 

@@ -202,7 +202,10 @@ class MembershipInfo(BaseModel):
 	is_cooperative_union_member: bool = False
 	cooperative_union_name: str | None = Field(None, max_length=140)
 	is_farmer_cluster_member: bool = False
-	farmer_cluster_role: str | None = Field(None, max_length=80)
+	farmer_cluster_role: str | None = Field(
+		None, max_length=80, description="lead | deputy | secretary | accountant | member"
+	)
+	primary_commodity: str | None = Field(None, max_length=80, description="crop name, e.g. teff")
 
 
 def _check_person_name(v):
@@ -298,7 +301,18 @@ class FarmerRegistrationForm(BaseModel):
 	marital_status: str | None = Field(None, max_length=40, description="single | married | widowed | ...")
 	education_level: str | None = Field(None, max_length=40, description="illiterate | primary | ...")
 	income_sources: list[str] = Field(default_factory=list, max_length=10)
+	income_source_other: str | None = Field(
+		None, max_length=140, description='What "other" is; required when income_sources includes other'
+	)
 	disabled: bool = False
+	disability_type: str | None = Field(
+		None, max_length=40, description="vision | hearing | mobility | cognition | self_care | communication"
+	)
+	disability_severity: str | None = Field(
+		None,
+		max_length=40,
+		description="no_difficulty | some_difficulty | a_lot_of_difficulty | cannot_do_at_all",
+	)
 	is_psnp_user: bool | None = None
 	household: HouseholdInfo | None = None
 	membership: MembershipInfo | None = None

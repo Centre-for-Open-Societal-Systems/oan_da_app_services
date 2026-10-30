@@ -75,6 +75,74 @@ class TestIntakeMapping(IntegrationTestCase):
 		self.assertNotIn("oan_farmer_farm_inputs_intake", ids)  # not on the DA form
 		self.assertIn("oan_farmer_documents", ids)
 
+	def test_other_income_source_needs_a_description(self):
+		"""The registry rejects the socio-economic section when "other" has no text (30 Oct 2026)."""
+		with self.assertRaises(intake.IntakeFormError) as ctx:
+			_plan({**FORM, "income_sources": ["crop", "other"]})
+		self.assertTrue(any("income_source_other" in p for p in ctx.exception.problems))
+
+		plan = _plan({**FORM, "income_sources": ["crop", "other"], "income_source_other": "Petty trade"})
+		farmer_row = {s["section_id"]: s for s in plan}["oan_farmer_name"]["section_payload"][0]
+		self.assertEqual(farmer_row["source_of_income_other"], "Petty trade")
+		self.assertIn("SOI_OTHERS", farmer_row["income_sources"])
+
+	def test_conditional_answers_the_registry_form_requires(self):
+		"""disabled needs type + severity; a coop / union member needs its name (render_intake_form rules)."""
+		with self.assertRaises(intake.IntakeFormError) as ctx:
+			_plan(
+				{
+					**FORM,
+					"disabled": True,
+					"membership": {
+						"is_primary_cooperative_member": True,
+						"is_cooperative_union_member": True,
+					},
+				}
+			)
+		problems = " ".join(ctx.exception.problems)
+		for key in (
+			"disability_type",
+			"disability_severity",
+			"primary_cooperative_name",
+			"cooperative_union_name",
+		):
+			self.assertIn(key, problems)
+
+		plan = _plan(
+			{
+				**FORM,
+				"disabled": True,
+				"disability_type": "mobility",
+				"disability_severity": "some_difficulty",
+			}
+		)
+		row = {s["section_id"]: s for s in plan}["oan_farmer_name"]["section_payload"][0]
+		self.assertEqual(
+			(row["disability_type"], row["disability_severity"]), ("MOBILITY", "SOME_DIFFICULTY")
+		)
+		self.assertNotIn(
+			"disability_type", {s["section_id"]: s for s in _plan()}["oan_farmer_name"]["section_payload"][0]
+		)
+
+	def test_cluster_role_and_commodity_are_registry_codes(self):
+		plan = _plan(
+			{
+				**FORM,
+				"membership": {
+					"is_farmer_cluster_member": True,
+					"farmer_cluster_role": "member",
+					"primary_commodity": "teff",
+				},
+			}
+		)
+		row = {s["section_id"]: s for s in plan}["oan_farmer_membership"]["section_payload"][0]
+		self.assertEqual((row["farmer_cluster_role"], row["primary_commodity"]), ("MEMBER", "CROP_TEFF"))
+		with self.assertRaises(intake.IntakeFormError) as ctx:
+			_plan(
+				{**FORM, "membership": {"is_farmer_cluster_member": True, "farmer_cluster_role": "chairman"}}
+			)
+		self.assertTrue(any("farmer_cluster_role" in p for p in ctx.exception.problems))
+
 	def test_membership_is_always_sent_and_defaults_to_no(self):
 		"""The registry refuses to finalize without the three membership answers (30 Oct 2026)."""
 		by_id = {s["section_id"]: s for s in _plan()}
