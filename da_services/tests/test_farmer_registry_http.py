@@ -32,12 +32,12 @@ CONF_KEYS = (
 )
 
 
-def _envelope(payload, *, status="SUCCESS", error=None, total=None):
+def _envelope(payload, *, status="SUCCESS", error=None, error_code=None, total=None):
 	return {
 		"response_header": {
 			"request_id": "r",
 			"response_status": status,
-			"response_error_code": "E" if error else None,
+			"response_error_code": error_code if error_code is not None else ("E" if error else None),
 			"response_error_message": error,
 			"response_timestamp": "2026-10-22T10:00:00",
 		},
@@ -166,6 +166,8 @@ def _route(url, json=None, **_):
 		rid = json["request_body"]["request_payload"]["subject_record_id"]
 		if rid == "missing":
 			return _Resp(_envelope(None, status="ERROR", error="Record not found"))
+		if rid == "code-only":
+			return _Resp(_envelope(None, status="ERROR", error_code="REGISTER_DATA_NOT_FOUND"))
 		return _Resp(_envelope(SUBJECT))
 	if url.endswith("/register-data/get_tab_records"):
 		tab = json["request_body"]["request_payload"]["tab_id"]
@@ -259,6 +261,11 @@ class TestHttpReadPath(IntegrationTestCase):
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_get_farmer_not_found_returns_none(self, _post):
 		self.assertIsNone(self.client.get_farmer("missing"))
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_register_data_not_found_code_returns_none(self, _post):
+		"""REGISTER_DATA_NOT_FOUND is a missing subject, not a validation failure."""
+		self.assertIsNone(self.client.get_farmer("code-only"))
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_get_farmer_reports_sections_it_could_not_fetch(self, _post):
