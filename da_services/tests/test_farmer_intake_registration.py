@@ -381,6 +381,26 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 		)
 		self.assertEqual(client.deleted_submissions, {event.external_reference})
 
+	def test_registry_5xx_mid_save_also_deletes_the_draft(self):
+		"""A 503 on a later section left a DRAFT in the registry portal (30 Oct 2026)."""
+		client = MockFarmerRegistryClient()
+		real_save = client.save_intake_section
+
+		def save(s):
+			if s["section_id"] == "oan_farmer_phones":
+				raise FarmerRegistryServerError(
+					"Farmer Registry failed during save intake section (HTTP 503)"
+				)
+			return real_save(s)
+
+		client.save_intake_section = save
+		with self.assertRaises(FarmerRegistryServerError):
+			self._register(FORM, client)
+		event = frappe.get_last_doc("DA Integration Event", filters={"event_type": "Farmer Registration"})
+		self.assertEqual(event.status, "Failed")
+		self.assertIn("deleted", event.last_error)
+		self.assertEqual(client.deleted_submissions, {event.external_reference})
+
 	def test_draft_delete_failure_is_noted_not_raised(self):
 		client = MockFarmerRegistryClient()
 		real_save = client.save_intake_section
