@@ -80,9 +80,9 @@ class TestFarmerUpdates(IntegrationTestCase):
 	def setUp(self):
 		"""Set up test data for each test."""
 		frappe.set_user("Administrator")
-		# Queue and sync call the registry client. farmer-uuid-001 and version
-		# conflicts are mock fixtures; keep this suite off the live registry.
-		self._farmer_registry_backend = frappe.conf.get("farmer_registry_backend")
+		# These cases use the in-memory registry (farmer-uuid-001 and the rest). A site
+		# configured for the live Farmer Registry must not leak into them.
+		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
 		frappe.conf.farmer_registry_backend = "mock"
 
 		# Create test farmers
@@ -93,6 +93,10 @@ class TestFarmerUpdates(IntegrationTestCase):
 
 	def tearDown(self):
 		"""Clean up after each test."""
+		if self._farmer_backend is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = self._farmer_backend
 		frappe.set_user("Administrator")
 		saved = getattr(self, "_farmer_registry_backend", None)
 		if saved is None:

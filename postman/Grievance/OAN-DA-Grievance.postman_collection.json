@@ -1,0 +1,226 @@
+{
+  "info": {
+    "_postman_id": "oan-da-grievances",
+    "name": "OAN DA Grievances",
+    "description": "DA Services grievance routes only. Login stores access_token. Create grievance sends the canal-maintenance body from variables and stores ticket_id. List sends a filter only when that variable is set.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "usr", "value": "" },
+    { "key": "pwd", "value": "" },
+    { "key": "remember_me", "value": "false" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "ticket_id", "value": "" },
+    { "key": "ticket_number", "value": "" },
+    { "key": "queue_ref", "value": "" },
+    { "key": "event_name", "value": "" },
+    { "key": "page", "value": "1" },
+    { "key": "page_size", "value": "10" },
+    { "key": "status", "value": "" },
+    { "key": "category", "value": "" },
+    { "key": "location", "value": "" },
+    { "key": "from_date", "value": "" },
+    { "key": "to_date", "value": "" },
+    { "key": "search", "value": "" },
+    { "key": "subject", "value": "Canal not cleaned" },
+    { "key": "description", "value": "The irrigation canal has not been maintained this season." },
+    { "key": "priority", "value": "Medium" },
+    { "key": "subcategory", "value": "" },
+    { "key": "raised_for", "value": "Self" },
+    { "key": "farmer_id", "value": "" },
+    { "key": "client_op_id", "value": "" },
+    { "key": "submitter_name", "value": "Abebe Bikila" },
+    { "key": "contact_mobile", "value": "0911000000" },
+    { "key": "administrative_area", "value": "kebele-ET140108101008" },
+    { "key": "administrative_unit", "value": "Kebele 01 Center" },
+    { "key": "service_category", "value": "Water & Resources" },
+    { "key": "grievance_type", "value": "Canal maintenance problems" },
+    { "key": "desired_outcome", "value": "Canal cleaned before the next irrigation cycle" },
+    { "key": "submitter_type", "value": "Individual Farmer" },
+    { "key": "consent_given", "value": "1" },
+    { "key": "is_anonymous", "value": "0" }
+  ],
+  "item": [
+    {
+      "name": "Login",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\",\n  \"remember_me\": {{remember_me}}\n}"
+        },
+        "url": "{{base_url}}/api/v1/auth/login",
+        "description": "Public login. Stores access_token and refresh_token for the grievance calls."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Login returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save('access_token', data.access_token);",
+              "save('refresh_token', data.refresh_token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "List grievances",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/grievances",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "da-services", "grievances"]
+        },
+        "description": "Sends page, page_size, status, category, location, from_date, to_date, and search only when the variable is not empty."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "['page', 'page_size', 'status', 'category', 'location', 'from_date', 'to_date', 'search'].forEach(function (key) {",
+              "    const value = pm.variables.get(key);",
+              "    if (value) pm.request.url.query.upsert({ key: key, value: String(value) });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Grievance summary",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{base_url}}/api/v1/da-services/grievances/summary",
+        "description": "Status cards from the grievance service."
+      }
+    },
+    {
+      "name": "Grievance options",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{base_url}}/api/v1/da-services/grievances/options",
+        "description": "Dropdown values for the grievance form."
+      }
+    },
+    {
+      "name": "Create grievance",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"subject\": \"{{subject}}\",\n  \"description\": \"{{description}}\",\n  \"priority\": \"{{priority}}\",\n  \"raised_for\": \"{{raised_for}}\",\n  \"submitter_type\": \"{{submitter_type}}\",\n  \"submitter_name\": \"{{submitter_name}}\",\n  \"contact_mobile\": \"{{contact_mobile}}\",\n  \"administrative_area\": \"{{administrative_area}}\",\n  \"administrative_unit\": \"{{administrative_unit}}\",\n  \"service_category\": \"{{service_category}}\",\n  \"grievance_type\": \"{{grievance_type}}\",\n  \"desired_outcome\": \"{{desired_outcome}}\",\n  \"consent_given\": {{consent_given}},\n  \"is_anonymous\": {{is_anonymous}}\n}"
+        },
+        "url": "{{base_url}}/api/v1/da-services/grievances",
+        "description": "Creates a grievance. Defaults are the canal-maintenance example. A successful response stores ticket_id, ticket_number, and queue_ref."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Create grievance returns 201', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save('ticket_id', data.ticket_id);",
+              "save('ticket_number', data.ticket_number);",
+              "save('queue_ref', data.queue_ref);",
+              "if (!data.ticket_id && data.ticket_number) save('ticket_id', data.ticket_number);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get grievance",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}",
+        "description": "Uses ticket_id saved by Submit grievance."
+      }
+    },
+    {
+      "name": "Get timeline",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/timeline",
+        "description": "Uses ticket_id saved by Submit grievance."
+      }
+    },
+    {
+      "name": "Retry failed sync",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": "{{base_url}}/api/v1/da-services/grievances/sync/retry",
+        "description": "OAN Administrator only. Sends event_name when that variable is set. An empty variable retries every failed integration event."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const eventName = pm.variables.get('event_name') || pm.variables.get('queue_ref');",
+              "const body = eventName ? { event_name: String(eventName) } : {};",
+              "pm.request.body.update(JSON.stringify(body, null, 2));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

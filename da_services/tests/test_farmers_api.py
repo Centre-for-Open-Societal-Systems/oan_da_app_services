@@ -54,10 +54,9 @@ class TestFarmersAPI(IntegrationTestCase):
 	def setUp(self):
 		"""Set up test users, grants, and seed farmer data."""
 		frappe.set_user("Administrator")
-		# Plots come from the registry client. Fixture ids such as farmer-uuid-001
-		# exist only in the mock; a site configured for the live registry must not
-		# change this suite.
-		self._farmer_registry_backend = frappe.conf.get("farmer_registry_backend")
+		# Plots and profile reads use the in-memory registry fixtures. A site
+		# configured for the live Farmer Registry must not leak into these cases.
+		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
 		frappe.conf.farmer_registry_backend = "mock"
 
 		# Clean up
@@ -123,6 +122,10 @@ class TestFarmersAPI(IntegrationTestCase):
 		frappe.db.commit()
 
 	def tearDown(self):
+		if self._farmer_backend is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = self._farmer_backend
 		frappe.set_user("Administrator")
 		saved = getattr(self, "_farmer_registry_backend", None)
 		if saved is None:

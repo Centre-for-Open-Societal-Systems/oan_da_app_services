@@ -127,6 +127,18 @@ class TestRegistrationForm(IntegrationTestCase):
 class TestRegisterIdempotency(IntegrationTestCase):
 	"""Same client_op_id twice → one DA Integration Event, second call flagged duplicate (review item 3)."""
 
+	def setUp(self):
+		# Idempotency is a local queue concern. The live registry rejects this
+		# fixture payload, so the case stays on the mock client.
+		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
+		frappe.conf.farmer_registry_backend = "mock"
+
+	def tearDown(self):
+		if self._farmer_backend is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = self._farmer_backend
+
 	def test_duplicate_submission_returns_first_event(self):
 		import uuid
 		from unittest.mock import patch

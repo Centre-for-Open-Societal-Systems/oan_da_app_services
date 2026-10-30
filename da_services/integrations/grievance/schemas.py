@@ -24,10 +24,20 @@ class GrievanceSubmission:
 	subcategory: str = ""
 	subject: str = ""
 	description: str = ""
-	priority: str = "Medium"
 	raised_for: str = "Self"
 	farmer_id: str | None = None
 	attachments: list[str] = field(default_factory=list)
+	client_submission_uuid: str | None = None
+	submitter_type: str = "Individual Farmer"
+	submitter_name: str | None = None
+	contact_mobile: str | None = None
+	administrative_area: str | None = None
+	administrative_unit: str | None = None
+	service_category: str | None = None
+	grievance_type: str | None = None
+	desired_outcome: str | None = None
+	is_anonymous: bool = False
+	consent_given: bool = True
 
 	def to_dict(self) -> dict:
 		return asdict(self)
@@ -54,11 +64,12 @@ class GrievanceSummary:
 	ticket_id: str
 	subject: str
 	status: str
-	priority: str
 	category: str
 	complainant_name: str
 	created_at: str | None = None
 	updated_at: str | None = None
+	ticket_number: str | None = None
+	location: str | None = None
 
 	def to_dict(self) -> dict:
 		return asdict(self)
@@ -72,7 +83,6 @@ class GrievanceDetail:
 	subject: str
 	description: str
 	status: str
-	priority: str
 	category: str
 	subcategory: str
 	complainant_id: str
@@ -86,6 +96,9 @@ class GrievanceDetail:
 	updated_at: str | None = None
 	resolved_at: str | None = None
 	timeline: list[dict] = field(default_factory=list)
+	ticket_number: str | None = None
+	sla_due_date: str | None = None
+	sla_consumed_percent: float | None = None
 
 	def to_dict(self) -> dict:
 		return asdict(self)
@@ -110,6 +123,7 @@ class GrievanceResult:
 
 	accepted: bool
 	ticket_id: str | None = None
+	ticket_number: str | None = None
 	message: str | None = None
 	retryable: bool = False
 	raw: dict = field(default_factory=dict)
