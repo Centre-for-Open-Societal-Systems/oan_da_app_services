@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-grievances",
     "name": "OAN DA Grievances",
-    "description": "DA Services grievance routes only. Login stores access_token. Create grievance sends the canal-maintenance body from variables and stores ticket_id. List sends a filter only when that variable is set.",
+    "description": "DA Services grievance routes only. Login stores access_token and refresh_token. Refresh token exchanges that refresh token for a new access token and a rotated refresh token. Create grievance sends the canal-maintenance body from variables and stores ticket_id. List sends a filter only when that variable is set.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -79,6 +79,52 @@
               "    pm.response.to.have.status(200);",
               "});",
               "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save('access_token', data.access_token);",
+              "save('refresh_token', data.refresh_token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Refresh token",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/api/v1/auth/refresh",
+        "description": "Public. Sends only the refresh token saved by Login. Stores the new access_token and the rotated refresh_token. The previous refresh token cannot be used again. Run this when a grievance call returns 401, then send that call again."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Refresh returns 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test('Refresh returns a new access token', function () {",
+              "    pm.expect(data.access_token).to.be.a('string').and.not.empty;",
+              "});",
+              "pm.test('Refresh rotates the refresh token', function () {",
+              "    pm.expect(data.refresh_token).to.be.a('string').and.not.empty;",
+              "    pm.expect(data.refresh_token).to.not.eql(pm.variables.get('refresh_token'));",
+              "});",
               "function save(key, value) {",
               "    if (!value) return;",
               "    pm.collectionVariables.set(key, value);",
