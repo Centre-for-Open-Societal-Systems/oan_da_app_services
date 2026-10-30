@@ -1077,7 +1077,9 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 			frappe.ValidationError,
 		)
 	except FarmerRegistryError as exc:
-		_record_registration_failure(event, str(exc))
+		# A 5xx or timeout half-way leaves the same half-filled draft behind.
+		note = _discard_failed_draft(client, event.get("external_reference")) if mode == "intake" else ""
+		_record_registration_failure(event, f"{exc!s}{note}")
 		raise
 	except Exception as exc:
 		frappe.log_error(title="Farmer registration failed", message=frappe.get_traceback())
