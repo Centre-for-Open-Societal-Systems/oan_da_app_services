@@ -188,7 +188,21 @@ class CropItem(BaseModel):
 class LivestockItem(BaseModel):
 	animal: str = Field(..., min_length=1, max_length=80)
 	count: int = Field(1, ge=1, le=100000)
-	system: str = Field("mixed", description="mixed | intensive | extensive")
+	system: str = Field(
+		"mixed", description="mixed | semi_nomadic | sedentary_pastoral | nomadic_pastoral | industrial"
+	)
+
+
+class MembershipInfo(BaseModel):
+	"""Cooperative / union / cluster membership. The registry requires the three
+	yes/no answers before it finalizes a registration; they default to no."""
+
+	is_primary_cooperative_member: bool = False
+	primary_cooperative_name: str | None = Field(None, max_length=140)
+	is_cooperative_union_member: bool = False
+	cooperative_union_name: str | None = Field(None, max_length=140)
+	is_farmer_cluster_member: bool = False
+	farmer_cluster_role: str | None = Field(None, max_length=80)
 
 
 def _check_person_name(v):
@@ -287,6 +301,7 @@ class FarmerRegistrationForm(BaseModel):
 	disabled: bool = False
 	is_psnp_user: bool | None = None
 	household: HouseholdInfo | None = None
+	membership: MembershipInfo | None = None
 	identity_document_id: str | None = Field(
 		None,
 		pattern=r"^[A-Za-z0-9-]{8,100}$",
