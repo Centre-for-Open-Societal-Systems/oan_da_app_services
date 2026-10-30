@@ -465,10 +465,26 @@ def build_intake_sections(
 		}
 		livestock.append({k: v for k, v in row.items() if v is not None})
 
+	# Since 30 Oct 2026 the registry will not finalize without the three
+	# membership answers, so the section is always sent (all "no" by default).
+	member_of = form.get("membership") or {}
+	membership = {
+		"internal_record_id": str(uuid.uuid4()),
+		"link_internal_record_id": farmer_id,
+		"is_primary_cooperative_member": bool(member_of.get("is_primary_cooperative_member")),
+		"primary_cooperative_name": member_of.get("primary_cooperative_name"),
+		"is_cooperative_union_member": bool(member_of.get("is_cooperative_union_member")),
+		"cooperative_union_name": member_of.get("cooperative_union_name"),
+		"is_farmer_cluster_member": bool(member_of.get("is_farmer_cluster_member")),
+		"farmer_cluster_role": member_of.get("farmer_cluster_role"),
+	}
+	membership = {k: v for k, v in membership.items() if v is not None}
+
 	if problems:
 		raise IntakeFormError(problems)
 
 	rows_by_register = {
+		"MembershipDetails": [membership],
 		"Farmer": [farmer],
 		"Household": [household],
 		"HouseholdMember": member_rows,
@@ -482,7 +498,7 @@ def build_intake_sections(
 	for s in layout.get("sections") or []:
 		rows = rows_by_register.get(s.get("register_mnemonic")) or []
 		if not rows:
-			continue  # e.g. farm inputs and membership are not on the DA form
+			continue  # e.g. farm inputs are not on the DA form
 		body = {
 			"form_id": layout.get("form_id"),
 			"register_id": layout.get("register_id"),

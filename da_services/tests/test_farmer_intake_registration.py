@@ -75,6 +75,35 @@ class TestIntakeMapping(IntegrationTestCase):
 		self.assertNotIn("oan_farmer_farm_inputs_intake", ids)  # not on the DA form
 		self.assertIn("oan_farmer_documents", ids)
 
+	def test_membership_is_always_sent_and_defaults_to_no(self):
+		"""The registry refuses to finalize without the three membership answers (30 Oct 2026)."""
+		by_id = {s["section_id"]: s for s in _plan()}
+		row = by_id["oan_farmer_membership"]["section_payload"][0]
+		self.assertEqual(
+			(
+				row["is_primary_cooperative_member"],
+				row["is_cooperative_union_member"],
+				row["is_farmer_cluster_member"],
+			),
+			(False, False, False),
+		)
+		farmer_row = by_id["oan_farmer_name"]["section_payload"][0]
+		self.assertEqual(row["link_internal_record_id"], farmer_row["internal_record_id"])
+
+		member = _plan(
+			{
+				**FORM,
+				"membership": {
+					"is_primary_cooperative_member": True,
+					"primary_cooperative_name": "Bako Coop",
+				},
+			}
+		)
+		row = {s["section_id"]: s for s in member}["oan_farmer_membership"]["section_payload"][0]
+		self.assertTrue(row["is_primary_cooperative_member"])
+		self.assertEqual(row["primary_cooperative_name"], "Bako Coop")
+		self.assertNotIn("cooperative_union_name", row)
+
 	def test_farmer_row_uses_registry_names_and_codes(self):
 		farmer = _by_section(_plan())["oan_farmer_name"]["section_payload"][0]
 		self.assertEqual(

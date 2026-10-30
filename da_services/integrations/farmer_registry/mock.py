@@ -66,6 +66,7 @@ MOCK_INTAKE_REGISTERS = {
 	"Crop": "reg-crop",
 	"FarmInputs": "reg-inputs",
 	"Livestock": "reg-livestock",
+	"MembershipDetails": "reg-membership",
 }
 MOCK_CODE_LISTS = {
 	"GENDER": [("FEMALE", "Female"), ("MALE", "Male"), ("OTHER", "Other")],
@@ -453,6 +454,7 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 							"oan_farmer_farm_inputs_intake", MOCK_INTAKE_REGISTERS["FarmInputs"], 70, True
 						),
 						section("oan_farmer_livestock_intake", MOCK_INTAKE_REGISTERS["Livestock"], 80, True),
+						section("oan_farmer_membership", MOCK_INTAKE_REGISTERS["MembershipDetails"], 90),
 						section("oan_farmer_documents", farmer, 100, ui=documents_ui),
 					],
 				}
