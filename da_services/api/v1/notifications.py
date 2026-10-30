@@ -3,6 +3,7 @@
 GET  /api/v1/da-services/notifications?unread=1&limit=20&start=0
 POST /api/v1/da-services/notifications/<name>/read
 POST /api/v1/da-services/notifications/read-all
+POST /api/v1/da-services/notifications/broadcast   (Communications Officer / Admin)
 
 A user only ever sees and changes their own rows; the service enforces it.
 """
@@ -42,3 +43,49 @@ def read_all():
 def read_one(notification_id: str):
 	ctx = require_roles(*C.DA_SERVICES_ROLES)
 	return success_response(data=svc.mark_read(notification_id, ctx), message="Notification marked read")
+
+
+@route("/notifications/broadcast", methods=("POST",), summary="Broadcast a message to DAs")
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def broadcast():
+	"""Send a Broadcast notification to every DA in a scope (Communications Officer, Admin).
+
+	Request body (JSON):
+	    {
+	        "title": "Fertiliser distribution starts Monday",   // required, <= 140 chars
+	        "body": "Collect vouchers at the Woreda office.",   // optional
+	        "href": "/notifications",                           // optional deep link
+	        "scope": "all" | "region" | "zone" | "woreda",      // default "all"
+	        "scope_value": "ET04-W01",                          // required unless scope is "all"
+	        "client_op_id": "<uuid>"                            // optional idempotency key
+	    }
+
+	Scope rule: Admin may target anything; a Communications Officer with no
+	Region/Zone/Woreda on their grant is the national desk and may target
+	anything; one with a scoped grant may only target inside that scope.
+
+	Returns:
+	    {"success": true, "data": {"broadcast_id", "scope", "scope_value", "recipients", "duplicate"}}
+	"""
+	ctx = require_roles(C.ROLE_COMMS, C.ROLE_ADMIN)
+
+	data = frappe.request.get_json(silent=True) if frappe.request else None
+	if not data and frappe.form_dict:
+		framework_keys = {"cmd", "_", "sid"}
+		data = {k: v for k, v in frappe.form_dict.items() if k not in framework_keys}
+	data = data or {}
+
+	out = svc.broadcast(
+		ctx,
+		title=data.get("title"),
+		body=data.get("body"),
+		href=data.get("href"),
+		scope=data.get("scope") or "all",
+		scope_value=data.get("scope_value"),
+		client_op_id=data.get("client_op_id"),
+	)
+	message = (
+		"Broadcast already sent." if out["duplicate"] else f"Broadcast sent to {out['recipients']} DA(s)."
+	)
+	return success_response(data=out, message=message)
