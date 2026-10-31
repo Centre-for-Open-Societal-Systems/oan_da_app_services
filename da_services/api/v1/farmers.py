@@ -5,6 +5,7 @@ GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
 GET /api/v1/da-services/farmers/{id}/permissions
 GET /api/v1/da-services/farmers/{id}/plots
+GET /api/v1/da-services/farmers/{id}/photo          (signed link, read fresh)
 GET /api/v1/da-services/farmers/{id}/change-requests   (DA-272)
 POST /api/v1/da-services/farmers
 POST /api/v1/da-services/farmers/registrations/documents
@@ -466,6 +467,35 @@ def get_farmer_plots(farmer_id: str):
 			"plots": [plot.dict() for plot in plots],
 		}
 	)
+
+
+@route("/farmers/<farmer_id>/photo", methods=("GET",), summary="Get the farmer's record photo")
+@frappe.whitelist()
+@handle_api_errors
+def get_farmer_photo(farmer_id: str):
+	"""The farmer's photo from the Farmer Registry record.
+
+	The registry hands out a signed link that expires (about an hour), so it is
+	read fresh on every call rather than kept with the cached profile. The link
+	is usable straight in an <img>; ask again once it expires.
+
+	Returns:
+	    {"photo_url": "https://…" | null, "document_id": "…" | null}
+
+	Raises:
+	    DoesNotExistError: Farmer not found
+	    PermissionError: Farmer not in scope
+	"""
+	ctx = require_roles(*READ_ROLES)
+
+	if not farmer_id:
+		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
+
+	farmer_id = farmers.resolve_farmer_id(farmer_id)
+	farmers.get_farmer_profile(farmer_id, ctx)
+
+	photo = get_farmer_registry_client().get_farmer_photo(farmer_id) or {}
+	return success_response(data={"photo_url": photo.get("url"), "document_id": photo.get("document_id")})
 
 
 @route("/farmers", methods=("POST",), summary="Register a new farmer")

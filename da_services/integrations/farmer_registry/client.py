@@ -108,6 +108,13 @@ class FarmerRegistryClient(ABC):
 		"""
 		pass
 
+	def get_farmer_photo(self, farmer_id: str) -> dict | None:
+		"""The farmer's record photo as {"url", "document_id"}, or None when there is none.
+
+		The url is a short-lived signed link, so it is read fresh and never cached.
+		"""
+		return None
+
 	@abstractmethod
 	def get_change_requests(
 		self, farmer_id: str, *, tab: str | None = None, status: str | None = None

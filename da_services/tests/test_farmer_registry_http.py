@@ -319,6 +319,21 @@ class TestHttpReadPath(IntegrationTestCase):
 	def test_get_farmer_not_found_returns_none(self, _post):
 		self.assertIsNone(self.client.get_farmer("missing"))
 
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_photo_reads_the_signed_link(self, _post):
+		"""The record's image link and document id; None without a photo or a record."""
+		self.assertIsNone(self.client.get_farmer_photo("frm-1"))
+		self.assertIsNone(self.client.get_farmer_photo("missing"))
+		photo = {
+			"record_image_url": "https://minio/doc-1?X-Amz-Expires=3600",
+			"record_image_document_id": "doc-1",
+		}
+		with patch.dict(SUBJECT, photo):
+			self.assertEqual(
+				self.client.get_farmer_photo("frm-1"),
+				{"url": "https://minio/doc-1?X-Amz-Expires=3600", "document_id": "doc-1"},
+			)
+
 	def test_register_data_not_found_code_is_not_found(self):
 		from da_services.integrations.farmer_registry.http import StaffResponse
 
