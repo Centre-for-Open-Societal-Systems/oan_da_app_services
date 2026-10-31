@@ -199,15 +199,24 @@ def search_farmers(
 		search_text=search_text, filter_by=filter_by, page=page, page_size=page_size
 	)
 	items = result.get("items") or []
+	total = int(result.get("total") or 0)
+	pages = int(result.get("number_of_pages") or 0)
+	narrowed = bool(result.get("filtered_client_side"))
 	if keep_kebeles is not None and any(i.kebele for i in items):
-		items = [i for i in items if not i.kebele or i.kebele in keep_kebeles]
+		kept = [i for i in items if not i.kebele or i.kebele in keep_kebeles]
+		if len(kept) != len(items):
+			narrowed = True
+			# One page is the whole result, so its remainder is the true count.
+			if pages <= 1:
+				total, pages = len(kept), (1 if kept else 0)
+		items = kept
 	return {
 		"farmers": [list_item_to_dict(i) for i in items],
-		"total": int(result.get("total") or 0),
+		"total": total,
 		"page": int(result.get("page") or page),
 		"page_size": int(result.get("page_size") or page_size),
-		"number_of_pages": int(result.get("number_of_pages") or 0),
-		"filtered_client_side": bool(result.get("filtered_client_side")),
+		"number_of_pages": pages,
+		"filtered_client_side": narrowed,
 	}
 
 

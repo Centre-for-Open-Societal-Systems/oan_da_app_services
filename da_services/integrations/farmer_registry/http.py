@@ -582,14 +582,20 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 		total = res.pagination.get("number_of_items")
 		pages = res.pagination.get("number_of_pages")
+		total = int(total) if total is not None else len(items)
+		pages = int(pages) if pages else (1 if items else 0)
+		# A single registry page is the whole result, so what is left of it is
+		# the true count; across several pages only the registry's figure exists.
+		if narrowed and pages <= 1:
+			total, pages = len(items), (1 if items else 0)
 		return {
 			"items": items,
 			"page": page,
 			"page_size": page_size,
-			"total": int(total) if total is not None else len(items),
-			"number_of_pages": int(pages) if pages else (1 if items else 0),
-			# True when rows were dropped here; total / number_of_pages are then
-			# the registry's unfiltered figures.
+			"total": total,
+			"number_of_pages": pages,
+			# True when rows were dropped here; with several registry pages
+			# total / number_of_pages are then the registry's unfiltered figures.
 			"filtered_client_side": narrowed,
 		}
 
