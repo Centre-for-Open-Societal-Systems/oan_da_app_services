@@ -488,6 +488,17 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(len(plots), 1)
 		self.assertEqual(plots[0]["land_kebele"], "Bako 01")
 
+	def test_get_farmer_photo_mock(self):
+		"""The photo link comes from the registry record, also by Farmer-ID."""
+		frappe.set_user(DA1)
+
+		from da_services.api.v1.farmers import get_farmer_photo
+
+		result = get_farmer_photo("FR-000101")
+		self.assertEqual(result["status"], "success", result)
+		self.assertEqual(result["data"]["document_id"], "mock-photo-001")
+		self.assertTrue(result["data"]["photo_url"].startswith("https://"))
+
 	def test_pagination(self):
 		"""Test pagination parameters."""
 		frappe.set_user(SUP)

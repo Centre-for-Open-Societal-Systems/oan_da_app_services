@@ -635,6 +635,23 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
 		return rows
 
+	def get_farmer_photo(self, farmer_id: str) -> dict | None:
+		"""Record photo from get_subject_record: a signed MinIO link (about an hour) and its document id."""
+		res = self._staff_post(
+			"/register-data/get_subject_record",
+			{"subject_register_id": self.register_id, "subject_record_id": farmer_id},
+			action="get farmer photo",
+		)
+		if not res.ok:
+			if res.not_found:
+				return None
+			self._reject(res, "get farmer photo")
+		record = res.payload if isinstance(res.payload, dict) else {}
+		url = record.get("record_image_url")
+		if not url:
+			return None
+		return {"url": url, "document_id": record.get("record_image_document_id")}
+
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
 		"""Land Details rows for a farmer (Lands tab).
 

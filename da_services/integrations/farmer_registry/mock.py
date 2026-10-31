@@ -191,6 +191,14 @@ MOCK_FARMERS = {
 	),
 }
 
+# Record photos (the registry's signed MinIO link and document id)
+MOCK_PHOTOS = {
+	"farmer-uuid-001": {
+		"url": "https://minio.example.com/documents/mock-photo-001?X-Amz-Expires=3600",
+		"document_id": "mock-photo-001",
+	},
+}
+
 # Mock plots
 MOCK_PLOTS = {
 	"farmer-uuid-001": [
@@ -344,6 +352,10 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 		"""Get mock plots for a farmer."""
 		return MOCK_PLOTS.get(farmer_id, [])
 
+	def get_farmer_photo(self, farmer_id: str) -> dict | None:
+		"""A fixed photo link for the farmers that have one in the fixtures."""
+		return MOCK_PHOTOS.get(farmer_id)
+
 	def get_change_requests(
 		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
 	) -> list[dict]:
@@ -446,8 +458,15 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 				"widget-data-source": {"type": "api", "params": {"attribute_id": attribute}},
 			}
 
-		name_ui = {"widgets": [select(farmer, "gender", "GENDER"), select(farmer, "marital_status", "MARITAL_STATUS")]}
-		land_ui = {"widgets": [select(MOCK_INTAKE_REGISTERS["Land"], "land_ownership_type", "LAND_OWNERSHIP_TYPE")]}
+		name_ui = {
+			"widgets": [
+				select(farmer, "gender", "GENDER"),
+				select(farmer, "marital_status", "MARITAL_STATUS"),
+			]
+		}
+		land_ui = {
+			"widgets": [select(MOCK_INTAKE_REGISTERS["Land"], "land_ownership_type", "LAND_OWNERSHIP_TYPE")]
+		}
 		return {
 			"form_id": MOCK_INTAKE_FORM_ID,
 			"register_id": farmer,
