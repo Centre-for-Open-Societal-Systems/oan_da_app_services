@@ -171,6 +171,85 @@ def load_code_lists(client: FarmerRegistryClient, attribute_ids=CODE_LISTS) -> d
 	}
 
 
+def load_field_options(client: FarmerRegistryClient) -> dict[str, dict[str, list[dict]]]:
+	"""Option lists of every dropdown on the intake form, keyed register -> field.
+
+	Which code list a field uses is read from the form itself (the widget's
+	attribute_id), so a field the registry adds or re-points needs no change
+	here. Each option is {value, label}; value is what POST /farmers takes.
+	"""
+
+	def load_map() -> dict[str, dict[str, str]]:
+		form = client.render_intake_form()
+		mnemonics = {r.get("register_id"): r.get("register_mnemonic") for r in load_registers(client)}
+		out: dict[str, dict[str, str]] = {}
+		for tab in form.get("tabs") or []:
+			for section in tab.get("sections") or []:
+				register = mnemonics.get(section.get("section_register_id")) or "Unknown"
+				for node in _walk(section.get("section_ui_schema")):
+					source = node.get("widget-data-source")
+					attribute = (
+						((source or {}).get("params") or {}).get("attribute_id")
+						if isinstance(source, dict)
+						else None
+					)
+					path = node.get("widget-data-path") or node.get("column-key")
+					if attribute and isinstance(path, str):
+						out.setdefault(register, {})[path.split(".")[-1]] = attribute
+		return out
+
+	fields = _cached(_cache_key(client, "field-attributes"), LAYOUT_TTL, load_map)
+	attributes = sorted({a for by_field in fields.values() for a in by_field.values()})
+	values = load_code_lists(client, attributes)
+
+	def options(attribute: str) -> list[dict]:
+		return [
+			{
+				"value": str(v.get("value_id") or v.get("value_code") or ""),
+				"label": v.get("value_display") or v.get("value_code"),
+			}
+			for v in values.get(attribute) or []
+			if v.get("value_id") or v.get("value_code")
+		]
+
+	return {
+		register: {field: options(attribute) for field, attribute in by_field.items()}
+		for register, by_field in fields.items()
+	}
+
+
+def load_places(client: FarmerRegistryClient, level: str, parent: str | None = None) -> list[dict]:
+	"""Master Data places on one level (region, zone, woreda, kebele), under a parent place.
+
+	Returns [{id, name}] sorted by name; ids are what POST /farmers takes as kebele.
+	"""
+	level = (level or "").lower()
+	if level not in GEO_LEVELS:
+		raise IntakeFormError([f"level must be one of {', '.join(GEO_LEVELS)}"])
+	if level != GEO_LEVELS[0] and not parent:
+		raise IntakeFormError([f"parent is required for level {level}"])
+
+	def load_levels() -> dict[str, str]:
+		return {
+			str(lv.get("level_mnemonic") or "").lower(): lv.get("level_id") for lv in client.get_geo_levels()
+		}
+
+	level_ids = _cached(_cache_key(client, "geo-levels"), PLACE_TTL, load_levels)
+	if not level_ids.get(level):
+		raise IntakeFormError([f"Master Data has no '{level}' level"])
+
+	def load() -> list[dict]:
+		rows = client.get_geo_level_values(level_ids[level], parent if level != GEO_LEVELS[0] else None)
+		places = [
+			{"id": r.get("level_value_id"), "name": r.get("level_value_mnemonic") or r.get("level_value_id")}
+			for r in rows
+			if r.get("level_value_id")
+		]
+		return sorted(places, key=lambda p: str(p["name"]).lower())
+
+	return _cached(_cache_key(client, "places", level, parent or "-"), PLACE_TTL, load)
+
+
 def resolve_geo_path(client: FarmerRegistryClient, kebele_id: str) -> list[dict]:
 	"""Region -> kebele path for a Master Data kebele id, checked against Master Data.
 
@@ -358,6 +437,10 @@ def build_intake_sections(
 		"first_name": form["first_name"],
 		"middle_name": form.get("father_name") or None,
 		"last_name": form["grandfather_name"],
+		"first_name_local": form.get("first_name_local") or None,
+		"middle_name_local": form.get("middle_name_local") or None,
+		"last_name_local": form.get("last_name_local") or None,
+		"language_spoken": form.get("language_spoken") or None,
 		"gender": code("GENDER", form["gender"], "gender"),
 		"birth_date": str(form["date_of_birth"]),
 		"marital_status": code("MARITAL_STATUS", form["marital_status"], "marital_status"),
@@ -442,6 +525,9 @@ def build_intake_sections(
 	}
 	if household_in.get("number_of_children") is not None:
 		household["number_of_children"] = household_in["number_of_children"]
+	for key in ("father_included", "mother_included", "other_farmer_in_household"):
+		if household_in.get(key) is not None:
+			household[key] = bool(household_in[key])
 
 	phones = []
 	if form.get("phone"):
@@ -468,6 +554,13 @@ def build_intake_sections(
 			"area_in_hectare": land.get("area_hectare"),
 			"unit": LAND_UNIT_HECTARE,
 			"land_id": land.get("land_id"),
+			# Registry codes picked from the form's own option lists, passed through.
+			"land_kebele": land.get("land_kebele"),
+			"soil_fertility": land.get("soil_fertility"),
+			"current_land_use": land.get("current_land_use"),
+			"means_of_acquisition": land.get("means_of_acquisition"),
+			"year_of_acquisition": land.get("year_of_acquisition"),
+			"remark": land.get("remark"),
 		}
 		lands.append({k: v for k, v in row.items() if v is not None})
 	land_id = lands[0]["internal_record_id"] if lands else None
@@ -480,6 +573,7 @@ def build_intake_sections(
 			"commodity": code("CROP_COMMODITY", crop.get("name"), f"crops[{i}].name"),
 			"season": code("CROP_SEASON", crop.get("season") or "meher", f"crops[{i}].season"),
 			"planted_date": str(crop["planted_date"]) if crop.get("planted_date") else None,
+			"end_use": crop.get("end_use"),
 		}
 		crops.append({k: v for k, v in row.items() if v is not None})
 
@@ -493,6 +587,10 @@ def build_intake_sections(
 			"livestock_system": code(
 				"LIVESTOCK_SYSTEM", animal.get("system") or "mixed", f"livestock[{i}].system"
 			),
+			"breed": animal.get("breed"),
+			"gender": animal.get("gender"),
+			"body_condition": animal.get("body_condition"),
+			"production_type": animal.get("production_type"),
 		}
 		livestock.append({k: v for k, v in row.items() if v is not None})
 

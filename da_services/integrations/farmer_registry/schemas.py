@@ -177,12 +177,20 @@ class LandItem(BaseModel):
 	land_id: str | None = Field(None, max_length=50)
 	ownership: str = Field("owner", description="owner | tenant | share")
 	area_hectare: float | None = Field(None, ge=0, le=10000)
+	# Registry codes from GET /registries/farmer/field-options, sent as they are.
+	land_kebele: str | None = Field(None, max_length=60)
+	soil_fertility: str | None = Field(None, max_length=60)
+	current_land_use: str | None = Field(None, max_length=60)
+	means_of_acquisition: str | None = Field(None, max_length=60)
+	year_of_acquisition: int | None = Field(None, ge=1900, le=2100)
+	remark: str | None = Field(None, max_length=500)
 
 
 class CropItem(BaseModel):
 	name: str = Field(..., min_length=1, max_length=80)
 	planted_date: date | None = None
-	season: str = Field("meher", description="meher | belg | irrigated | perennial")
+	season: str = Field("meher", description="meher | belg | irrigated")
+	end_use: str | None = Field(None, max_length=60, description="registry code, see field-options")
 
 
 class LivestockItem(BaseModel):
@@ -191,6 +199,11 @@ class LivestockItem(BaseModel):
 	system: str = Field(
 		"mixed", description="mixed | semi_nomadic | sedentary_pastoral | nomadic_pastoral | industrial"
 	)
+	# Registry codes from GET /registries/farmer/field-options, sent as they are.
+	breed: str | None = Field(None, max_length=60)
+	gender: str | None = Field(None, max_length=60)
+	body_condition: str | None = Field(None, max_length=60)
+	production_type: str | None = Field(None, max_length=60)
 
 
 class MembershipInfo(BaseModel):
@@ -266,6 +279,9 @@ class HouseholdInfo(BaseModel):
 	size: int | None = Field(None, ge=1, le=100)
 	number_of_children: int | None = Field(None, ge=0, le=100)
 	other_land_owner: bool = False
+	father_included: bool | None = None
+	mother_included: bool | None = None
+	other_farmer_in_household: bool | None = None
 	members: list[HouseholdMemberItem] = Field(default_factory=list, max_length=99)
 
 
@@ -285,6 +301,10 @@ class FarmerRegistrationForm(BaseModel):
 	first_name: str = Field(..., min_length=1, max_length=100)
 	father_name: str | None = Field(None, max_length=100)
 	grandfather_name: str | None = Field(None, max_length=100)
+	first_name_local: str | None = Field(None, max_length=100, description="Name in the farmer's language")
+	middle_name_local: str | None = Field(None, max_length=100)
+	last_name_local: str | None = Field(None, max_length=100)
+	language_spoken: str | None = Field(None, max_length=60, description="registry code, see field-options")
 	gender: str | None = Field(None, description="male | female | other")
 	date_of_birth: date | None = None
 	phone: str | None = Field(None, pattern=r"^\+?\d{9,15}$")
