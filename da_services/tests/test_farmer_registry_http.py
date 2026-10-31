@@ -408,6 +408,8 @@ class TestHttpReadPath(IntegrationTestCase):
 		page = self.client.search_farmers(filter_by={"woreda": "Bako Tibe"})
 		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1"])
 		self.assertTrue(page["filtered_client_side"])
+		# One registry page: the count is what is left of it, not the registry's total.
+		self.assertEqual((page["total"], page["number_of_pages"]), (1, 1))
 		self.assertEqual(
 			_route.last_search["request_body"]["pagination_request"]["filter_by"],
 			{"woreda_name": "Bako Tibe"},
