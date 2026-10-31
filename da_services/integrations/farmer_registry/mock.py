@@ -437,6 +437,17 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 
 		farmer = MOCK_INTAKE_REGISTERS["Farmer"]
 		documents_ui = {"widgets": [{"widget-data-path": f"{farmer}.identity_document_1"}]}
+
+		def select(register_id, field, attribute):
+			# Same shape as the dev registry's dropdown widgets.
+			return {
+				"widget": "select",
+				"widget-data-path": f"{register_id}.{field}",
+				"widget-data-source": {"type": "api", "params": {"attribute_id": attribute}},
+			}
+
+		name_ui = {"widgets": [select(farmer, "gender", "GENDER"), select(farmer, "marital_status", "MARITAL_STATUS")]}
+		land_ui = {"widgets": [select(MOCK_INTAKE_REGISTERS["Land"], "land_ownership_type", "LAND_OWNERSHIP_TYPE")]}
 		return {
 			"form_id": MOCK_INTAKE_FORM_ID,
 			"register_id": farmer,
@@ -444,14 +455,14 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 				{
 					"tab_id": "intake",
 					"sections": [
-						section("oan_farmer_name", farmer, 21),
+						section("oan_farmer_name", farmer, 21, ui=name_ui),
 						section("oan_farmer_phones", MOCK_INTAKE_REGISTERS["FarmerPhone"], 27, True),
 						section("oan_household_information", MOCK_INTAKE_REGISTERS["Household"], 33),
 						section(
 							"household_member_section", MOCK_INTAKE_REGISTERS["HouseholdMember"], 35, True
 						),
 						section("oan_farmer_location", farmer, 40),
-						section("oan_farmer_lands", MOCK_INTAKE_REGISTERS["Land"], 50, True),
+						section("oan_farmer_lands", MOCK_INTAKE_REGISTERS["Land"], 50, True, ui=land_ui),
 						section("oan_farmer_crops_intake", MOCK_INTAKE_REGISTERS["Crop"], 60, True),
 						section(
 							"oan_farmer_farm_inputs_intake", MOCK_INTAKE_REGISTERS["FarmInputs"], 70, True

@@ -86,6 +86,53 @@ class TestIntakeMapping(IntegrationTestCase):
 		self.assertEqual(farmer_row["source_of_income_other"], "Petty trade")
 		self.assertIn("SOI_OTHERS", farmer_row["income_sources"])
 
+	def test_field_options_come_from_the_form_widgets(self):
+		"""Each dropdown's code list is read from the form, keyed register -> field."""
+		options = intake.load_field_options(MockFarmerRegistryClient())
+		self.assertEqual([o["value"] for o in options["Farmer"]["gender"]], ["FEMALE", "MALE", "OTHER"])
+		self.assertEqual(options["Farmer"]["gender"][1], {"value": "MALE", "label": "Male"})
+		self.assertIn("CROP_SHARE", [o["value"] for o in options["Land"]["land_ownership_type"]])
+
+	def test_places_walk_the_master_data_hierarchy(self):
+		client = MockFarmerRegistryClient()
+		self.assertEqual(intake.load_places(client, "region"), [{"id": "ET04", "name": "Oromia"}])
+		self.assertEqual(
+			[p["id"] for p in intake.load_places(client, "kebele", "ET040801")], ["ET04080101", "ET04080102"]
+		)
+		with self.assertRaises(intake.IntakeFormError):
+			intake.load_places(client, "woreda")  # needs a parent
+		with self.assertRaises(intake.IntakeFormError):
+			intake.load_places(client, "village", "ET04")
+
+	def test_wizard_extra_fields_reach_the_registry_rows(self):
+		form = {
+			**FORM,
+			"first_name_local": "አበበ",
+			"language_spoken": "AMHARIC",
+			"household": {**(FORM.get("household") or {}), "father_included": True},
+			"lands": [
+				{
+					"ownership": "owner",
+					"area_hectare": 1.2,
+					"soil_fertility": "FERTILE",
+					"remark": "near river",
+				}
+			],
+			"crops": [{"name": "teff", "season": "meher", "end_use": "HOME_CONSUMPTION"}],
+			"livestock": [{"animal": "cattle", "count": 2, "breed": "LOCAL", "production_type": "MILK"}],
+		}
+		by_id = {s["section_id"]: s for s in _plan(form)}
+		farmer = by_id["oan_farmer_name"]["section_payload"][0]
+		self.assertEqual((farmer["first_name_local"], farmer["language_spoken"]), ("አበበ", "AMHARIC"))
+		self.assertTrue(by_id["oan_household_information"]["section_payload"][0]["father_included"])
+		land = by_id["oan_farmer_lands"]["section_payload"][0]
+		self.assertEqual((land["soil_fertility"], land["remark"]), ("FERTILE", "near river"))
+		self.assertEqual(
+			by_id["oan_farmer_crops_intake"]["section_payload"][0]["end_use"], "HOME_CONSUMPTION"
+		)
+		animal = by_id["oan_farmer_livestock_intake"]["section_payload"][0]
+		self.assertEqual((animal["breed"], animal["production_type"]), ("LOCAL", "MILK"))
+
 	def test_conditional_answers_the_registry_form_requires(self):
 		"""disabled needs type + severity; a coop / union member needs its name (render_intake_form rules)."""
 		with self.assertRaises(intake.IntakeFormError) as ctx:
