@@ -266,8 +266,12 @@ class TestHttpReadPath(IntegrationTestCase):
 				"farmer_registry_ingest": {"register_id": REGISTER_ID, "data_model": "FARMER_ODK_MODEL"},
 			}
 		)
-		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+		from da_services.integrations.farmer_registry.http import (
+			SUMMARY_CACHE_PREFIX,
+			HTTPFarmerRegistryClient,
+		)
 
+		frappe.cache.delete_keys(SUMMARY_CACHE_PREFIX)
 		self.client = HTTPFarmerRegistryClient()
 
 	def tearDown(self):
@@ -416,6 +420,20 @@ class TestHttpReadPath(IntegrationTestCase):
 		self.assertEqual(pag["search_text"], "Abebe")
 		self.assertEqual((pag["current_page"], pag["page_size"]), (2, 10))
 		self.assertEqual(pag["filter_by"], {"state": "APPROVED"})
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_fills_phone_and_land_from_the_record(self, _post):
+		"""Search rows carry no phone or land area; both come from get_subject_record."""
+		record = {
+			"phone_numbers": [
+				{"type": "other", "number": "+251911000000", "is_primary": False},
+				{"type": "primary", "number": "+251964815374", "is_primary": True},
+			],
+			"total_land_area": "4.250000",
+		}
+		with patch.dict(SUBJECT, record):
+			items = self.client.search_farmers(search_text="FR-")["items"]
+		self.assertEqual([(i.phone, i.total_land_area) for i in items], [("+251964815374", 4.25)] * 2)
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_search_farmers_reapplies_area_filters_and_fails_closed(self, _post):

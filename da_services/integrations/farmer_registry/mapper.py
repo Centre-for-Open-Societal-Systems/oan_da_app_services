@@ -471,6 +471,19 @@ def registry_record_to_farmer(record: dict[str, Any], farmer_id: str) -> Farmer:
 	)
 
 
+def record_summary(record: dict[str, Any]) -> dict[str, Any]:
+	"""Phone and total land area from a get_subject_record row (search rows leave both out).
+
+	phone_numbers is [{type, number, is_primary}]; the primary one wins.
+	"""
+	phones = [p for p in (record.get("phone_numbers") or []) if isinstance(p, dict) and p.get("number")]
+	primary = next((p for p in phones if _truthy(p.get("is_primary"))), phones[0] if phones else {})
+	return {
+		"phone": primary.get("number") or record.get("phone_number"),
+		"total_land_area": _to_float(record.get("total_land_area")),
+	}
+
+
 def search_row_to_list_item(row: dict[str, Any]) -> FarmerListItem:
 	"""Map one search_in_a_register row (SearchResultData) -> FarmerListItem.
 
