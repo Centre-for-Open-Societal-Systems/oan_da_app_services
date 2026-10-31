@@ -416,7 +416,7 @@ class TestHttpReadPath(IntegrationTestCase):
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_search_farmers_fills_phone_and_land_from_the_record(self, _post):
-		"""Search rows carry no phone or land area; both come from get_subject_record."""
+		"""Search rows carry no phone, land area or plot count; they come from the record and the Lands tab."""
 		record = {
 			"phone_numbers": [
 				{"type": "other", "number": "+251911000000", "is_primary": False},
@@ -426,7 +426,11 @@ class TestHttpReadPath(IntegrationTestCase):
 		}
 		with patch.dict(SUBJECT, record):
 			items = self.client.search_farmers(search_text="FR-")["items"]
-		self.assertEqual([(i.phone, i.total_land_area) for i in items], [("+251964815374", 4.25)] * 2)
+		plots = len(self.client.get_farmer_plots("frm-1"))
+		self.assertGreater(plots, 0)
+		self.assertEqual(
+			[(i.phone, i.total_land_area, i.total_plots) for i in items], [("+251964815374", 4.25, plots)] * 2
+		)
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_search_farmers_reapplies_area_filters_and_fails_closed(self, _post):

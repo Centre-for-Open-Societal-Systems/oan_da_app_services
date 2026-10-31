@@ -247,6 +247,7 @@ def list_item_to_dict(item: FarmerListItem) -> dict[str, Any]:
 		"woreda": item.woreda,
 		"region": item.region,
 		"total_land_hectares": item.total_land_area,
+		"total_plots": item.total_plots,
 		"registration_state": cache_registration_state(item.state),
 		"registered_at": item.registration_date,
 	}
