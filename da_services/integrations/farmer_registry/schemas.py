@@ -153,6 +153,9 @@ class FarmerListItem(BaseModel):
 	region: str | None = None
 	total_land_area: float | None = None
 	total_plots: int | None = Field(None, description="Land records on the Lands tab")
+	photo_url: str | None = Field(
+		None, description="Signed link to the record photo (expires in about an hour)"
+	)
 	state: str
 	registration_date: datetime | None = None
 
