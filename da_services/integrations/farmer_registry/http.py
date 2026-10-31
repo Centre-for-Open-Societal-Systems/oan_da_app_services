@@ -47,6 +47,7 @@ from .client import (
 from .mapper import (
 	land_record_to_plot,
 	merge_tab_records,
+	record_summary,
 	registry_record_to_farmer,
 	search_row_to_list_item,
 	updates_to_change_requests,
@@ -69,6 +70,9 @@ _NOT_FOUND_MARKERS = ("not found", "does not exist", "no record")
 # Discovered register / intake form ids; see HTTPFarmerRegistryClient.register_id
 ID_CACHE_PREFIX = "da_services:farmer_registry:ids"
 ID_CACHE_TTL = 60 * 60
+# Phone and land area of a farmer, read from the record to complete search rows.
+SUMMARY_CACHE_PREFIX = "da_services:farmer_registry:summary"
+SUMMARY_CACHE_TTL = 10 * 60
 # The Farmer intake form on dev is "farmer_ingestion_intake"; matched ignoring spaces, _ and -.
 DEFAULT_INTAKE_FORM_CONTAINS = "Farmer Ingestion"
 
@@ -566,7 +570,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		elif not res.not_found:
 			self._reject(res, "search farmers")
 
-		items = [search_row_to_list_item(row) for row in rows]
+		items = [self._with_record_summary(search_row_to_list_item(row)) for row in rows]
 		# The dev registry (29 Oct 2026) returns the same rows whatever filter_by
 		# says, and kebele_name is not whitelisted anyway. Area filters are the
 		# caller's scope, so they are re-applied here and fail closed: a row that
@@ -634,6 +638,41 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			rows = [r for r in rows if str(r.get("approval_status") or "").upper() == wanted]
 		rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
 		return rows
+
+	def _with_record_summary(self, item: FarmerListItem) -> FarmerListItem:
+		"""Fill phone and total land area, which search rows leave out, from the farmer's record.
+
+		search_in_a_register only carries the list-view columns the registry is
+		configured with (dev, 31 Oct 2026: names, gender, birth, education,
+		location), so phone and land come from get_subject_record. The pair is
+		cached per farmer for a few minutes so a list does not re-read every record.
+		"""
+		if not item.farmer_id or (item.phone and item.total_land_area is not None):
+			return item
+		key = f"{SUMMARY_CACHE_PREFIX}:{self.base_url}:{item.farmer_id}"
+		summary = frappe.cache.get_value(key)
+		if summary is None:
+			summary = {}
+			try:
+				res = self._staff_post(
+					"/register-data/get_subject_record",
+					{"subject_register_id": self.register_id, "subject_record_id": item.farmer_id},
+					action="get farmer summary",
+				)
+				record = res.payload if res.ok and isinstance(res.payload, dict) else {}
+				summary = record_summary(record)
+			except FarmerRegistryError:
+				# A list row without phone / land beats a failed list.
+				frappe.logger("da_services").warning("Could not read the record of farmer %s", item.farmer_id)
+			frappe.cache.set_value(key, summary, expires_in_sec=SUMMARY_CACHE_TTL)
+		return item.copy(
+			update={
+				"phone": item.phone or summary.get("phone"),
+				"total_land_area": item.total_land_area
+				if item.total_land_area is not None
+				else summary.get("total_land_area"),
+			}
+		)
 
 	def get_farmer_photo(self, farmer_id: str) -> dict | None:
 		"""Record photo from get_subject_record: a signed MinIO link (about an hour) and its document id."""
