@@ -248,6 +248,7 @@ def list_item_to_dict(item: FarmerListItem) -> dict[str, Any]:
 		"region": item.region,
 		"total_land_hectares": item.total_land_area,
 		"total_plots": item.total_plots,
+		"photo_url": item.photo_url,
 		"registration_state": cache_registration_state(item.state),
 		"registered_at": item.registration_date,
 	}
@@ -510,6 +511,8 @@ def search_row_to_list_item(row: dict[str, Any]) -> FarmerListItem:
 		woreda=display.get("woreda_name"),
 		region=display.get("region_name"),
 		total_land_area=_to_float(display.get("total_land_area")),
+		# Signed per response, so it is passed on as is and never cached.
+		photo_url=row.get("record_image_url") or None,
 		state=display.get("state") or row.get("state") or "UNKNOWN",
 		registration_date=_to_datetime(row.get("last_approved_at") or row.get("created_at")),
 	)

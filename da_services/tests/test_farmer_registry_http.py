@@ -152,6 +152,7 @@ SEARCH_ROWS = [
 		"internal_record_id": "frm-1",
 		"functional_record_id": "FR-000101",
 		"record_name": "Abebe Kebede",
+		"record_image_url": "https://minio/photo-1?X-Amz-Expires=3600",
 		"created_at": "2026-06-01T10:30:00",
 		"display_fields": [
 			{"field_name": "woreda_name", "value": "Bako Tibe", "order": 1},
@@ -405,6 +406,10 @@ class TestHttpReadPath(IntegrationTestCase):
 			search_text="Abebe", filter_by={"state": "APPROVED"}, page=2, page_size=10
 		)
 		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1", "frm-2"])
+		# The search row's photo link is passed on; a row without one has none.
+		self.assertEqual(
+			[i.photo_url for i in page["items"]], ["https://minio/photo-1?X-Amz-Expires=3600", None]
+		)
 		self.assertEqual(
 			(page["page"], page["page_size"], page["total"], page["number_of_pages"]), (2, 10, 2, 1)
 		)
