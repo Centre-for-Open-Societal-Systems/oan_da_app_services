@@ -630,10 +630,18 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		return rows
 
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
-		"""Land Details rows for a farmer (Lands tab)."""
+		"""Land Details rows for a farmer (Lands tab).
+
+		The Lands tab also carries a Farmer-register section (the farmer's land
+		summary), whose row is the farmer itself; only Land-register rows are plots.
+		"""
 		plots: list[Plot] = []
 		for section in self._tab_records(farmer_id, "land", action="get farmer plots"):
+			if str(section.get("section_register_id") or "") == self.register_id:
+				continue
 			for rec in section.get("records") or []:
+				if str(rec.get("internal_record_id") or "") == str(farmer_id):
+					continue
 				plots.append(land_record_to_plot(rec))
 		return plots
 

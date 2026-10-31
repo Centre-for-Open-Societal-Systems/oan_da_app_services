@@ -123,6 +123,12 @@ HOUSEHOLD_TAB = [
 ]
 LAND_TAB = [
 	{
+		# The Lands tab also returns the farmer's own land summary row; it is not a plot.
+		"section_register_id": REGISTER_ID,
+		"is_list": False,
+		"records": [{"internal_record_id": "frm-1", "total_land_area": 2.25}],
+	},
+	{
 		"section_register_id": "land-register",
 		"is_list": True,
 		"records": [
@@ -139,7 +145,7 @@ LAND_TAB = [
 				"certificate_provided": False,
 			},
 		],
-	}
+	},
 ]
 SEARCH_ROWS = [
 	{
