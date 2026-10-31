@@ -640,29 +640,32 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		return rows
 
 	def _with_record_summary(self, item: FarmerListItem) -> FarmerListItem:
-		"""Fill phone and total land area, which search rows leave out, from the farmer's record.
+		"""Fill phone, total land area and plot count, which search rows leave out.
 
 		search_in_a_register only carries the list-view columns the registry is
 		configured with (dev, 31 Oct 2026: names, gender, birth, education,
-		location), so phone and land come from get_subject_record. The pair is
-		cached per farmer for a few minutes so a list does not re-read every record.
+		location). Phone and land area come from get_subject_record, the plot
+		count from the Lands tab (as /plots counts it). The summary is cached per
+		farmer for a few minutes so a list does not re-read every record.
 		"""
-		if not item.farmer_id or (item.phone and item.total_land_area is not None):
+		if not item.farmer_id:
 			return item
 		key = f"{SUMMARY_CACHE_PREFIX}:{self.base_url}:{item.farmer_id}"
 		summary = frappe.cache.get_value(key)
-		if summary is None:
-			summary = {}
+		if not isinstance(summary, dict) or "total_plots" not in summary:
+			summary = {"total_plots": None}
 			try:
 				res = self._staff_post(
 					"/register-data/get_subject_record",
 					{"subject_register_id": self.register_id, "subject_record_id": item.farmer_id},
 					action="get farmer summary",
 				)
-				record = res.payload if res.ok and isinstance(res.payload, dict) else {}
-				summary = record_summary(record)
+				summary.update(
+					record_summary(res.payload if res.ok and isinstance(res.payload, dict) else {})
+				)
+				summary["total_plots"] = len(self.get_farmer_plots(item.farmer_id))
 			except FarmerRegistryError:
-				# A list row without phone / land beats a failed list.
+				# A list row without these figures beats a failed list.
 				frappe.logger("da_services").warning("Could not read the record of farmer %s", item.farmer_id)
 			frappe.cache.set_value(key, summary, expires_in_sec=SUMMARY_CACHE_TTL)
 		return item.copy(
@@ -671,6 +674,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 				"total_land_area": item.total_land_area
 				if item.total_land_area is not None
 				else summary.get("total_land_area"),
+				"total_plots": summary.get("total_plots"),
 			}
 		)
 

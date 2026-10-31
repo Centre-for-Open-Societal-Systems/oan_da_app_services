@@ -152,6 +152,7 @@ class FarmerListItem(BaseModel):
 	woreda: str | None = None
 	region: str | None = None
 	total_land_area: float | None = None
+	total_plots: int | None = Field(None, description="Land records on the Lands tab")
 	state: str
 	registration_date: datetime | None = None
 
