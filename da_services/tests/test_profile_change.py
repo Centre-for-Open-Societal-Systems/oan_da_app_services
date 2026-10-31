@@ -107,6 +107,22 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual([p["name"] for p in d["pending_requests"]], [r["name"]])
 		self.assertEqual(d["profile"]["mobile"], "+251911000001")
 
+	def test_da_id_in_the_request_is_ignored(self):
+		# The registry trusts the service account with every DA, so the DA-ID must come
+		# from the signed-in user's own assignment: DA1 naming DA3's record changes DA1's.
+		out = self._submit(da_id="DA-000004", internal_record_id="someone-else")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["da_id"], "DA-000001")
+		self.assertFalse(frappe.db.exists("DA Profile Change Request", {"da_id": "DA-000004"}))
+
+	def test_identity_fields_cannot_be_changed(self):
+		frappe.set_user(DA1)
+		frappe.db.commit()  # nosemgrep: error calls below roll back uncommitted rows
+		for field in ("first_name", "full_name", "fayda_id", "gender"):
+			out = api.submit(changes={field: "X"}, reason="test")
+			self.assertEqual(out["status"], "error", (field, out))
+		self.assertEqual(frappe.db.count("DA Profile Change Request"), 0)
+
 	def test_submit_validation(self):
 		frappe.set_user(DA1)
 		frappe.db.commit()  # nosemgrep: error calls below roll back uncommitted rows

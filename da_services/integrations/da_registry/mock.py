@@ -94,6 +94,8 @@ class MockDARegistryClient(DARegistryClient):
 		# Copy so tests that mutate never leak into each other.
 		self._records = {k: dict(v) for k, v in (records or FIXTURE_DAS).items()}
 		self._outcomes: dict[str, IntegrationResult] = {}
+		self.imports: list[tuple[str, bytes]] = []
+		self.import_exceptions: list[dict] = []
 
 	@classmethod
 	def shared(cls) -> MockDARegistryClient:
@@ -158,3 +160,18 @@ class MockDARegistryClient(DARegistryClient):
 		)
 		self._outcomes[outcome.reference] = result
 		return result
+
+	def import_agents_file(self, filename: str, content: bytes) -> IntegrationResult:
+		self.imports.append((filename, content))
+		return IntegrationResult(
+			accepted=True,
+			external_reference=f"MOCK-IMPORT-{len(self.imports)}",
+			message="queued by mock registry",
+		)
+
+	def list_import_exceptions(self, *, page: int = 1, page_size: int = 50) -> dict:
+		start = (page - 1) * page_size
+		return {
+			"items": self.import_exceptions[start : start + page_size],
+			"total": len(self.import_exceptions),
+		}
