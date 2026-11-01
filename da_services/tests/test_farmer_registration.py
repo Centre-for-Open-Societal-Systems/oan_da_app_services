@@ -109,6 +109,37 @@ class TestRegistrationForm(IntegrationTestCase):
 
 			FarmerRegistrationForm(**data)
 
+	def test_names_follow_the_registry_letters_only_rule(self):
+		"""The registry rejects "suresh1" after creating a draft; catch it at the boundary instead."""
+		from pydantic import ValidationError
+
+		for bad in ({"first_name": "suresh1"}, {"father_name": "K3bede"}, {"grandfather_name": "Tes@faye"}):
+			with self.assertRaises(ValidationError, msg=bad) as ctx:
+				self._form(**bad)
+			self.assertIn("letters only", str(ctx.exception))
+		ok = self._form(first_name="DA-TEST Abebe", father_name="O'Connor", grandfather_name="Tesfaye Haile")
+		self.assertEqual(ok.first_name, "DA-TEST Abebe")
+		member = {
+			"first_name": "Almaz1",
+			"grandfather_name": "Haile",
+			"gender": "female",
+			"date_of_birth": "1990-01-01",
+			"relationship": "spouse",
+		}
+		with self.assertRaises(ValidationError):
+			self._form(household={"size": 2, "members": [member]})
+
+	def test_identity_document_id_must_look_like_a_registry_id(self):
+		"""A typo'd or empty id reached the registry as DOCUMENT_NOT_FOUND; reject it at the boundary."""
+		from pydantic import ValidationError
+
+		for bad in ("", "1234", "<DOC_ID>", "991729cf 079e"):
+			with self.assertRaises(ValidationError, msg=bad):
+				self._form(identity_document_id=bad)
+		ok = self._form(identity_document_id="991729cf-079e-437c-976b-7aba0e00126f")
+		self.assertEqual(ok.identity_document_id, "991729cf-079e-437c-976b-7aba0e00126f")
+		self.assertIsNone(self._form(identity_document_id=None).identity_document_id)
+
 	def test_rejects_bad_phone_kebele_and_location(self):
 		from pydantic import ValidationError
 
@@ -129,15 +160,22 @@ class TestRegisterIdempotency(IntegrationTestCase):
 
 	def setUp(self):
 		# Idempotency is a local queue concern. The live registry rejects this
-		# fixture payload, so the case stays on the mock client.
+		# fixture payload, so the case stays on the mock client, on the ingest
+		# path (a site switched to intake must not change this test).
 		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
+		self._saved_mode = frappe.conf.get("farmer_registry_register_mode")
 		frappe.conf.farmer_registry_backend = "mock"
+		frappe.conf.farmer_registry_register_mode = "ingest"
 
 	def tearDown(self):
-		if self._farmer_backend is None:
-			frappe.conf.pop("farmer_registry_backend", None)
-		else:
-			frappe.conf.farmer_registry_backend = self._farmer_backend
+		for key, value in (
+			("farmer_registry_backend", self._farmer_backend),
+			("farmer_registry_register_mode", self._saved_mode),
+		):
+			if value is None:
+				frappe.conf.pop(key, None)
+			else:
+				frappe.conf[key] = value
 
 	def test_duplicate_submission_returns_first_event(self):
 		import uuid
@@ -174,3 +212,97 @@ class TestRegisterIdempotency(IntegrationTestCase):
 		payload = da_form_to_ingest_payload(SAMPLE_FORM)
 		suffix = payload["header"]["message_id"].removeprefix("da-svc-")
 		uuid.UUID(suffix)  # raises if not a UUID
+
+
+REGISTRY_REJECTED = {
+	"success": False,
+	"correlation_id": None,
+	"status": "ERROR",
+	"error_code": "SYS-ERR-001",
+	"error_message": "UNEXPECTED_ERROR",
+}
+
+
+class TestRegisterRegistryRejection(IntegrationTestCase):
+	"""A registry ERROR (e.g. SYS-ERR-001) is a failed registration, not a success."""
+
+	def setUp(self):
+		frappe.response.pop("http_status_code", None)
+		# These cases exercise the ingest path; a site switched to intake must not change them.
+		self._saved_mode = frappe.conf.get("farmer_registry_register_mode")
+		frappe.conf.farmer_registry_register_mode = "ingest"
+
+	def tearDown(self):
+		frappe.response.pop("http_status_code", None)
+		if self._saved_mode is None:
+			frappe.conf.pop("farmer_registry_register_mode", None)
+		else:
+			frappe.conf.farmer_registry_register_mode = self._saved_mode
+
+	def _client(self, result):
+		from unittest.mock import MagicMock
+
+		client = MagicMock()
+		client.register_farmer.return_value = result
+		return client
+
+	def test_service_marks_event_failed_and_returns_registry_error(self):
+		from unittest.mock import patch
+
+		from da_services.services import farmers as svc
+
+		with patch(
+			"da_services.services.farmers.get_farmer_registry_client",
+			return_value=self._client(REGISTRY_REJECTED),
+		):
+			result = svc.register_farmer(dict(SAMPLE_FORM), ctx=None)
+
+		self.assertFalse(result["success"])
+		self.assertEqual(result["error_code"], "SYS-ERR-001")
+		self.assertEqual(result["error_message"], "UNEXPECTED_ERROR")
+		event = frappe.db.get_value(
+			"DA Integration Event", result["event_id"], ["status", "last_error"], as_dict=True
+		)
+		self.assertEqual(event.status, "Failed")
+		self.assertEqual(event.last_error, "UNEXPECTED_ERROR")
+
+	def test_route_returns_502_error_when_registry_rejects(self):
+		from unittest.mock import patch
+
+		from da_services.api.v1 import farmers as api
+
+		frappe.local.form_dict = frappe._dict(first_name="Abebe", gender="male")
+		with (
+			patch.object(api, "require_roles", return_value=None),
+			patch(
+				"da_services.services.farmers.get_farmer_registry_client",
+				return_value=self._client(REGISTRY_REJECTED),
+			),
+		):
+			res = api.register_farmer()
+
+		self.assertEqual(frappe.response.get("http_status_code"), 502)
+		self.assertEqual(res["status"], "error")
+		self.assertEqual(res["code"], "FARMER_REGISTRY_REJECTED")
+		self.assertIn("UNEXPECTED_ERROR", res["message"])
+		self.assertEqual(res["details"]["registry_error_code"], "SYS-ERR-001")
+		self.assertTrue(res["details"]["event_id"])
+
+	def test_route_still_succeeds_when_registry_accepts(self):
+		from unittest.mock import patch
+
+		from da_services.api.v1 import farmers as api
+
+		frappe.local.form_dict = frappe._dict(first_name="Abebe", gender="male")
+		with (
+			patch.object(api, "require_roles", return_value=None),
+			patch(
+				"da_services.services.farmers.get_farmer_registry_client",
+				return_value=MockFarmerRegistryClient(),
+			),
+		):
+			res = api.register_farmer()
+
+		self.assertIsNone(frappe.response.get("http_status_code"))
+		self.assertEqual(res["status"], "success")
+		self.assertTrue(res["data"]["correlation_id"])

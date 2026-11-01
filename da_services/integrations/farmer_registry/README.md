@@ -40,10 +40,41 @@ Responses come back as `{"response_header": {"response_status": "SUCCESS|ERROR",
 |---|---|---|
 | `get_farmer(id)` | `register-data/get_subject_record` + `get_tab_records` (farmer, location, household tabs) | Identity row is flat; birth / socio-economic / phones / location / household come from tab sections and are merged in. Returns `None` when the registry says not found. |
 | `list_farmers(woreda, kebele, state, limit, offset)` | `register-data/search_in_a_register` | `filter_by` is a JSON dict of the register's whitelisted fields (`woreda_name`, `region_name`, `state`, `first_name`, ...). DA codes are translated to names via `DA Administrative Area`. `kebele_name` is not yet whitelisted on the registry, so Kebele is also narrowed client-side from `display_fields`. |
+| `search_farmers(search_text, filter_by, page, page_size)` | `register-data/search_in_a_register` | DA-272 live search: `search_text` plus `{woreda, kebele, state}` as DA codes; returns the page with the registry's `number_of_items` / `number_of_pages`. Used by `GET /farmers?search_text=` instead of the cache. The dev registry (29 Oct 2026) ignores `filter_by` altogether, so the Woreda / Kebele filters are re-applied on the returned rows and fail closed (`filtered_client_side: true`; totals are then the registry's unfiltered figures). Raised with the registry team. |
 | `get_farmer_plots(id)` | `register-data/get_tab_records` (land tab) | Land Details rows -> `Plot`. |
+| `get_change_requests(id, tab, status)` | `change-requests/get_change_requests` | DA-272: `{subject_register_id, subject_record_id, tab_id}` per register tab (6 calls, or one with `tab`); rows carry `approval_status` PENDING / APPROVED / REJECTED. Backs `GET /farmers/{id}/change-requests`. |
+| `get_registers()` | `register-metadata/get_all_registers` | Every register with its id; cached 1 h. The Farmer `register_id` is taken from here when not configured. Backs `GET /registries/farmer/registers`. |
+| `get_intake_submission(id)` | `intake-form-data/get_intake_form_submission` | The submission with every saved section. Backs `GET /farmers/registrations/{submission_id}`, the only way to see a farmer before approval. |
+| `delete_intake_submission(id)` | `intake-form-data/delete_intake_form_submission` | Called when a section is rejected mid-registration, so the half-filled draft does not show up as a second farmer in the registry portal. The event's `last_error` says whether the draft was deleted. |
+| `get_intake_forms()` | `intake-form-metadata/get_all_intake_forms` | Forms of the Farmer register; the one whose mnemonic contains `farmer_registry_intake_form_contains` (default `Farmer Ingestion`) becomes the intake form id when not configured. |
 | `update_farmer(id, updates)` | `change-requests/create_change_request` | One change request per register section; approved by a Woreda officer. Only socio-economic fields are editable this way today (`income_source`, `education_level`, `marital_status`, `is_psnp_user`, `disabled`); other DA-41 fields are rejected as unsupported so the sync queue records a clear reason. The change request id is returned as `version`. |
 | `register_farmer(payload)` | `input-mechanism-data/ingest-data?data_model&register_id&intake_form_id` | Async: returns a `correlation_id`; the farmer lands in the Intake Form and gets an FR-id after Woreda approval. |
 | `get_ingest_status(correlation_id)` | `ingestion-data/search_in_ingestion_data` | Pipeline rows for a submission. |
+
+### Registration through the intake form (`farmer_registry_register_mode: "intake"`)
+
+Since the 26 Oct 2026 registry deploy, `ingest-data` on `FARMER_ODK_MODEL` needs
+an RS256 partner signature, so `STAFF_AUTHENTICATED` is rejected (401, surfaced
+as `SYS-ERR-001`). The intake mode registers the way the staff portal does
+(`intake.py`):
+
+1. The frontend uploads the identity document: `POST /farmers/registrations/documents`
+   -> registry `documents/upload_documents` -> `document_id`.
+2. `POST /farmers` with `identity_document_id`. The service reads the form layout
+   (`intake-form-metadata/render_intake_form` + `register-metadata/get_all_registers`),
+   the code lists (Master Data `attributes/get_attribute_values`) and checks the
+   kebele (Master Data `geo/*`); all cached.
+3. Each section is saved into one draft (`intake-form-data/save_intake_form_submission`,
+   Household first), then `finalize_intake_form_submission` sends it for approval.
+   The DA Integration Event keeps the registry `submission_id` from the first save.
+
+The intake form needs more than ingest: `grandfather_name` (registry last name),
+`gender`, `date_of_birth`, `marital_status`, `education_level`, `kebele` as a
+Master Data id (`ET04080101`) and `identity_document_id`. The farmer is the
+household head; `household.size` must equal 1 + `household.members`. Missing or
+unknown values are listed together in one 400. A registry validation message
+(e.g. a household rule) comes back as a 502 `FARMER_REGISTRY_REJECTED` with the
+section that failed.
 
 Auth: a Keycloak **client-credentials** token (service account) cached per worker
 behind a lock, plus the double-submit CSRF pair (`X-CSRF-Token` header == cookie)
@@ -84,16 +115,20 @@ The service account needs these `farmer-registry-staff-portal` client roles:
 |---|---|---|
 | `farmer_registry_url` | yes | Staff API base URL (`http(s)://...`) |
 | `farmer_registry_keycloak` | yes* | `token_url`, `client_id`, `client_secret` of the DA Services service account. *Or `farmer_registry_api_key` for a static bearer token (testing only). |
-| `farmer_registry_ingest.register_id` | yes | Farmer register id |
-| `farmer_registry_ingest.intake_form_id` | for register | Farmer intake form id |
+| `farmer_registry_ingest.register_id` | no | Farmer register id. When absent it is discovered from `get_all_registers` (the register named `Farmer`) and cached for an hour. |
+| `farmer_registry_ingest.intake_form_id` | no | Farmer intake form id. When absent it is discovered from `get_all_intake_forms`: the one form of the Farmer register whose mnemonic contains `farmer_registry_intake_form_contains`. |
+| `farmer_registry_intake_form_contains` | no | Form-name selector for that discovery, default `Farmer Ingestion` (spaces, `_` and `-` are ignored, so it matches `farmer_ingestion_intake`). |
 | `farmer_registry_ingest.data_model` | for register | Ingest data model (default `FARMER_ODK_MODEL`) |
 | `farmer_registry_ingest.tabs` | no | Override tab ids (defaults match the dev Farmer register) |
 | `farmer_registry_timeout` | no | Seconds, default 30 |
 
 The http client validates this at construction and raises
-`FarmerRegistryError` on a missing URL, partial Keycloak config, no auth at all
-or a missing register id — misconfiguration surfaces at startup, not on the
-first request from the field.
+`FarmerRegistryError` on a missing URL, partial Keycloak config or no auth at
+all — misconfiguration surfaces at startup, not on the first request from the
+field. A discovered id that cannot be chosen (no `Farmer` register, zero or
+several matching forms) raises `FarmerRegistryError` on first use; after a
+registry redeploy call `HTTPFarmerRegistryClient.clear_id_cache()` (or wait
+an hour).
 
 ## Cache
 

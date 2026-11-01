@@ -152,6 +152,10 @@ class FarmerListItem(BaseModel):
 	woreda: str | None = None
 	region: str | None = None
 	total_land_area: float | None = None
+	total_plots: int | None = Field(None, description="Land records on the Lands tab")
+	photo_url: str | None = Field(
+		None, description="Signed link to the record photo (expires in about an hour)"
+	)
 	state: str
 	registration_date: datetime | None = None
 
@@ -177,18 +181,112 @@ class LandItem(BaseModel):
 	land_id: str | None = Field(None, max_length=50)
 	ownership: str = Field("owner", description="owner | tenant | share")
 	area_hectare: float | None = Field(None, ge=0, le=10000)
+	# Registry codes from GET /registries/farmer/field-options, sent as they are.
+	land_kebele: str | None = Field(None, max_length=60)
+	soil_fertility: str | None = Field(None, max_length=60)
+	current_land_use: str | None = Field(None, max_length=60)
+	means_of_acquisition: str | None = Field(None, max_length=60)
+	year_of_acquisition: int | None = Field(None, ge=1900, le=2100)
+	remark: str | None = Field(None, max_length=500)
 
 
 class CropItem(BaseModel):
 	name: str = Field(..., min_length=1, max_length=80)
 	planted_date: date | None = None
-	season: str = Field("meher", description="meher | belg | irrigated | perennial")
+	season: str = Field("meher", description="meher | belg | irrigated")
+	end_use: str | None = Field(None, max_length=60, description="registry code, see field-options")
 
 
 class LivestockItem(BaseModel):
 	animal: str = Field(..., min_length=1, max_length=80)
 	count: int = Field(1, ge=1, le=100000)
-	system: str = Field("mixed", description="mixed | intensive | extensive")
+	system: str = Field(
+		"mixed", description="mixed | semi_nomadic | sedentary_pastoral | nomadic_pastoral | industrial"
+	)
+	# Registry codes from GET /registries/farmer/field-options, sent as they are.
+	breed: str | None = Field(None, max_length=60)
+	gender: str | None = Field(None, max_length=60)
+	body_condition: str | None = Field(None, max_length=60)
+	production_type: str | None = Field(None, max_length=60)
+
+
+class MembershipInfo(BaseModel):
+	"""Cooperative / union / cluster membership. The registry requires the three
+	yes/no answers before it finalizes a registration; they default to no."""
+
+	is_primary_cooperative_member: bool = False
+	primary_cooperative_name: str | None = Field(None, max_length=140)
+	is_cooperative_union_member: bool = False
+	cooperative_union_name: str | None = Field(None, max_length=140)
+	is_farmer_cluster_member: bool = False
+	farmer_cluster_role: str | None = Field(
+		None, max_length=80, description="lead | deputy | secretary | accountant | member"
+	)
+	primary_commodity: str | None = Field(None, max_length=80, description="crop name, e.g. teff")
+
+
+def _check_person_name(v):
+	"""The registry's name rule: letters only, with spaces, apostrophes and hyphens.
+
+	Checked here so a digit in a name is a 400 with the field named, instead of
+	a 502 after the registry has already created a draft.
+	"""
+	if v is None:
+		return None
+	s = str(v).strip()
+	if s == "":
+		return None
+	if not all(ch.isalpha() or ch in " '-" for ch in s):
+		raise ValueError("use letters only (spaces, apostrophes and hyphens allowed)")
+	return s
+
+
+def _norm_gender_value(v):
+	if v is None or v == "":
+		return None
+	s = str(v).strip().lower()
+	if s in ("m", "male"):
+		return "male"
+	if s in ("f", "female"):
+		return "female"
+	if s == "other":
+		return "other"
+	raise ValueError("gender must be male, female or other")
+
+
+class HouseholdMemberItem(BaseModel):
+	"""A household member other than the farmer (the farmer is always the head)."""
+
+	first_name: str = Field(..., min_length=1, max_length=100)
+	father_name: str | None = Field(None, max_length=100)
+	grandfather_name: str = Field(..., min_length=1, max_length=100)
+	gender: str = Field(..., description="male | female | other")
+	date_of_birth: date
+	relationship: str = Field(
+		..., description="spouse | child | parent | sibling | other_relative | non_relative"
+	)
+
+	@field_validator("first_name", "father_name", "grandfather_name", mode="before")
+	@classmethod
+	def _check_names(cls, v):
+		return _check_person_name(v)
+
+	@field_validator("gender", mode="before")
+	@classmethod
+	def _norm_gender(cls, v):
+		return _norm_gender_value(v)
+
+
+class HouseholdInfo(BaseModel):
+	"""The farmer's household. size counts the farmer, so size == 1 + len(members)."""
+
+	size: int | None = Field(None, ge=1, le=100)
+	number_of_children: int | None = Field(None, ge=0, le=100)
+	other_land_owner: bool = False
+	father_included: bool | None = None
+	mother_included: bool | None = None
+	other_farmer_in_household: bool | None = None
+	members: list[HouseholdMemberItem] = Field(default_factory=list, max_length=99)
 
 
 class FarmerRegistrationForm(BaseModel):
@@ -197,6 +295,9 @@ class FarmerRegistrationForm(BaseModel):
 	Mirrors the fields the DA Register Farmer form collects. Unknown keys are
 	ignored so the frontend can send UI-only fields; known keys are typed and
 	range-checked here so the service and mapper never see malformed input.
+
+	The intake form path (farmer_registry_register_mode = "intake") needs more
+	than ingest did; intake.py checks those fields and names what is missing.
 	"""
 
 	model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
@@ -204,14 +305,49 @@ class FarmerRegistrationForm(BaseModel):
 	first_name: str = Field(..., min_length=1, max_length=100)
 	father_name: str | None = Field(None, max_length=100)
 	grandfather_name: str | None = Field(None, max_length=100)
+	first_name_local: str | None = Field(None, max_length=100, description="Name in the farmer's language")
+	middle_name_local: str | None = Field(None, max_length=100)
+	last_name_local: str | None = Field(None, max_length=100)
+	language_spoken: str | None = Field(None, max_length=60, description="registry code, see field-options")
 	gender: str | None = Field(None, description="male | female | other")
 	date_of_birth: date | None = None
 	phone: str | None = Field(None, pattern=r"^\+?\d{9,15}$")
 	region: str | None = Field(None, max_length=20)
 	woreda: str | None = Field(None, pattern=r"^\d{1,12}$", description="Master Data woreda code")
-	kebele: str | None = Field(None, pattern=r"^\d{1,15}$", description="Master Data kebele code")
-	national_id: str | None = Field(None, pattern=r"^\d{10,20}$", description="Fayda / national id")
+	kebele: str | None = Field(
+		None,
+		pattern=r"^(ET)?\d{1,15}$",
+		description="Kebele code: Master Data id (ET04080101) for intake, numeric P-code for ingest",
+	)
+	national_id: str | None = Field(None, pattern=r"^\d{10,20}$", description="Fayda FAN (16) or FIN (12)")
+	fayda_rid: str | None = Field(None, pattern=r"^\d{29}$", description="Fayda registration slip id")
 	location: str | None = Field(None, description='"lat lon [alt [accuracy]]"')
+	marital_status: str | None = Field(None, max_length=40, description="single | married | widowed | ...")
+	education_level: str | None = Field(None, max_length=40, description="illiterate | primary | ...")
+	income_sources: list[str] = Field(default_factory=list, max_length=10)
+	income_source_other: str | None = Field(
+		None, max_length=140, description='What "other" is; required when income_sources includes other'
+	)
+	disabled: bool = False
+	disability_type: str | None = Field(
+		None, max_length=40, description="vision | hearing | mobility | cognition | self_care | communication"
+	)
+	disability_severity: str | None = Field(
+		None,
+		max_length=40,
+		description="no_difficulty | some_difficulty | a_lot_of_difficulty | cannot_do_at_all",
+	)
+	is_psnp_user: bool | None = None
+	household: HouseholdInfo | None = None
+	membership: MembershipInfo | None = None
+	identity_document_id: str | None = Field(
+		None,
+		pattern=r"^[A-Za-z0-9-]{8,100}$",
+		description="document_id from POST /farmers/registrations/documents (a registry uuid)",
+	)
+	identity_document_type: str = Field(
+		"fayda", max_length=60, description="fayda | kebele_woreda_id | passport | ..."
+	)
 	lands: list[LandItem] = Field(default_factory=list, max_length=50)
 	crops: list[CropItem] = Field(default_factory=list, max_length=50)
 	livestock: list[LivestockItem] = Field(default_factory=list, max_length=50)
@@ -221,19 +357,15 @@ class FarmerRegistrationForm(BaseModel):
 		None, pattern=r"^[A-Za-z0-9_-]{8,64}$", description="Idempotency key chosen by the client"
 	)
 
+	@field_validator("first_name", "father_name", "grandfather_name", mode="before")
+	@classmethod
+	def _check_names(cls, v):
+		return _check_person_name(v)
+
 	@field_validator("gender", mode="before")
 	@classmethod
 	def _norm_gender(cls, v):
-		if v is None or v == "":
-			return None
-		s = str(v).strip().lower()
-		if s in ("m", "male"):
-			return "male"
-		if s in ("f", "female"):
-			return "female"
-		if s == "other":
-			return "other"
-		raise ValueError("gender must be male, female or other")
+		return _norm_gender_value(v)
 
 	@field_validator("location")
 	@classmethod
