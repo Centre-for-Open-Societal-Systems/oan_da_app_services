@@ -25,6 +25,8 @@ SECTION_SERVICE = "da_service_section_02"
 # ProfileUpdate.changes key (services/profile.py EDITABLE) -> (section, registry field)
 PROFILE_FIELDS: dict[str, tuple[str, str]] = {
 	"phone": (SECTION_CONTACT, "mobile_number"),
+	"telegram_number": (SECTION_CONTACT, "telegram_number"),
+	"alternate_number": (SECTION_CONTACT, "alternate_number"),
 	"email": (SECTION_CONTACT, "email"),
 	"education_tier": (SECTION_SERVICE, "education_level"),
 	"specialisation": (SECTION_SERVICE, "specialisation"),
@@ -49,20 +51,78 @@ def _to_label(code: str | None) -> str | None:
 	return str(code).replace("_", " ").strip().capitalize()
 
 
-def _geo_level(record: dict, level: str) -> str | None:
-	"""Code of one level from geo_code_hierarchy_json, for records without *_code columns."""
+def _geo_row(record: dict, level: str) -> dict:
+	"""One level (region / zone / woreda / kebele) of geo_code_hierarchy_json."""
 	geo = record.get("geo_code_hierarchy_json")
 	if not isinstance(geo, dict):
-		return None
+		return {}
 	for row in geo.get("hierarchy") or []:
 		if row.get("level") == level:
-			return row.get("level_value_id")
-	return None
+			return row
+	return {}
 
 
-def registry_record_to_da_reference(record: dict) -> DAReference:
-	"""A DA record from get_tab_records (da_details_tab) -> DAReference."""
+def _geo_level(record: dict, level: str) -> str | None:
+	"""Code of one level, for records without *_code columns."""
+	return _geo_row(record, level).get("level_value_id")
+
+
+def _geo_name(record: dict, level: str) -> str | None:
+	"""Name of one level (the registry's *_name columns are often empty)."""
+	return record.get(f"{level}_name") or _geo_row(record, level).get("level_value_mnemonic")
+
+
+# Master Data attribute of each coded DA field
+LABEL_ATTRIBUTES = {
+	"prefix": "PREFIX",
+	"gender": "GENDER",
+	"marital_status": "MARITAL_STATUS",
+	"education_level": "DA_EDUCATION_LEVEL",
+	"specialisation": "DA_SPECIALISATION",
+	"position": "DA_POSITION",
+}
+
+# Ethiopian calendar months, birth_month_ec 1-13
+EC_MONTHS = (
+	"Meskerem",
+	"Tikimt",
+	"Hidar",
+	"Tahsas",
+	"Tir",
+	"Yekatit",
+	"Megabit",
+	"Miazia",
+	"Ginbot",
+	"Sene",
+	"Hamle",
+	"Nehase",
+	"Pagume",
+)
+
+
+def _int(value) -> int | None:
+	try:
+		return int(value) if value not in (None, "") else None
+	except TypeError, ValueError:
+		return None
+
+
+def registry_record_to_da_reference(record: dict, labels: dict[str, dict] | None = None) -> DAReference:
+	"""A DA record from get_tab_records (da_details_tab) -> DAReference.
+
+	``labels`` maps a Master Data attribute (DA_POSITION...) to {value_id: value_display};
+	without it a code is shown as words ("CROP_PRODUCTION" -> "Crop production").
+	"""
+	labels = labels or {}
+
+	def label(field: str) -> str | None:
+		code = record.get(field)
+		if not code:
+			return None
+		return (labels.get(LABEL_ATTRIBUTES[field]) or {}).get(code) or _to_label(code)
+
 	name_parts = (record.get("first_name"), record.get("middle_name"), record.get("last_name"))
+	month = _int(record.get("birth_month_ec"))
 	return DAReference(
 		da_id=str(record["functional_record_id"]),
 		full_name=record.get("record_name") or " ".join(p for p in name_parts if p),
@@ -73,13 +133,33 @@ def registry_record_to_da_reference(record: dict) -> DAReference:
 		zone=record.get("zone_code") or _geo_level(record, "zone"),
 		woreda=record.get("woreda_code") or _geo_level(record, "woreda"),
 		kebele=record.get("geo_lowest_level_value_id") or _geo_level(record, "kebele"),
-		education_tier=_to_label(record.get("education_level")),
+		education_tier=label("education_level"),
 		# The registry checks Fayda ID uniqueness only; it holds no verification status.
 		fayda_status=None,
 		phone=record.get("mobile_number"),
-		specialisation=_to_label(record.get("specialisation")),
+		specialisation=label("specialisation"),
 		joined_at=record.get("joined_date"),
 		email=record.get("email"),
+		salutation=label("prefix"),
+		first_name=record.get("first_name"),
+		# The registry keeps the father's name in middle_name, the grandfather's in last_name.
+		father_name=record.get("middle_name"),
+		grandfather_name=record.get("last_name"),
+		fayda_id=record.get("foundational_id"),
+		gender=label("gender"),
+		marital_status=label("marital_status"),
+		birth_month_ec=month,
+		birth_month_name=EC_MONTHS[month - 1] if month and 1 <= month <= 13 else None,
+		birth_year_ec=_int(record.get("birth_year_ec")),
+		telegram_number=record.get("telegram_number"),
+		alternate_number=record.get("alternate_number"),
+		position=label("position"),
+		# Every DA is posted in Ethiopia; the register has no country field.
+		country="Ethiopia",
+		region_name=_geo_name(record, "region"),
+		zone_name=_geo_name(record, "zone"),
+		woreda_name=_geo_name(record, "woreda"),
+		kebele_name=_geo_name(record, "kebele"),
 		source_version=record.get("last_approved_at"),
 		fetched_at=datetime.now(UTC),
 	)

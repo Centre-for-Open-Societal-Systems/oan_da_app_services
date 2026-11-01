@@ -92,6 +92,14 @@ class DARegistryClient(ABC):
 	def list_import_exceptions(self, *, page: int = 1, page_size: int = 50) -> dict:
 		"""Import rows the registry could not take, newest first: {"items": [...], "total": n}."""
 
+	@abstractmethod
+	def change_request_status(self, reference: str) -> str:
+		"""The registry's approval of a pushed profile change: Pending, Approved or Rejected.
+
+		``reference`` is the IntegrationResult.external_reference push_profile_update
+		returned. Raises DANotFound when the registry has no such change request.
+		"""
+
 
 def get_client() -> DARegistryClient:
 	"""Build the configured client. Defaults to the mock outside production."""

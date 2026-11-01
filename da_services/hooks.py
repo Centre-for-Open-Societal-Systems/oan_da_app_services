@@ -186,6 +186,10 @@ scheduler_events = {
 			"da_services.integrations.grievance.queue.process_pending",
 			"da_services.services.farmer_updates.process_pending_farmer_updates",
 		],
+		# Read back the DA Registry's two-stage decision on pushed profile changes.
+		"*/15 * * * *": [
+			"da_services.services.profile.sync_registry_approvals",
+		],
 	},
 	# Start approved leaves on their first day; end active leaves after their last day.
 	"daily": [

@@ -9,6 +9,7 @@ auth and error mapping are exercised without a live registry.
 import json
 from unittest.mock import patch
 
+import frappe
 import requests
 from frappe.tests import IntegrationTestCase
 
@@ -23,7 +24,25 @@ from da_services.integrations.da_registry.schemas import ProfileUpdate
 from da_services.services import constants as C
 
 BASE = "https://staff-da.example"
+MASTER_DATA = "https://master-data.example"
 TOKEN_URL = "https://kc.example/realms/staff/protocol/openid-connect/token"
+MASTER_DATA_VALUES = {
+	"PREFIX": {"MR": "Mr"},
+	"GENDER": {"MALE": "Male"},
+	"MARITAL_STATUS": {"MARRIED": "Married"},
+	"DA_EDUCATION_LEVEL": {"DIPLOMA": "Diploma", "DEGREE": "Degree"},
+	"DA_SPECIALISATION": {"CROP_PRODUCTION": "Crop production"},
+	"DA_POSITION": {"DEVELOPMENT_AGENT": "Development agent", "SENIOR_DA": "Senior development agent"},
+}
+GEO = {
+	"lowest_level_value_id": "ET04030101",
+	"hierarchy": [
+		{"level": "region", "level_value_id": "ET04", "level_value_mnemonic": "Oromia"},
+		{"level": "zone", "level_value_id": "ET0403", "level_value_mnemonic": "West Shewa"},
+		{"level": "woreda", "level_value_id": "ET040301", "level_value_mnemonic": "Bako Tibe"},
+		{"level": "kebele", "level_value_id": "ET04030101", "level_value_mnemonic": "Bako 01"},
+	],
+}
 
 
 def _record(da_id, internal_id, *, woreda="ET010101", status="ACTIVE", **extra):
@@ -87,12 +106,13 @@ class FakeRegistry:
 		self.fail_next = None  # (status, body) for the next staff call
 		self.change_answer = None
 		self.uploads = []
+		self.change_status = {}
 
 	def __call__(self, url, json=None, data=None, headers=None, cookies=None, timeout=None, files=None):
 		if url == TOKEN_URL:
 			self.token_calls += 1
 			return _Resp(200, {"access_token": f"tok-{self.token_calls}", "expires_in": 300})
-		path = url[len(BASE) :]
+		path = url[len(MASTER_DATA) :] if url.startswith(MASTER_DATA) else url[len(BASE) :]
 		if files:  # multipart document upload: no JSON envelope
 			self.uploads.append((path, data, files, headers, cookies))
 			name = files["documents"][0]
@@ -162,10 +182,24 @@ class FakeRegistry:
 			{"pagination_response": {"number_of_items": 1, "number_of_pages": 1}, "response_payload": [row]}
 		)
 
+	def _get_attribute_values(self, body):
+		attribute = body["request_payload"]["attribute_id"]
+		values = [{"value_id": k, "value_display": v} for k, v in MASTER_DATA_VALUES[attribute].items()]
+		return _ok({"response_payload": {"attribute_values": values}})
+
+	def _get_change_request(self, body):
+		ref = body["request_payload"]["change_request_id"]
+		if ref not in self.change_status:
+			return _err("Change request not found")
+		return _ok(
+			{"response_payload": {"change_request_id": ref, "approval_status": self.change_status[ref]}}
+		)
+
 
 class TestHttpDARegistryClient(IntegrationTestCase):
 	def setUp(self):
 		http_mod._TOKEN_CACHE.clear()
+		frappe.cache.delete_keys("da_registry:")
 		self.registry = FakeRegistry(
 			[
 				_record("DA-3821981536", "rec-1"),
@@ -360,6 +394,7 @@ class FakeSession:
 class TestStaffLogin(IntegrationTestCase):
 	def setUp(self):
 		http_mod._TOKEN_CACHE.clear()
+		frappe.cache.delete_keys("da_registry:")
 		self.client = HttpDARegistryClient(
 			BASE, keycloak={"login_url": LOGIN_URL, "username": "da-services-dev", "password": "pw"}
 		)
@@ -404,6 +439,7 @@ class TestStaffLogin(IntegrationTestCase):
 class TestHttpAgentImport(IntegrationTestCase):
 	def setUp(self):
 		http_mod._TOKEN_CACHE.clear()
+		frappe.cache.delete_keys("da_registry:")
 		self.registry = FakeRegistry([])
 		patcher = patch.object(http_mod.requests, "post", side_effect=self.registry)
 		patcher.start()
@@ -443,3 +479,96 @@ class TestHttpAgentImport(IntegrationTestCase):
 		self.assertEqual(path, "/da/search_exceptions")
 		self.assertEqual(payload["source"], "file_import")
 		self.assertEqual(pagination, {"current_page": 2, "page_size": 10})
+
+
+class TestProfileFieldsAndCaching(IntegrationTestCase):
+	def setUp(self):
+		http_mod._TOKEN_CACHE.clear()
+		frappe.cache.delete_keys("da_registry:")
+		self.registry = FakeRegistry(
+			[
+				_record(
+					"DA-0001234567",
+					"rec-1",
+					woreda="ET040301",
+					prefix="MR",
+					first_name="Tadesse",
+					middle_name="Alemu",
+					last_name="Bekele",
+					record_name="Tadesse Alemu Bekele",
+					foundational_id="3512449877120345",
+					gender="MALE",
+					marital_status="MARRIED",
+					birth_month_ec=9,
+					birth_year_ec=1990,
+					telegram_number="0912345679",
+					geo_code_hierarchy_json=GEO,
+				),
+				_record("DA-0001234568", "rec-2", woreda="ET040301", geo_code_hierarchy_json=GEO),
+			],
+			page_size=10,
+		)
+		patcher = patch.object(http_mod.requests, "post", side_effect=self.registry)
+		patcher.start()
+		self.addCleanup(patcher.stop)
+		self.addCleanup(frappe.cache.delete_keys, "da_registry:")
+		self.client = HttpDARegistryClient(
+			BASE,
+			keycloak={"token_url": TOKEN_URL, "client_id": "da-services-backend", "client_secret": "s"},
+			master_data_url=MASTER_DATA,
+		)
+
+	def _tab_reads(self):
+		return [c for c in self.registry.calls if c[0] == "/register-data/get_tab_records"]
+
+	def test_profile_carries_every_registry_field_with_labels_and_names(self):
+		ref = self.client.get_da("DA-0001234567")
+		self.assertEqual(
+			(ref.salutation, ref.first_name, ref.father_name, ref.grandfather_name),
+			("Mr", "Tadesse", "Alemu", "Bekele"),
+		)
+		self.assertEqual(
+			(ref.fayda_id, ref.gender, ref.marital_status), ("3512449877120345", "Male", "Married")
+		)
+		self.assertEqual((ref.birth_month_ec, ref.birth_month_name, ref.birth_year_ec), (9, "Ginbot", 1990))
+		self.assertEqual((ref.position, ref.education_tier), ("Development agent", "Diploma"))
+		self.assertEqual(ref.telegram_number, "0912345679")
+		self.assertEqual(
+			(ref.country, ref.region_name, ref.zone_name, ref.woreda_name, ref.kebele_name),
+			("Ethiopia", "Oromia", "West Shewa", "Bako Tibe", "Bako 01"),
+		)
+
+	def test_master_data_labels_are_read_once(self):
+		self.client.get_da("DA-0001234567")
+		self.client.get_da("DA-0001234567")
+		label_reads = [c for c in self.registry.calls if c[0] == "/attributes/get_attribute_values"]
+		self.assertEqual(len(label_reads), 6)  # one per attribute, then cached
+
+	def test_without_master_data_codes_are_shown_as_words(self):
+		client = HttpDARegistryClient(
+			BASE, keycloak={"token_url": TOKEN_URL, "client_id": "c", "client_secret": "s"}
+		)
+		self.assertEqual(client.get_da("DA-0001234567").position, "Development agent")
+		self.assertEqual([c for c in self.registry.calls if c[0] == "/attributes/get_attribute_values"], [])
+
+	def test_a_list_reads_each_record_once_then_from_the_cache(self):
+		self.assertEqual(len(self.client.list_das(woreda="ET040301")), 2)
+		self.assertEqual(len(self._tab_reads()), 2)
+		refs = self.client.list_das(woreda="ET040301")
+		self.assertEqual(len(self._tab_reads()), 2)  # served from the record cache
+		self.assertEqual({r.kebele_name for r in refs}, {"Bako 01"})
+
+	def test_a_single_da_is_always_read_live(self):
+		self.client.list_das(woreda="ET040301")
+		before = len(self._tab_reads())
+		self.client.get_da("DA-0001234567")
+		self.assertEqual(len(self._tab_reads()), before + 1)
+
+	def test_change_request_status(self):
+		self.registry.change_status = {"cr-1": "PENDING", "cr-2": "APPROVED", "cr-3": "REJECTED"}
+		self.assertEqual(
+			[self.client.change_request_status(r) for r in ("cr-1", "cr-2", "cr-3")],
+			["Pending", "Approved", "Rejected"],
+		)
+		with self.assertRaises(DANotFound):
+			self.client.change_request_status("cr-404")

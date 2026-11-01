@@ -7,6 +7,9 @@
   "da_registry_register_id": "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3f90",
   "da_registry_sender_app": "da-services",
 
+  "_comment_master_data": "Optional. Labels for the coded profile fields (Mr, Degree, Development agent) come from Master Data with the same token; without it codes are shown as words.",
+  "da_registry_master_data_url": "https://master-data.development.oanstaging.com",
+
   "_comment_keycloak": "Service account da-services-backend in realm staff (client credentials). Needs the client role Data Editor on da-registry-staff-portal to read DAs and open change requests. It cannot approve: approvals happen in the registry.",
   "da_registry_keycloak": {
     "token_url": "https://keycloak.development.oanstaging.com/realms/staff/protocol/openid-connect/token",

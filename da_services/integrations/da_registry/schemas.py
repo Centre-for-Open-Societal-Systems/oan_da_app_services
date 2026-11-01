@@ -35,6 +35,27 @@ class DAReference:
 	email: str | None = None
 	language: str | None = None  # en / am / om / ti
 	photo_url: str | None = None
+	# Identity and posting detail for the My Profile screen: the DA register's
+	# da_details_tab, coded values shown with their Master Data labels and the
+	# location by name as well as by code.
+	salutation: str | None = None
+	first_name: str | None = None
+	father_name: str | None = None
+	grandfather_name: str | None = None
+	fayda_id: str | None = None
+	gender: str | None = None
+	marital_status: str | None = None
+	birth_month_ec: int | None = None
+	birth_month_name: str | None = None  # Ethiopian calendar month, e.g. Ginbot
+	birth_year_ec: int | None = None
+	telegram_number: str | None = None
+	alternate_number: str | None = None
+	position: str | None = None
+	country: str | None = None
+	region_name: str | None = None
+	zone_name: str | None = None
+	woreda_name: str | None = None
+	kebele_name: str | None = None
 	source_version: str | None = None  # registry record version, for optimistic checks
 	fetched_at: datetime | None = None
 

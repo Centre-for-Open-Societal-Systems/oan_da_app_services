@@ -178,6 +178,34 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		frappe.set_user(DA1)
 		self.assertEqual(api.my_profile()["data"]["profile"]["mobile"], "+251911999888")
 
+	def test_registry_decision_is_read_back_and_the_da_told(self):
+		r = self._submit()["data"]
+		frappe.set_user(SUP)
+		api.decide(r["name"], decision="Approve")
+		frappe.set_user("Administrator")
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Pending"
+		)
+		self.assertEqual(svc.sync_registry_approvals(), 1)  # the mock registry approves at once
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Approved"
+		)
+		self.assertEqual(
+			frappe.db.count("DA Notification", {"user": DA1, "event": "profile_change_registry_decided"}), 1
+		)
+		self.assertEqual(svc.sync_registry_approvals(), 0)  # decided rows are not read again
+
+	def test_telegram_and_alternate_number_are_contact_changes(self):
+		out = self._submit(changes={"telegram": "+251911222333", "alternate_mobile": "+251911444555"})
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["section"], "Contact")
+		frappe.set_user(SUP)
+		d = api.decide(out["data"]["name"], decision="Approve")["data"]
+		self.assertEqual(d["registry_sync_state"], "Accepted", d)
+		frappe.set_user(DA1)
+		bad = api.submit(changes={"telegram": "not-a-phone"}, reason="test")
+		self.assertEqual(bad["status"], "error", bad)
+
 	def test_reject_and_request_changes_need_a_note(self):
 		r = self._submit()["data"]
 		frappe.set_user(SUP)

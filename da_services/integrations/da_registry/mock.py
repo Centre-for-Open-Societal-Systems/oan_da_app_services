@@ -175,3 +175,9 @@ class MockDARegistryClient(DARegistryClient):
 			"items": self.import_exceptions[start : start + page_size],
 			"total": len(self.import_exceptions),
 		}
+
+	def change_request_status(self, reference: str) -> str:
+		# The mock applies a profile update at once, so it is already approved.
+		if not any(r.external_reference == reference for r in self._outcomes.values()):
+			raise DANotFound(reference)
+		return "Approved"

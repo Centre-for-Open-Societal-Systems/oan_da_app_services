@@ -32,6 +32,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import frappe
@@ -44,7 +45,12 @@ from .client import (
 	DARegistryError,
 	DARegistryUnavailable,
 )
-from .mapper import DA_TAB, profile_changes_to_change_request, registry_record_to_da_reference
+from .mapper import (
+	DA_TAB,
+	LABEL_ATTRIBUTES,
+	profile_changes_to_change_request,
+	registry_record_to_da_reference,
+)
 from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
 
 # Fixed on every environment (registry seed data)
@@ -53,6 +59,14 @@ DEFAULT_INTAKE_FORM_ID = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3f91"
 DEFAULT_IMPORT_DATA_MODEL_ID = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3fb2"
 IMPORT_BUCKET = "import-files"
 PAGE_SIZE = 100
+
+# Lists (My Teams, assignments, Region views) read each DA's record once more; those
+# records are kept briefly so a list is not re-read on every page load. A DA's own
+# profile and a single DA view are always read live.
+RECORD_CACHE_SECONDS = 300
+LIST_WORKERS = 8
+# Master Data labels change rarely.
+LABEL_CACHE_SECONDS = 24 * 3600
 
 # A new client is built per call, so tokens live on the worker, not the instance.
 _TOKEN_CACHE: dict[tuple[str, str], dict] = {}
@@ -66,6 +80,12 @@ _LOGIN_FORM_RE = re.compile(r'<form\b[^>]*\bid=["\']kc-form-login["\'][^>]*>', r
 _FORM_ACTION_RE = re.compile(r'\baction=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
+def _log_error(title: str, message: str) -> None:
+	"""frappe.log_error, skipped on the list worker threads (they have no site context)."""
+	if getattr(frappe.local, "site", None):
+		frappe.log_error(title=title, message=message)
+
+
 class HttpDARegistryClient(DARegistryClient):
 	def __init__(
 		self,
@@ -77,8 +97,10 @@ class HttpDARegistryClient(DARegistryClient):
 		import_data_model_id: str = DEFAULT_IMPORT_DATA_MODEL_ID,
 		timeout: float = 10,
 		sender_app: str = "da-services",
+		master_data_url: str | None = None,
 	):
 		self.base_url = base_url.rstrip("/")
+		self.master_data_url = (master_data_url or "").rstrip("/") or None
 		self.keycloak = keycloak
 		self.register_id = register_id
 		self.intake_form_id = intake_form_id
@@ -108,21 +130,26 @@ class HttpDARegistryClient(DARegistryClient):
 			import_data_model_id=conf.get("da_registry_import_data_model_id") or DEFAULT_IMPORT_DATA_MODEL_ID,
 			timeout=float(conf.get("da_registry_timeout_seconds") or 10),
 			sender_app=conf.get("da_registry_sender_app") or "da-services",
+			master_data_url=conf.get("da_registry_master_data_url"),
 		)
 
 	# ------------------------------------------------------------------ reads
 
 	def get_da(self, da_id: str) -> DAReference:
+		"""Always read live: a DA's own profile and a single DA view never show a stale copy."""
 		internal_id = self._find_internal_id(da_id)
 		if not internal_id:
 			raise DANotFound(da_id)
-		return registry_record_to_da_reference(self._da_record(internal_id, da_id))
+		record = self._da_record(internal_id, da_id)
+		self._cache_record(internal_id, record)
+		return registry_record_to_da_reference(record, self._labels())
 
 	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
 		"""Active DAs of a Woreda (or Region), by Master Data P-code.
 
 		The search answers a few display fields only, so each DA's record is read once
-		more for its posting and profile.
+		more for its posting and profile: from the short record cache when it is there,
+		otherwise several at a time.
 		"""
 		if woreda:
 			filter_by = {"woreda_code": {"eq": woreda}}
@@ -130,13 +157,73 @@ class HttpDARegistryClient(DARegistryClient):
 			filter_by = {"region_code": {"eq": region}}
 		else:
 			filter_by = None
-		return [
-			registry_record_to_da_reference(
-				self._da_record(row["internal_record_id"], row.get("functional_record_id"))
-			)
+		rows = [
+			row
 			for row in self._search("", filter_by)
 			if str(row.get("functional_record_id") or "").startswith("DA-")
 		]
+		records = {row["internal_record_id"]: self._cached_record(row["internal_record_id"]) for row in rows}
+		missing = [row for row in rows if records[row["internal_record_id"]] is None]
+		if missing:
+			self._token()  # sign in once here, so the workers only read the cached token
+			with ThreadPoolExecutor(max_workers=min(LIST_WORKERS, len(missing))) as pool:
+				fetched = pool.map(
+					lambda row: self._da_record(row["internal_record_id"], row.get("functional_record_id")),
+					missing,
+				)
+				for row, record in zip(missing, fetched, strict=True):
+					records[row["internal_record_id"]] = record
+					self._cache_record(row["internal_record_id"], record)
+		labels = self._labels()
+		return [registry_record_to_da_reference(records[row["internal_record_id"]], labels) for row in rows]
+
+	# ------------------------------------------------------------------ caches
+
+	def _record_key(self, internal_id: str) -> str:
+		return f"da_registry:record:{self.register_id}:{internal_id}"
+
+	def _cached_record(self, internal_id: str) -> dict | None:
+		return frappe.cache.get_value(self._record_key(internal_id))
+
+	def _cache_record(self, internal_id: str, record: dict) -> None:
+		frappe.cache.set_value(self._record_key(internal_id), record, expires_in_sec=RECORD_CACHE_SECONDS)
+
+	def _labels(self) -> dict[str, dict]:
+		"""Master Data labels of the DA's coded fields, {attribute_id: {value_id: label}}.
+
+		Without da_registry_master_data_url, or while Master Data is down, codes are shown
+		as words instead ("SENIOR_DA" -> "Senior da").
+		"""
+		if not self.master_data_url:
+			return {}
+		key = f"da_registry:labels:{self.master_data_url}"
+		labels = frappe.cache.get_value(key)
+		if labels is not None:
+			return labels
+		labels = {}
+		try:
+			for attribute_id in LABEL_ATTRIBUTES.values():
+				body = self._post(
+					"/attributes/get_attribute_values",
+					{"attribute_id": attribute_id},
+					action=f"read Master Data {attribute_id}",
+					pagination={
+						"current_page": 1,
+						"page_size": 500,
+						"search_text": "",
+						"sort_by": "",
+						"filter_by": "",
+					},
+					base=self.master_data_url,
+				)
+				values = (body.get("response_payload") or {}).get("attribute_values") or []
+				labels[attribute_id] = {
+					v["value_id"]: v.get("value_display") or v["value_id"] for v in values
+				}
+		except DARegistryError:
+			return {}  # not cached: try again on the next read
+		frappe.cache.set_value(key, labels, expires_in_sec=LABEL_CACHE_SECONDS)
+		return labels
 
 	def _find_internal_id(self, da_id: str) -> str | None:
 		# search_text is a partial match on DA-ID, names, Fayda ID, phone and email, and
@@ -283,6 +370,16 @@ class HttpDARegistryClient(DARegistryClient):
 			"total": (body.get("pagination_response") or {}).get("number_of_items") or 0,
 		}
 
+	def change_request_status(self, reference: str) -> str:
+		body = self._post(
+			"/change-requests/get_change_request",
+			{"change_request_id": reference},
+			action="read change request",
+			not_found=reference,
+		)
+		status = str((body.get("response_payload") or {}).get("approval_status") or "PENDING").upper()
+		return {"APPROVED": "Approved", "REJECTED": "Rejected"}.get(status, "Pending")
+
 	# ------------------------------------------------------------------ transport
 
 	def _post(
@@ -295,11 +392,13 @@ class HttpDARegistryClient(DARegistryClient):
 		not_found: str | None = None,
 		files: dict | None = None,
 		form: dict | None = None,
+		base: str | None = None,
 	) -> dict:
 		"""POST one staff API call; return response_body. Retries once on an expired token.
 
 		With ``files`` the call is multipart (``form`` fields plus the files) instead of
-		the JSON envelope, as the document upload expects.
+		the JSON envelope, as the document upload expects. ``base`` sends the call to
+		another host on the same token, such as Master Data.
 		"""
 		envelope = {
 			"request_header": {
@@ -313,7 +412,7 @@ class HttpDARegistryClient(DARegistryClient):
 		if pagination is not None:
 			envelope["request_body"]["pagination_request"] = pagination
 
-		url = self.base_url + path
+		url = (base or self.base_url) + path
 		for attempt in (1, 2):
 			csrf = secrets.token_urlsafe(24)
 			headers = {"Authorization": f"Bearer {self._token()}", "X-CSRF-Token": csrf}
@@ -329,7 +428,7 @@ class HttpDARegistryClient(DARegistryClient):
 					**body,
 				)
 			except requests.RequestException as exc:
-				frappe.log_error(title="DA Registry unreachable", message=f"{action}: {url}: {exc!s}")
+				_log_error(title="DA Registry unreachable", message=f"{action}: {url}: {exc!s}")
 				raise DARegistryUnavailable(f"DA Registry unreachable ({action})") from exc
 			if response.status_code == 401 and attempt == 1:
 				self._drop_token()
@@ -337,9 +436,7 @@ class HttpDARegistryClient(DARegistryClient):
 			break
 
 		if response.status_code >= 500:
-			frappe.log_error(
-				title="DA Registry error", message=f"{action}: HTTP {response.status_code} {url}"
-			)
+			_log_error(title="DA Registry error", message=f"{action}: HTTP {response.status_code} {url}")
 			raise DARegistryUnavailable(f"DA Registry failed to {action} (HTTP {response.status_code})")
 		try:
 			data = response.json()
@@ -350,7 +447,7 @@ class HttpDARegistryClient(DARegistryClient):
 		message = header.get("response_error_message") or ""
 		if response.status_code >= 400:
 			# 401/403: token, role or CSRF problem. Retrying the same call will not help.
-			frappe.log_error(
+			_log_error(
 				title="DA Registry rejected request",
 				message=f"{action}: HTTP {response.status_code} {url}\n{message[:300]}",
 			)
@@ -415,13 +512,13 @@ class HttpDARegistryClient(DARegistryClient):
 				timeout=self.timeout,
 			)
 		except requests.RequestException as exc:
-			frappe.log_error(
+			_log_error(
 				title="DA Registry auth error", message=f"Keycloak unreachable at {token_url}: {exc!s}"
 			)
 			raise DARegistryUnavailable("Could not reach Keycloak for a DA Registry token") from exc
 		if resp.status_code >= 400:
 			# Do not log the body: a token endpoint can echo the client or the token.
-			frappe.log_error(
+			_log_error(
 				title="DA Registry auth error",
 				message=f"Keycloak token request failed: HTTP {resp.status_code} {token_url}",
 			)
@@ -474,9 +571,7 @@ class HttpDARegistryClient(DARegistryClient):
 				)
 			session.get(callback, allow_redirects=False, timeout=self.timeout)
 		except requests.RequestException as exc:
-			frappe.log_error(
-				title="DA Registry auth error", message=f"Staff login failed at {login_url}: {exc!s}"
-			)
+			_log_error(title="DA Registry auth error", message=f"Staff login failed at {login_url}: {exc!s}")
 			raise DARegistryUnavailable("Could not reach the DA Registry staff login") from exc
 
 		token = session.cookies.get("X-Access-Token")
