@@ -115,29 +115,31 @@ class HTTPCropRegistryClient(CropRegistryClient):
 		if problems:
 			raise CropRegistryError("Crop Sown HTTP client misconfigured: " + "; ".join(problems))
 
-	def _auth_and_csrf_headers(self) -> tuple[dict, dict]:
-		"""Bearer plus a CSRF header that matches the cookie on the staff POST.
+	def _auth_and_csrf_headers(self) -> tuple[dict[str, str], dict[str, str]]:
+		"""Headers + cookies for a staff POST.
 
-		A test token skips the live login. Otherwise this is the shared staff
-		login: IAM callback cookie when a username is configured, otherwise
-		client-credentials or the static API key, each with a matching CSRF pair.
+		If a test token provider is set, use it (bearer + matching CSRF pair).
+		Otherwise forward the Authorization and X-CSRF-Token headers from the
+		current request. Raises CropRegistryClientError if there is no active
+		request or either header is missing.
 		"""
 		headers = dict(self.headers)
+
 		if self._tokens is not None:
 			return apply_bearer_and_csrf(headers, self._tokens.get_token())
-		# test = auth_and_csrf_headers(
-		# 	keycloak=self.keycloak,
-		# 	timeout=self.timeout,
-		# 	headers=headers,
-		# 	client_error=CropRegistryClientError,
-		# 	server_error=CropRegistryServerError,
-		# 	log_title="Crop Sown Registry Auth Error",
-		# 	registry_client_id=self.registry_client_id or None,
-		# )
+
 		token = frappe.get_request_header("Authorization")
 		csrf = frappe.get_request_header("X-CSRF-Token")
-		test = ({'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': token, 'X-CSRF-Token': csrf}, {'X-CSRF-Token': csrf})
-		return test
+		if not token or not csrf:
+			raise CropRegistryClientError("Missing Authorization or X-CSRF-Token header", status_code=401)
+
+		headers.setdefault("Content-Type", "application/json")
+		headers.setdefault("Accept", "application/json")
+		headers["Authorization"] = token
+		headers["X-CSRF-Token"] = csrf
+
+		# Confirm the cookie name the Staff API actually validates
+		return headers, {"X-CSRF-Token": csrf}
 
 	def _envelope(
 		self, payload: dict, *, page: int = 1, filter_by: dict | None = None, search_text: str = ""
