@@ -415,6 +415,9 @@ def sync_registry_approvals(limit: int = 200) -> int:
 	registry approves it, so the DA is told when that happens (or when it is rejected).
 	Returns the number of rows that got a final decision.
 	"""
+	if str(frappe.conf.get("da_registry_auth") or "service").lower() == "user":
+		# A scheduled job has no signed-in user, so no token to call the registry with.
+		return 0
 	names = frappe.get_all(
 		"DA Profile Change Request",
 		filters={"registry_sync_state": "Accepted", "registry_approval": "Pending"},

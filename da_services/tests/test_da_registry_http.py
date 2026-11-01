@@ -16,6 +16,7 @@ from frappe.tests import IntegrationTestCase
 from da_services.integrations.da_registry import http as http_mod
 from da_services.integrations.da_registry.client import (
 	DANotFound,
+	DARegistryAuthError,
 	DARegistryError,
 	DARegistryUnavailable,
 )
@@ -572,3 +573,96 @@ class TestProfileFieldsAndCaching(IntegrationTestCase):
 		)
 		with self.assertRaises(DANotFound):
 			self.client.change_request_status("cr-404")
+
+
+def _jwt_with(claims):
+	import base64
+
+	body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+	return f"h.{body}.s"
+
+
+class TestUserTokenPassthrough(IntegrationTestCase):
+	"""da_registry_auth = user: the signed-in user's own token and CSRF value are forwarded."""
+
+	USER_TOKEN = _jwt_with({"iss": "https://kc.example/realms/staff", "preferred_username": "sup"})
+
+	def setUp(self):
+		http_mod._TOKEN_CACHE.clear()
+		frappe.cache.delete_keys("da_registry:")
+		self.registry = FakeRegistry([_record("DA-3821981536", "rec-1")])
+		patcher = patch.object(http_mod.requests, "post", side_effect=self.registry)
+		patcher.start()
+		self.addCleanup(patcher.stop)
+		self.addCleanup(setattr, frappe.local, "request", None)
+		self.addCleanup(frappe.cache.delete_keys, "da_registry:")
+		self.client = HttpDARegistryClient(BASE, keycloak={}, auth_mode="user")
+
+	def _request(self, headers):
+		from werkzeug.test import EnvironBuilder
+		from werkzeug.wrappers import Request
+
+		frappe.local.request = Request(
+			EnvironBuilder(path="/api/v1/da-services/profile/me", headers=headers).get_environ()
+		)
+
+	def test_the_users_token_and_csrf_go_to_the_registry(self):
+		self._request({"Authorization": f"Bearer {self.USER_TOKEN}", "X-CSRF-Token": "csrf-from-iam"})
+		self.assertEqual(self.client.get_da("DA-3821981536").da_id, "DA-3821981536")
+		for path, _payload, _pg, headers, cookies in self.registry.calls:
+			self.assertEqual(headers["Authorization"], f"Bearer {self.USER_TOKEN}", path)
+			self.assertEqual(headers["X-CSRF-Token"], "csrf-from-iam", path)
+			self.assertEqual(cookies["X-CSRF-Token"], "csrf-from-iam", path)  # double submit
+		self.assertEqual(self.registry.token_calls, 0)  # no service account
+
+	def test_without_a_csrf_value_a_matching_pair_is_generated(self):
+		self._request({"Authorization": f"Bearer {self.USER_TOKEN}"})
+		self.client.get_da("DA-3821981536")
+		_path, _payload, _pg, headers, cookies = self.registry.calls[0]
+		self.assertTrue(headers["X-CSRF-Token"])
+		self.assertEqual(headers["X-CSRF-Token"], cookies["X-CSRF-Token"])
+
+	def test_no_token_or_a_da_services_token_is_refused_before_the_registry(self):
+		self._request({})
+		with self.assertRaises(DARegistryAuthError) as ctx:
+			self.client.get_da("DA-3821981536")
+		self.assertEqual(ctx.exception.http_status_code, 401)
+
+		own = _jwt_with({"iss": frappe.conf.get("jwt_issuer") or "oan-da-services"})
+		with patch.dict(frappe.conf, {"jwt_issuer": _jwt_claims_iss(own)}):
+			client = HttpDARegistryClient(BASE, keycloak={}, auth_mode="user")
+			self._request({"Authorization": f"Bearer {own}"})
+			with self.assertRaises(DARegistryAuthError):
+				client.get_da("DA-3821981536")
+		self.assertEqual(self.registry.calls, [])
+
+	def test_expired_token_and_missing_role_come_back_as_401_and_403(self):
+		self._request({"Authorization": f"Bearer {self.USER_TOKEN}", "X-CSRF-Token": "c"})
+		self.registry.fail_next = (401, _err("Unauthorized. Jwt expired."))
+		with self.assertRaises(DARegistryAuthError) as ctx:
+			self.client.get_da("DA-3821981536")
+		self.assertEqual(ctx.exception.http_status_code, 401)
+		self.assertEqual(len(self.registry.calls), 1)  # no retry with the same token
+
+		client = HttpDARegistryClient(BASE, keycloak={}, auth_mode="user")
+		self.registry.fail_next = (403, _err("Insufficient resource_access roles"))
+		with self.assertRaises(DARegistryAuthError) as ctx:
+			client.get_da("DA-3821981536")
+		self.assertEqual(ctx.exception.http_status_code, 403)
+		self.assertIn("Insufficient resource_access roles", str(ctx.exception))
+
+	def test_user_mode_needs_no_service_account_config(self):
+		keys = {
+			"da_registry_backend": "http",
+			"da_registry_auth": "user",
+			"da_registry_base_url": BASE,
+			"da_registry_keycloak": {},
+		}
+		with patch.dict(frappe.conf, keys):
+			from da_services.integrations.da_registry.client import get_client
+
+			self.assertEqual(get_client().auth_mode, "user")
+
+
+def _jwt_claims_iss(token):
+	return http_mod._jwt_claims(token)["iss"]

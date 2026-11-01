@@ -5,13 +5,16 @@ talks to the DA Registry through this interface only. Two implementations exist:
 
 - ``MockDARegistryClient`` (mock.py): in-memory fixtures for local development and tests.
 - ``HttpDARegistryClient`` (http.py): the DA Registry staff API (OpenG2P), called server
-  to server with the ``da-services-backend`` Keycloak service account. Service code is
-  written against the interface, so switching is a configuration change.
+  to server. Whose token it sends is set per site: the signed-in user's own staff IAM
+  token (``"user"``, a wrapper around the registry) or the ``da-services-backend``
+  Keycloak service account (``"service"``). Service code is written against the
+  interface, so switching is a configuration change.
 
 Select the backend per site in ``site_config.json`` (full example in
 ``config.example.json``)::
 
     "da_registry_backend": "mock" | "http",
+    "da_registry_auth": "user" | "service",
     "da_registry_base_url": "https://staff-da-registry...",
     "da_registry_timeout_seconds": 10,
     "da_registry_keycloak": {"token_url": "...", "client_id": "...", "client_secret": "..."}
@@ -40,6 +43,19 @@ class DARegistryUnavailable(DARegistryError):
 
 class DARegistryContractPending(DARegistryError):
 	"""The HTTP adapter cannot be used until the API contract is confirmed."""
+
+
+class DARegistryAuthError(DARegistryError):
+	"""The registry refused the caller's own token: 401 (missing, expired or not a staff
+	IAM token: sign in again) or 403 (the user lacks the registry role for the call).
+
+	Carries ``http_status_code`` so an API that does not catch it answers with that
+	status instead of 500, and the frontend can send the user back to sign-in.
+	"""
+
+	def __init__(self, message: str, http_status_code: int = 401):
+		super().__init__(message)
+		self.http_status_code = http_status_code
 
 
 class DARegistryClient(ABC):

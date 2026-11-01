@@ -81,10 +81,11 @@ class TestClientFactory(IntegrationTestCase):
 		self.assertIs(get_client(), get_client())  # shared instance
 
 	def test_http_backend_needs_url_and_service_account(self):
-		keys = ("da_registry_backend", "da_registry_base_url", "da_registry_keycloak")
+		keys = ("da_registry_backend", "da_registry_auth", "da_registry_base_url", "da_registry_keycloak")
 		saved = {k: frappe.conf.get(k) for k in keys}
 		try:
 			frappe.conf.da_registry_backend = "http"
+			frappe.conf.da_registry_auth = "service"
 			frappe.conf.da_registry_base_url = "https://registry.example"
 			frappe.conf.da_registry_keycloak = {}
 			with self.assertRaises(DARegistryError):

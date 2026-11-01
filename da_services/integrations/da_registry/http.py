@@ -40,6 +40,7 @@ import requests
 
 from .client import (
 	DANotFound,
+	DARegistryAuthError,
 	DARegistryClient,
 	DARegistryContractPending,
 	DARegistryError,
@@ -86,6 +87,32 @@ def _log_error(title: str, message: str) -> None:
 		frappe.log_error(title=title, message=message)
 
 
+def _request_credentials() -> tuple[str, str]:
+	"""The signed-in user's staff IAM access token and CSRF value, from the current request.
+
+	The frontend sends the token as ``Authorization: Bearer`` and the IAM's CSRF value as
+	``X-CSRF-Token`` (or the browser sends it as the cookie of that name). DA Services has
+	already validated the token before the endpoint runs. A token DA Services issued
+	itself (password sign-in) means nothing to the registry, so it is refused here.
+	"""
+	request = getattr(frappe.local, "request", None)
+	headers = request.headers if request is not None else {}
+	auth = headers.get("Authorization") or ""
+	token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+	if not token:
+		raise DARegistryAuthError("Sign in through the staff IAM to use the DA Registry")
+	issuer = (_jwt_claims(token) or {}).get("iss")
+	if issuer and issuer == frappe.conf.get("jwt_issuer"):
+		raise DARegistryAuthError(
+			"The DA Registry needs the staff IAM (Keycloak) sign-in, not a DA Services password sign-in"
+		)
+	csrf = headers.get("X-CSRF-Token") or (
+		request.cookies.get("X-CSRF-Token") if request is not None else None
+	)
+	# The registry only checks that the header and the cookie carry the same value.
+	return token, csrf or secrets.token_urlsafe(24)
+
+
 class HttpDARegistryClient(DARegistryClient):
 	def __init__(
 		self,
@@ -98,7 +125,10 @@ class HttpDARegistryClient(DARegistryClient):
 		timeout: float = 10,
 		sender_app: str = "da-services",
 		master_data_url: str | None = None,
+		auth_mode: str = "service",
 	):
+		self.auth_mode = auth_mode
+		self._user_credentials: tuple[str, str] | None = None
 		self.base_url = base_url.rstrip("/")
 		self.master_data_url = (master_data_url or "").rstrip("/") or None
 		self.keycloak = keycloak
@@ -114,14 +144,20 @@ class HttpDARegistryClient(DARegistryClient):
 		base_url = str(conf.get("da_registry_base_url") or "")
 		if not base_url.startswith(("http://", "https://")):
 			raise DARegistryError("da_registry_base_url must be an http(s) URL in site_config.json")
+		auth_mode = str(conf.get("da_registry_auth") or "service").lower()
+		if auth_mode not in ("user", "service"):
+			raise DARegistryError(f"Unknown da_registry_auth: {auth_mode!r}")
 		keycloak = conf.get("da_registry_keycloak") or {}
-		# The service account; a staff user's portal sign-in is accepted for dev testing.
-		needed = ("token_url", "client_id", "client_secret")
-		if not keycloak.get("client_secret") and keycloak.get("username"):
-			needed = ("login_url", "username", "password")
-		missing = [k for k in needed if not keycloak.get(k)]
-		if missing:
-			raise DARegistryError(f"da_registry_keycloak is missing {', '.join(missing)} in site_config.json")
+		if auth_mode == "service":
+			# The service account; a staff user's portal sign-in is accepted for dev testing.
+			needed = ("token_url", "client_id", "client_secret")
+			if not keycloak.get("client_secret") and keycloak.get("username"):
+				needed = ("login_url", "username", "password")
+			missing = [k for k in needed if not keycloak.get(k)]
+			if missing:
+				raise DARegistryError(
+					f"da_registry_keycloak is missing {', '.join(missing)} in site_config.json"
+				)
 		return cls(
 			base_url,
 			keycloak=keycloak,
@@ -131,6 +167,7 @@ class HttpDARegistryClient(DARegistryClient):
 			timeout=float(conf.get("da_registry_timeout_seconds") or 10),
 			sender_app=conf.get("da_registry_sender_app") or "da-services",
 			master_data_url=conf.get("da_registry_master_data_url"),
+			auth_mode=auth_mode,
 		)
 
 	# ------------------------------------------------------------------ reads
@@ -165,7 +202,7 @@ class HttpDARegistryClient(DARegistryClient):
 		records = {row["internal_record_id"]: self._cached_record(row["internal_record_id"]) for row in rows}
 		missing = [row for row in rows if records[row["internal_record_id"]] is None]
 		if missing:
-			self._token()  # sign in once here, so the workers only read the cached token
+			self._credentials()  # resolve the token here: the workers have no request context
 			with ThreadPoolExecutor(max_workers=min(LIST_WORKERS, len(missing))) as pool:
 				fetched = pool.map(
 					lambda row: self._da_record(row["internal_record_id"], row.get("functional_record_id")),
@@ -414,8 +451,10 @@ class HttpDARegistryClient(DARegistryClient):
 
 		url = (base or self.base_url) + path
 		for attempt in (1, 2):
-			csrf = secrets.token_urlsafe(24)
-			headers = {"Authorization": f"Bearer {self._token()}", "X-CSRF-Token": csrf}
+			token, csrf = self._credentials()
+			# Double submit: a server-to-server call has no browser cookie, so the CSRF value
+			# goes in the header and, with the same value, in the cookie.
+			headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": csrf}
 			body = {"files": files, "data": form} if files else {"json": envelope}
 			if not files:
 				headers["Content-Type"] = "application/json"
@@ -430,10 +469,21 @@ class HttpDARegistryClient(DARegistryClient):
 			except requests.RequestException as exc:
 				_log_error(title="DA Registry unreachable", message=f"{action}: {url}: {exc!s}")
 				raise DARegistryUnavailable(f"DA Registry unreachable ({action})") from exc
-			if response.status_code == 401 and attempt == 1:
+			if response.status_code == 401 and attempt == 1 and self.auth_mode == "service":
 				self._drop_token()
 				continue
 			break
+
+		if self.auth_mode == "user" and response.status_code in (401, 403):
+			# The user's own token: expired (sign in again) or without the registry role.
+			try:
+				message = (response.json().get("response_header") or {}).get("response_error_message") or ""
+			except ValueError:
+				message = ""
+			raise DARegistryAuthError(
+				f"DA Registry refused the signed-in user's token ({action}): {message or response.status_code}",
+				http_status_code=response.status_code,
+			)
 
 		if response.status_code >= 500:
 			_log_error(title="DA Registry error", message=f"{action}: HTTP {response.status_code} {url}")
@@ -459,6 +509,19 @@ class HttpDARegistryClient(DARegistryClient):
 		return data.get("response_body") or {}
 
 	# ------------------------------------------------------------------ auth
+
+	def _credentials(self) -> tuple[str, str]:
+		"""(bearer token, CSRF value) for the next registry call.
+
+		The one place that decides whose identity reaches the registry: the signed-in
+		user's own staff IAM token ("user", read once per request) or the service account
+		("service", with a fresh random CSRF pair per call).
+		"""
+		if self.auth_mode == "user":
+			if self._user_credentials is None:
+				self._user_credentials = _request_credentials()
+			return self._user_credentials
+		return self._token(), secrets.token_urlsafe(24)
 
 	@property
 	def _staff_login(self) -> bool:
@@ -580,11 +643,18 @@ class HttpDARegistryClient(DARegistryClient):
 		return token, _jwt_expires_at(token) or time.time() + 300
 
 
-def _jwt_expires_at(token: str) -> float | None:
-	"""The exp claim of a JWT, without verifying it (the registry verifies)."""
+def _jwt_claims(token: str) -> dict | None:
+	"""The claims of a JWT, without verifying it (the registry verifies)."""
 	try:
 		payload = token.split(".")[1]
 		claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-		return float(claims["exp"])
-	except IndexError, ValueError, KeyError, TypeError:
+	except IndexError, ValueError, TypeError:
+		return None
+	return claims if isinstance(claims, dict) else None
+
+
+def _jwt_expires_at(token: str) -> float | None:
+	try:
+		return float((_jwt_claims(token) or {})["exp"])
+	except KeyError, TypeError, ValueError:
 		return None

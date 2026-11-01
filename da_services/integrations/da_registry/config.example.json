@@ -2,6 +2,9 @@
   "_comment": "DA Registry staff API. Copy the keys you need into sites/<your-site>/site_config.json. Never commit a real client_secret.",
 
   "da_registry_backend": "http",
+
+  "_comment_auth": "Whose token reaches the registry. user: the signed-in user's own staff IAM access token (Authorization: Bearer) and CSRF value (X-CSRF-Token), forwarded by DA Services after its RBAC check; da_registry_keycloak is not needed. service: the da-services-backend service account below. The scheduled registry read-back only runs with service.",
+  "da_registry_auth": "user",
   "da_registry_base_url": "https://staff-da-registry.development.oanstaging.com",
   "da_registry_timeout_seconds": 10,
   "da_registry_register_id": "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3f90",

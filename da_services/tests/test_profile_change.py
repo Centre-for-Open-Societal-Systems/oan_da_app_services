@@ -179,6 +179,9 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual(api.my_profile()["data"]["profile"]["mobile"], "+251911999888")
 
 	def test_registry_decision_is_read_back_and_the_da_told(self):
+		saved = frappe.conf.get("da_registry_auth")
+		frappe.conf.da_registry_auth = "service"  # the read-back needs the service identity
+		self.addCleanup(frappe.conf.__setitem__, "da_registry_auth", saved)
 		r = self._submit()["data"]
 		frappe.set_user(SUP)
 		api.decide(r["name"], decision="Approve")
@@ -260,3 +263,11 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.ValidationError):
 			frappe.delete_doc("DA Profile Change Request", r["name"], ignore_permissions=True)
+
+
+class TestRegistryReadBackWithUserTokens(IntegrationTestCase):
+	def test_the_scheduled_read_back_is_skipped_without_a_service_identity(self):
+		saved = frappe.conf.get("da_registry_auth")
+		frappe.conf.da_registry_auth = "user"
+		self.addCleanup(frappe.conf.__setitem__, "da_registry_auth", saved)
+		self.assertEqual(svc.sync_registry_approvals(), 0)

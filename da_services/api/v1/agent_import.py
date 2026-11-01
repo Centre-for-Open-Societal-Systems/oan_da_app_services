@@ -18,7 +18,11 @@ from frappe import _
 from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
 
 from da_services.api.router import route
-from da_services.integrations.da_registry.client import DARegistryError, DARegistryUnavailable
+from da_services.integrations.da_registry.client import (
+	DARegistryAuthError,
+	DARegistryError,
+	DARegistryUnavailable,
+)
 from da_services.services import agent_import as svc
 from da_services.services import constants as C
 from da_services.utils.permissions import require_roles
@@ -34,7 +38,10 @@ def _upload() -> tuple[str, bytes]:
 
 
 def _registry_error(exc: DARegistryError):
-	"""503 when the registry is down (retry later); 502 when it refused the call."""
+	"""401/403 for the user's own token; 503 when the registry is down; 502 when it refused."""
+	if isinstance(exc, DARegistryAuthError):
+		frappe.response["http_status_code"] = exc.http_status_code
+		return error_response(str(exc), "UNAUTHORIZED" if exc.http_status_code == 401 else "FORBIDDEN")
 	unavailable = isinstance(exc, DARegistryUnavailable)
 	frappe.response["http_status_code"] = 503 if unavailable else 502
 	return error_response(
