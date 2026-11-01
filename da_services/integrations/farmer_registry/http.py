@@ -59,8 +59,16 @@ DEFAULT_TABS: dict[str, str] = {
 	"livestock": "farmer_livestock_tab",
 }
 
-# Registry messages that mean "no such record" rather than a failure
+# Registry messages that mean "no such record" rather than a failure.
+# Codes such as REGISTER_DATA_NOT_FOUND use underscores, so they are normalized
+# before the phrase check.
 _NOT_FOUND_MARKERS = ("not found", "does not exist", "no record")
+
+
+def _looks_like_missing_record(*parts: str | None) -> bool:
+	text = " ".join(part.replace("_", " ").replace("-", " ") for part in parts if part).lower()
+	return any(marker in text for marker in _NOT_FOUND_MARKERS)
+
 
 # A new client is built per call, so tokens live on the worker, not the instance.
 _STAFF_TOKEN_CACHE: dict[tuple[str, str], dict] = {}
@@ -168,8 +176,7 @@ class StaffResponse:
 
 	@property
 	def not_found(self) -> bool:
-		msg = (self.error_message or "").lower()
-		return (not self.ok) and any(m in msg for m in _NOT_FOUND_MARKERS)
+		return (not self.ok) and _looks_like_missing_record(self.error_message, self.error_code)
 
 
 class HTTPFarmerRegistryClient(FarmerRegistryClient):

@@ -70,6 +70,7 @@ def _register() -> None:
 	from da_services.api.v1 import (
 		agents,
 		assignments,
+		crop_sown,
 		da,
 		dashboard,
 		experts,

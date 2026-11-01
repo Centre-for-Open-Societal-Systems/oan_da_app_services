@@ -1,0 +1,839 @@
+{
+  "info": {
+    "_postman_id": "oan-da-cropsown",
+    "name": "OAN DA Crop Sown",
+    "description": "DA Services Crop Sown routes that returned success on the local bench at http://127.0.0.1:8200. Login stores access_token. Read regions stores region_level_value_id. Save farmer lookup stores submission_id. Saved responses are shortened live envelopes: intake forms omit the full field lists, and regions omit rows after the second.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "usr",
+      "value": ""
+    },
+    {
+      "key": "pwd",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "farmer_id",
+      "value": "FR-427495614351"
+    },
+    {
+      "key": "fayda_fin",
+      "value": "123456789012"
+    },
+    {
+      "key": "level_id",
+      "value": "l1"
+    },
+    {
+      "key": "region_level_value_id",
+      "value": ""
+    },
+    {
+      "key": "submission_id",
+      "value": ""
+    },
+    {
+      "key": "subject_record_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Login",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{base_url}}/api/v1/auth/login",
+        "description": "Public login. Stores access_token and refresh_token. Leave usr and pwd in the environment."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save(\"access_token\", data.access_token);",
+              "save(\"refresh_token\", data.refresh_token);"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Login success",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}"
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"access_token\": \"ACCESS_TOKEN\",\n    \"refresh_token\": \"REFRESH_TOKEN\",\n    \"token_type\": \"Bearer\",\n    \"expires_in\": 3600\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Refresh token",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{base_url}}/api/v1/auth/refresh",
+        "description": "Sends the refresh token from Login and stores the new pair. Run this after a 401, then repeat the Crop Sown call."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Refresh returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save(\"access_token\", data.access_token);",
+              "save(\"refresh_token\", data.refresh_token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Read planning intake form",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=planning",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "crop-sown",
+            "intake-form"
+          ],
+          "query": [
+            {
+              "key": "form",
+              "value": "planning",
+              "description": "planning, cultivation, sowing, or harvesting"
+            }
+          ]
+        },
+        "description": "Crop Sown identity, season, location, and planning. The live body lists every register field. Catalog choices are value_id plus value_display. This saved example keeps one field from each of the first two sections. CROP_SEASON has three live values. CROP_COMMODITY and SEED_VARIETY continue on later pages."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Intake form returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test(\"Form mnemonic matches\", function () { pm.expect(String(data.form_mnemonic || \"\").toLowerCase()).to.include(\"planning\"); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Read planning intake form success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=planning"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n    \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n    \"form_mnemonic\": \"Crop planning intake\",\n    \"intake_forms\": [\n      {\n        \"form_id\": \"6be15ab9-0f1b-4c38-995f-395d52a1b17a\",\n        \"form_mnemonic\": \"Crop cultivation intake\"\n      },\n      {\n        \"form_id\": \"52150a37-153d-496d-9cd9-2a3815d6e13b\",\n        \"form_mnemonic\": \"Crop harvesting intake\"\n      },\n      {\n        \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n        \"form_mnemonic\": \"Crop planning intake\"\n      },\n      {\n        \"form_id\": \"4a7c2c98-0ffb-41d8-8fea-f22349823675\",\n        \"form_mnemonic\": \"Crop sowing intake\"\n      }\n    ],\n    \"sections\": [\n      {\n        \"section_id\": \"crop_farmer_lookup\",\n        \"section_register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n        \"section_mnemonic\": \"crop_farmer_lookup\",\n        \"screen_section\": null,\n        \"is_list\": false,\n        \"fields\": [\n          {\n            \"field_name\": \"farmer_id\",\n            \"label\": \"Farmer ID\",\n            \"data_type\": \"string\",\n            \"required\": true,\n            \"readonly\": false,\n            \"options\": null,\n            \"attribute_id\": null\n          },\n          {\n            \"field_name\": \"fayda_fin\",\n            \"label\": \"Fayda FIN\",\n            \"data_type\": \"string\",\n            \"required\": false,\n            \"readonly\": false,\n            \"options\": null,\n            \"attribute_id\": null\n          },\n          {\n            \"field_name\": \"fayda_fan_id\",\n            \"label\": \"Fayda FAN\",\n            \"data_type\": \"string\",\n            \"required\": false,\n            \"readonly\": false,\n            \"options\": null,\n            \"attribute_id\": null\n          }\n        ]\n      },\n      {\n        \"section_id\": \"cropsown_intake_season_section_01\",\n        \"section_register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n        \"section_mnemonic\": \"cs_intake_season\",\n        \"screen_section\": null,\n        \"is_list\": false,\n        \"fields\": [\n          {\n            \"field_name\": \"crop_year\",\n            \"label\": \"Crop Year\",\n            \"data_type\": \"string\",\n            \"required\": true,\n            \"readonly\": false,\n            \"options\": null,\n            \"attribute_id\": null\n          },\n          {\n            \"field_name\": \"production_season\",\n            \"label\": \"Production Season\",\n            \"data_type\": \"string\",\n            \"required\": true,\n            \"readonly\": false,\n            \"options\": null,\n            \"attribute_id\": \"CROP_SEASON\",\n            \"catalog_loaded\": true,\n            \"choices\": [\n              {\n                \"value_id\": \"SEASON_MEHER\",\n                \"value_display\": \"Meher (main rains)\"\n              },\n              {\n                \"value_id\": \"SEASON_BELG\",\n                \"value_display\": \"Belg (short rains)\"\n              },\n              {\n                \"value_id\": \"SEASON_IRRIGATION\",\n                \"value_display\": \"Irrigation (dry season)\"\n              }\n            ]\n          }\n        ]\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Read cultivation intake form",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=cultivation",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "crop-sown",
+            "intake-form"
+          ],
+          "query": [
+            {
+              "key": "form",
+              "value": "cultivation",
+              "description": "planning, cultivation, sowing, or harvesting"
+            }
+          ]
+        },
+        "description": "Separate staff form. Sections in the saved example are omitted; the live response includes them."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Intake form returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test(\"Form mnemonic matches\", function () { pm.expect(String(data.form_mnemonic || \"\").toLowerCase()).to.include(\"cultivation\"); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Read cultivation intake form success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=cultivation"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"form_id\": \"6be15ab9-0f1b-4c38-995f-395d52a1b17a\",\n    \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n    \"form_mnemonic\": \"Crop cultivation intake\",\n    \"intake_forms\": [\n      {\n        \"form_id\": \"6be15ab9-0f1b-4c38-995f-395d52a1b17a\",\n        \"form_mnemonic\": \"Crop cultivation intake\"\n      },\n      {\n        \"form_id\": \"52150a37-153d-496d-9cd9-2a3815d6e13b\",\n        \"form_mnemonic\": \"Crop harvesting intake\"\n      },\n      {\n        \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n        \"form_mnemonic\": \"Crop planning intake\"\n      },\n      {\n        \"form_id\": \"4a7c2c98-0ffb-41d8-8fea-f22349823675\",\n        \"form_mnemonic\": \"Crop sowing intake\"\n      }\n    ],\n    \"sections\": []\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Read sowing intake form",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=sowing",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "crop-sown",
+            "intake-form"
+          ],
+          "query": [
+            {
+              "key": "form",
+              "value": "sowing",
+              "description": "planning, cultivation, sowing, or harvesting"
+            }
+          ]
+        },
+        "description": "Separate staff form. Sections in the saved example are omitted; the live response includes them."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Intake form returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test(\"Form mnemonic matches\", function () { pm.expect(String(data.form_mnemonic || \"\").toLowerCase()).to.include(\"sowing\"); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Read sowing intake form success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=sowing"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"form_id\": \"4a7c2c98-0ffb-41d8-8fea-f22349823675\",\n    \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n    \"form_mnemonic\": \"Crop sowing intake\",\n    \"intake_forms\": [\n      {\n        \"form_id\": \"6be15ab9-0f1b-4c38-995f-395d52a1b17a\",\n        \"form_mnemonic\": \"Crop cultivation intake\"\n      },\n      {\n        \"form_id\": \"52150a37-153d-496d-9cd9-2a3815d6e13b\",\n        \"form_mnemonic\": \"Crop harvesting intake\"\n      },\n      {\n        \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n        \"form_mnemonic\": \"Crop planning intake\"\n      },\n      {\n        \"form_id\": \"4a7c2c98-0ffb-41d8-8fea-f22349823675\",\n        \"form_mnemonic\": \"Crop sowing intake\"\n      }\n    ],\n    \"sections\": []\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Read harvesting intake form",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=harvesting",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "crop-sown",
+            "intake-form"
+          ],
+          "query": [
+            {
+              "key": "form",
+              "value": "harvesting",
+              "description": "planning, cultivation, sowing, or harvesting"
+            }
+          ]
+        },
+        "description": "Separate staff form. Sections in the saved example are omitted; the live response includes them."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Intake form returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test(\"Form mnemonic matches\", function () { pm.expect(String(data.form_mnemonic || \"\").toLowerCase()).to.include(\"harvesting\"); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Read harvesting intake form success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/crop-sown/intake-form?form=harvesting"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"form_id\": \"52150a37-153d-496d-9cd9-2a3815d6e13b\",\n    \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n    \"form_mnemonic\": \"Crop harvesting intake\",\n    \"intake_forms\": [\n      {\n        \"form_id\": \"6be15ab9-0f1b-4c38-995f-395d52a1b17a\",\n        \"form_mnemonic\": \"Crop cultivation intake\"\n      },\n      {\n        \"form_id\": \"52150a37-153d-496d-9cd9-2a3815d6e13b\",\n        \"form_mnemonic\": \"Crop harvesting intake\"\n      },\n      {\n        \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n        \"form_mnemonic\": \"Crop planning intake\"\n      },\n      {\n        \"form_id\": \"4a7c2c98-0ffb-41d8-8fea-f22349823675\",\n        \"form_mnemonic\": \"Crop sowing intake\"\n      }\n    ],\n    \"sections\": []\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Read regions",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/crop-sown/geo-level-values?level_id={{level_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "crop-sown",
+            "geo-level-values"
+          ],
+          "query": [
+            {
+              "key": "level_id",
+              "value": "{{level_id}}",
+              "description": "l1 region. Leave parent_level_value_id empty."
+            }
+          ]
+        },
+        "description": "Regions. The live list has 14 values. The saved example shows the first two. Stores region_level_value_id from the first row."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Regions return 200\", function () { pm.response.to.have.status(200); });",
+              "const values = ((pm.response.json() || {}).data || {}).values || [];",
+              "pm.test(\"Regions returned\", function () { pm.expect(values.length).to.be.above(0); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save(\"region_level_value_id\", values[0] && values[0].level_value_id);"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Regions success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/crop-sown/geo-level-values?level_id=l1"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"level_id\": \"l1\",\n    \"parent_level_value_id\": null,\n    \"values\": [\n      {\n        \"level_value_id\": \"ET01\",\n        \"level_value_mnemonic\": \"Tigray\"\n      },\n      {\n        \"level_value_id\": \"ET02\",\n        \"level_value_mnemonic\": \"Afar\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Read zones for selected region",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/crop-sown/geo-level-values?level_id=l2&parent_level_value_id={{region_level_value_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "crop-sown",
+            "geo-level-values"
+          ],
+          "query": [
+            {
+              "key": "level_id",
+              "value": "l2"
+            },
+            {
+              "key": "parent_level_value_id",
+              "value": "{{region_level_value_id}}",
+              "description": "level_value_id from Read regions. ET01 is Tigray."
+            }
+          ]
+        },
+        "description": "Zones under the selected region. Without parent_level_value_id the route returns every zone. The saved example is the seven zones under ET01."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Zones return 200\", function () { pm.response.to.have.status(200); });",
+              "const values = ((pm.response.json() || {}).data || {}).values || [];",
+              "pm.test(\"Zones returned\", function () { pm.expect(values.length).to.be.above(0); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Zones success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/crop-sown/geo-level-values?level_id=l2&parent_level_value_id=ET01"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"level_id\": \"l2\",\n    \"parent_level_value_id\": \"ET01\",\n    \"values\": [\n      {\n        \"level_value_id\": \"ET0101\",\n        \"level_value_mnemonic\": \"North Western\"\n      },\n      {\n        \"level_value_id\": \"ET0102\",\n        \"level_value_mnemonic\": \"Central\"\n      },\n      {\n        \"level_value_id\": \"ET0103\",\n        \"level_value_mnemonic\": \"Eastern\"\n      },\n      {\n        \"level_value_id\": \"ET0104\",\n        \"level_value_mnemonic\": \"Southern\"\n      },\n      {\n        \"level_value_id\": \"ET0105\",\n        \"level_value_mnemonic\": \"Western\"\n      },\n      {\n        \"level_value_id\": \"ET0106\",\n        \"level_value_mnemonic\": \"South Eastern\"\n      },\n      {\n        \"level_value_id\": \"ET0107\",\n        \"level_value_mnemonic\": \"Mekelle\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Save farmer lookup",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"form\": \"planning\",\n  \"sections\": [\n    {\n      \"section_id\": \"crop_farmer_lookup\",\n      \"records\": [\n        {\n          \"farmer_id\": \"{{farmer_id}}\",\n          \"fayda_fin\": \"{{fayda_fin}}\"\n        }\n      ]\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/crops",
+        "description": "Creates a planning draft. Send fayda_fin (12 digits) or fayda_fan_id (16 digits). Do not send fayda_id. The registry echoes fayda_id. Season, location, and planning are still empty. Stores submission_id. Each run creates a new draft."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Save returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test(\"Draft saved\", function () { pm.expect(data.draft_status).to.eql(\"DRAFT\"); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "function save(key, value) {",
+              "    if (!value) return;",
+              "    pm.collectionVariables.set(key, value);",
+              "    if (pm.environment.name) pm.environment.set(key, value);",
+              "}",
+              "save(\"submission_id\", data.submission_id);",
+              "save(\"subject_record_id\", data.subject_record_id);"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Save farmer lookup success",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/crops",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"form\": \"planning\",\n  \"sections\": [\n    {\n      \"section_id\": \"crop_farmer_lookup\",\n      \"records\": [\n        {\n          \"farmer_id\": \"{{farmer_id}}\",\n          \"fayda_fin\": \"{{fayda_fin}}\"\n        }\n      ]\n    }\n  ]\n}"
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-427495614351\",\n    \"submission_id\": \"0505971d-24fd-4f2e-991b-bb85e111b486\",\n    \"subject_record_id\": \"4be40d3f-e200-4e2b-b368-8cda42b90461\",\n    \"draft_status\": \"DRAFT\",\n    \"approval_status\": \"PENDING\",\n    \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n    \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n    \"record_name\": \"FR-427495614351\",\n    \"application_reference\": \"2026OCT30-618033\",\n    \"section_payloads\": [\n      {\n        \"section_id\": \"crop_farmer_lookup\",\n        \"section_register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n        \"is_list\": false,\n        \"records\": [\n          {\n            \"farmer_id\": \"FR-427495614351\",\n            \"fayda_fin\": \"123456789012\",\n            \"fayda_fan_id\": null,\n            \"fayda_id\": \"123456789012\",\n            \"crop_year\": null,\n            \"production_season\": null,\n            \"internal_record_id\": \"4be40d3f-e200-4e2b-b368-8cda42b90461\",\n            \"record_name\": \"FR-427495614351\",\n            \"record_status\": \"ACTIVE\"\n          }\n        ]\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Read saved submission",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/crops?submission_id={{submission_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "da-services",
+            "farmers",
+            "{{farmer_id}}",
+            "crops"
+          ],
+          "query": [
+            {
+              "key": "submission_id",
+              "value": "{{submission_id}}",
+              "description": "Set by Save farmer lookup."
+            }
+          ]
+        },
+        "description": "Reads the draft saved above. Farmer lookup, season, and location echo the same CropSown row."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Read returns 200\", function () { pm.response.to.have.status(200); });",
+              "const data = (pm.response.json() || {}).data || {};",
+              "pm.test(\"Same submission\", function () { pm.expect(data.submission_id).to.eql(pm.variables.get(\"submission_id\")); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Read submission success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/crops?submission_id={{submission_id}}"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-427495614351\",\n    \"submission_id\": \"0505971d-24fd-4f2e-991b-bb85e111b486\",\n    \"draft_status\": \"DRAFT\",\n    \"approval_status\": \"PENDING\",\n    \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n    \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n    \"sections\": [],\n    \"tabs\": []\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "List farmer crops",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/crops",
+        "description": "Search rows for this farmer. section_payloads is null on the list. Use Read saved submission for the section records."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"List returns 200\", function () { pm.response.to.have.status(200); });",
+              "const crops = ((pm.response.json() || {}).data || {}).crops || [];",
+              "pm.test(\"At least one crop row\", function () { pm.expect(crops.length).to.be.above(0); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "List crops success",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/crops"
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-427495614351\",\n    \"crops\": [\n      {\n        \"submission_id\": \"fbd552b5-9aca-4493-a9ec-fc108efbeddd\",\n        \"record_name\": \"FR-427495614351\",\n        \"draft_status\": \"DRAFT\",\n        \"approval_status\": \"PENDING\",\n        \"form_id\": \"5bf0068c-ce19-46f8-874c-7147997f793b\",\n        \"register_id\": \"6b06a95a-9a6c-5a33-a33d-c1625716c59c\",\n        \"submission_source\": \"STAFF_PORTAL\",\n        \"section_payloads\": null\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+        }
+      ]
+    }
+  ]
+}
