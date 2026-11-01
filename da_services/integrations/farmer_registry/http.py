@@ -192,14 +192,18 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 	def _auth_and_csrf_headers(self) -> tuple[dict, dict]:
 		"""Headers + cookies for a staff POST. Same pair the Staff API requires."""
-		return auth_and_csrf_headers(
-			keycloak=self.keycloak,
-			timeout=self.timeout,
-			headers=self.headers,
-			client_error=FarmerRegistryClientError,
-			server_error=FarmerRegistryServerError,
-			log_title="Farmer Registry Auth Error",
-		)
+		# return auth_and_csrf_headers(
+		# 	keycloak=self.keycloak,
+		# 	timeout=self.timeout,
+		# 	headers=self.headers,
+		# 	client_error=FarmerRegistryClientError,
+		# 	server_error=FarmerRegistryServerError,
+		# 	log_title="Farmer Registry Auth Error",
+		# )
+		token = frappe.get_request_header("Authorization")
+		csrf = frappe.get_request_header("X-CSRF-Token")
+		test = ({'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': token, 'X-CSRF-Token': csrf}, {'X-CSRF-Token': csrf})
+		return test
 
 	# ------------------------------------------------------------------ transport
 
