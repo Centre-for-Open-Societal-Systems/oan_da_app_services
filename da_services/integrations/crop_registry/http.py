@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import frappe
 import requests
 
 from da_services.integrations.staff_api.auth import apply_bearer_and_csrf, auth_and_csrf_headers
@@ -124,15 +125,19 @@ class HTTPCropRegistryClient(CropRegistryClient):
 		headers = dict(self.headers)
 		if self._tokens is not None:
 			return apply_bearer_and_csrf(headers, self._tokens.get_token())
-		return auth_and_csrf_headers(
-			keycloak=self.keycloak,
-			timeout=self.timeout,
-			headers=headers,
-			client_error=CropRegistryClientError,
-			server_error=CropRegistryServerError,
-			log_title="Crop Sown Registry Auth Error",
-			registry_client_id=self.registry_client_id or None,
-		)
+		# test = auth_and_csrf_headers(
+		# 	keycloak=self.keycloak,
+		# 	timeout=self.timeout,
+		# 	headers=headers,
+		# 	client_error=CropRegistryClientError,
+		# 	server_error=CropRegistryServerError,
+		# 	log_title="Crop Sown Registry Auth Error",
+		# 	registry_client_id=self.registry_client_id or None,
+		# )
+		token = frappe.get_request_header("Authorization")
+		csrf = frappe.get_request_header("X-CSRF-Token")
+		test = ({'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': token, 'X-CSRF-Token': csrf}, {'X-CSRF-Token': csrf})
+		return test
 
 	def _envelope(
 		self, payload: dict, *, page: int = 1, filter_by: dict | None = None, search_text: str = ""
