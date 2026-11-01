@@ -127,11 +127,6 @@ class TestFarmersAPI(IntegrationTestCase):
 		else:
 			frappe.conf.farmer_registry_backend = self._farmer_backend
 		frappe.set_user("Administrator")
-		saved = getattr(self, "_farmer_registry_backend", None)
-		if saved is None:
-			frappe.conf.pop("farmer_registry_backend", None)
-		else:
-			frappe.conf.farmer_registry_backend = saved
 		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
 		frappe.db.commit()
 
