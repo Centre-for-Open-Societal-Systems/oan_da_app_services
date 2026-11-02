@@ -15,6 +15,7 @@ from da_services.utils.permissions import ScopeContext, require_da_access, requi
 
 def get_da_reference(da_id: str, ctx: ScopeContext | None = None) -> DAReference:
 	ctx = ctx or require_roles(*C.DA_READ_ROLES)
+	da_id = (da_id or "").strip()
 	if not da_id:
 		frappe.throw(_("da_id is required"), frappe.ValidationError)
 

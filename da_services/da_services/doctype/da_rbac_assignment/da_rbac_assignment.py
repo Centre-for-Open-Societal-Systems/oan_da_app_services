@@ -31,6 +31,10 @@ class DARBACAssignment(Document):
 	"""
 
 	def validate(self):
+		# A pasted DA-ID or area code often carries a stray space; the registry matches exactly.
+		for field in ("da_id", "region_scope", "zone_scope", "woreda_scope"):
+			if self.get(field):
+				self.set(field, self.get(field).strip())
 		self._validate_role()
 		self._validate_scope()
 		self._validate_window()

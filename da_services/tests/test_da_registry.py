@@ -135,6 +135,24 @@ class TestGetDaEndpoint(IntegrationTestCase):
 		self.assertEqual(ref.da_id, "DA-000001")
 		self.assertEqual(ref.woreda, "ET04-W01")
 
+	def test_da_id_with_surrounding_spaces_still_resolves(self):
+		frappe.set_user(SUPERVISOR)
+		ref = get_da_reference("  DA-000001 \t")
+		self.assertEqual(ref.da_id, "DA-000001")
+
+	def test_assignment_strips_pasted_da_id_and_scope(self):
+		grant = frappe.new_doc("DA RBAC Assignment")
+		grant.user = SUPERVISOR
+		grant.role = C.ROLE_DA
+		grant.da_id = " DA-000001 "
+		grant.region_scope = " ET04"
+		grant.woreda_scope = "ET04-W01 "
+		grant.effective_from = today()
+		grant.insert(ignore_permissions=True, ignore_links=True)
+		self.assertEqual(grant.da_id, "DA-000001")
+		self.assertEqual(grant.region_scope, "ET04")
+		self.assertEqual(grant.woreda_scope, "ET04-W01")
+
 	def test_supervisor_is_denied_outside_woreda(self):
 		frappe.set_user(SUPERVISOR)
 		with self.assertRaises(frappe.PermissionError):
