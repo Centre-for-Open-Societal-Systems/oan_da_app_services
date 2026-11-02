@@ -134,8 +134,11 @@ def profile_for(ctx: ScopeContext, include_agent: bool = True) -> dict:
 	if include_agent and da_id:
 		try:
 			data["agent"] = get_client().get_da(da_id).to_dict()
-		except DARegistryAuthError:
-			raise  # 401/403: the frontend signs the user in again
+		except DARegistryAuthError as exc:
+			# Roles, scope and menu still come from DA Services; the registry's refusal
+			# (expired token, or no registry role) is reported on the profile screen.
+			data["agent"] = None
+			data["agent_error"] = f"registry refused the token ({exc.http_status_code})"
 		except DARegistryError as exc:
 			data["agent"] = None
 			data["agent_error"] = f"registry unavailable: {exc.__class__.__name__}"

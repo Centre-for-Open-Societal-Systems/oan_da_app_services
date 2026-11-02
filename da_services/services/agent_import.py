@@ -90,7 +90,8 @@ def _cell(value) -> str:
 	return str(value).strip()
 
 
-def _read_rows(filename: str, content: bytes) -> tuple[list[str], list[list[str]]]:
+def _read_rows(filename: str, content: bytes) -> tuple[list[str], list[tuple[int, list[str]]]]:
+	"""The header row, then (line in the file, cells) for every non-blank row after it."""
 	if filename.lower().endswith(".xlsx"):
 		from openpyxl import load_workbook
 
@@ -105,10 +106,11 @@ def _read_rows(filename: str, content: bytes) -> tuple[list[str], list[list[str]
 		except UnicodeDecodeError:
 			frappe.throw(_("Save the CSV as UTF-8 and upload it again."), frappe.ValidationError)
 		rows = [[c.strip() for c in row] for row in csv.reader(io.StringIO(text))]
-	rows = [r for r in rows if any(r)]
-	if not rows:
+	# Blank lines are skipped but still counted, so an error names the line the Admin sees.
+	numbered = [(line, row) for line, row in enumerate(rows, start=1) if any(row)]
+	if not numbered:
 		frappe.throw(_("The file is empty."), frappe.ValidationError)
-	return rows[0], rows[1:]
+	return numbered[0][1], numbered[1:]
 
 
 # -- checking ------------------------------------------------------------------------
@@ -196,9 +198,9 @@ def validate_file(filename: str, content: bytes) -> dict:
 		)
 
 	errors, seen_fayda = [], {}
-	for index, values in enumerate(rows, start=2):  # row 1 is the header
+	for line, values in rows:
 		row = dict(zip(TEMPLATE_COLUMNS, list(values) + [""] * len(TEMPLATE_COLUMNS), strict=False))
-		errors.extend(_check_row(row, index, seen_fayda))
+		errors.extend(_check_row(row, line, seen_fayda))
 	return {"rows": len(rows), "errors": errors}
 
 
@@ -258,15 +260,15 @@ def import_agents(filename: str, content: bytes, ctx: ScopeContext | None = None
 
 def list_imports(*, limit: int = 20, start: int = 0, ctx: ScopeContext | None = None) -> list[dict]:
 	_admin(ctx)
-	names = frappe.get_all(
+	rows = frappe.get_all(
 		"DA Integration Event",
 		filters={"event_type": EVENT_TYPE},
-		pluck="name",
+		fields=["name", "status", "external_reference", "payload", "last_error", "creation"],
 		order_by="creation desc",
 		limit=max(1, min(int(limit or 20), 100)),
 		start=max(0, int(start or 0)),
 	)
-	return [_serialize(frappe.get_doc("DA Integration Event", n)) for n in names]
+	return [_serialize(row) for row in rows]
 
 
 def import_exceptions(*, page: int = 1, page_size: int = 50, ctx: ScopeContext | None = None) -> dict:

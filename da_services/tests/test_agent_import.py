@@ -104,6 +104,12 @@ class TestAgentImport(IntegrationTestCase):
 			},
 		)
 
+	def test_row_numbers_follow_the_file_when_it_has_blank_lines(self):
+		content = _csv(_row(), [], _row(**{"Fayda ID": "12345"}))  # the bad agent is on line 4
+		out = svc.validate_file("agents.csv", content)
+		self.assertEqual(out["rows"], 2)
+		self.assertEqual({(e["row"], e["column"]) for e in out["errors"]}, {(4, "Fayda ID")})
+
 	def test_file_shape_is_checked(self):
 		cases = {
 			("agents.pdf", _csv(_row())): "CSV or XLSX",

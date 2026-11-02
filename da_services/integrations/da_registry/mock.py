@@ -177,7 +177,9 @@ class MockDARegistryClient(DARegistryClient):
 		}
 
 	def change_request_status(self, reference: str) -> str:
-		# The mock applies a profile update at once, so it is already approved.
-		if not any(r.external_reference == reference for r in self._outcomes.values()):
+		# The mock applies a profile update at once, so it is already approved. Its own
+		# references are known by prefix: the scheduler runs in another process, whose
+		# fresh mock never saw the push.
+		if not str(reference or "").startswith("MOCK-"):
 			raise DANotFound(reference)
 		return "Approved"

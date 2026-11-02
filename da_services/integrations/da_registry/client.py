@@ -61,6 +61,10 @@ class DARegistryAuthError(DARegistryError):
 class DARegistryClient(ABC):
 	"""What Part 2 needs from the registry, and nothing more."""
 
+	# ProfileUpdate.changes keys this backend can apply (the registry names in
+	# services/profile.py EDITABLE). None: every portal field.
+	editable_profile_fields: frozenset[str] | None = None
+
 	@abstractmethod
 	def get_da(self, da_id: str) -> DAReference:
 		"""Fetch the DA reference. Raises DANotFound / DARegistryUnavailable."""

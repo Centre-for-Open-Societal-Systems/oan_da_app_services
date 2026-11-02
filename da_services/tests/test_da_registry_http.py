@@ -260,6 +260,22 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 		self.assertNotIn("TEMP-0001", {r.da_id for r in refs})
 		self.assertTrue(refs)
 
+	def test_a_record_that_vanishes_during_a_list_is_left_out(self):
+		self.registry.records["rec-6"] = _record("DA-3333333333", "rec-6")
+		read = self.registry._get_tab_records
+		self.registry._get_tab_records = lambda body: (
+			_err("Record not found")
+			if body["request_payload"]["subject_record_id"] == "rec-6"
+			else read(body)
+		)
+		refs = self.client.list_das(woreda="ET010101")
+		self.assertEqual({r.da_id for r in refs}, {"DA-3821981536", "DA-38219815360"})
+
+	def test_only_fields_the_registry_holds_are_editable(self):
+		self.assertIn("telegram_number", self.client.editable_profile_fields)
+		self.assertNotIn("language", self.client.editable_profile_fields)
+		self.assertNotIn("photo_url", self.client.editable_profile_fields)
+
 	# -- auth and transport --------------------------------------------------------------
 
 	def test_every_call_sends_bearer_and_a_matching_csrf_pair(self):
@@ -289,6 +305,13 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 			self.client.get_da("DA-3821981536")
 		self.assertNotIsInstance(ctx.exception, DARegistryUnavailable)
 		self.assertIn("Insufficient resource_access roles", str(ctx.exception))
+
+	def test_a_client_error_without_json_is_not_retryable(self):
+		self.registry.fail_next = (413, ValueError("an HTML page from the gateway"))
+		with self.assertRaises(DARegistryError) as ctx:
+			self.client.get_da("DA-3821981536")
+		self.assertNotIsInstance(ctx.exception, DARegistryUnavailable)
+		self.assertIn("413", str(ctx.exception))
 
 	# -- change requests -----------------------------------------------------------------
 
@@ -349,6 +372,12 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 		result = self.client.push_profile_update(self._update({"phone": "0914000777"}))
 		self.assertFalse(result.accepted)
 		self.assertIn("pending change request already exists", result.message)
+
+	def test_a_change_request_without_an_id_is_not_accepted(self):
+		self.registry.change_answer = _ok({"response_payload": {"approval_status": "PENDING"}})
+		result = self.client.push_profile_update(self._update({"phone": "0914000777"}))
+		self.assertFalse(result.accepted)
+		self.assertIn("change_request_id", result.message)
 
 	def test_unknown_da_is_not_accepted(self):
 		result = self.client.push_profile_update(self._update({"phone": "0914000777"}, da_id="DA-9999999999"))

@@ -201,6 +201,8 @@ def to_da_reference(payload: dict) -> DAReference:
 		joined_at=payload.get("joined_at") or payload.get("joined_on"),
 		farmer_count=int(payload["farmer_count"]) if payload.get("farmer_count") is not None else None,
 		email=payload.get("email"),
+		telegram_number=payload.get("telegram_number"),
+		alternate_number=payload.get("alternate_number"),
 		language=payload.get("language"),
 		photo_url=payload.get("photo_url"),
 		source_version=str(payload["version"]) if payload.get("version") is not None else None,

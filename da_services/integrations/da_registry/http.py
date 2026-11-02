@@ -49,6 +49,7 @@ from .client import (
 from .mapper import (
 	DA_TAB,
 	LABEL_ATTRIBUTES,
+	PROFILE_FIELDS,
 	profile_changes_to_change_request,
 	registry_record_to_da_reference,
 )
@@ -114,6 +115,9 @@ def _request_credentials() -> tuple[str, str]:
 
 
 class HttpDARegistryClient(DARegistryClient):
+	# The staff API holds no language or photo: the portal must not offer them.
+	editable_profile_fields = frozenset(PROFILE_FIELDS)
+
 	def __init__(
 		self,
 		base_url: str,
@@ -203,16 +207,25 @@ class HttpDARegistryClient(DARegistryClient):
 		missing = [row for row in rows if records[row["internal_record_id"]] is None]
 		if missing:
 			self._credentials()  # resolve the token here: the workers have no request context
+
+			def fetch(row):
+				try:
+					return self._da_record(row["internal_record_id"], row.get("functional_record_id"))
+				except DANotFound:
+					# Gone between the search and the read: leave it out, keep the rest of the list.
+					return None
+
 			with ThreadPoolExecutor(max_workers=min(LIST_WORKERS, len(missing))) as pool:
-				fetched = pool.map(
-					lambda row: self._da_record(row["internal_record_id"], row.get("functional_record_id")),
-					missing,
-				)
-				for row, record in zip(missing, fetched, strict=True):
+				for row, record in zip(missing, pool.map(fetch, missing), strict=True):
 					records[row["internal_record_id"]] = record
-					self._cache_record(row["internal_record_id"], record)
+					if record is not None:
+						self._cache_record(row["internal_record_id"], record)
 		labels = self._labels()
-		return [registry_record_to_da_reference(records[row["internal_record_id"]], labels) for row in rows]
+		return [
+			registry_record_to_da_reference(records[row["internal_record_id"]], labels)
+			for row in rows
+			if records[row["internal_record_id"]] is not None
+		]
 
 	# ------------------------------------------------------------------ caches
 
@@ -342,9 +355,14 @@ class HttpDARegistryClient(DARegistryClient):
 			return IntegrationResult(accepted=False, message=str(exc), retryable=False)
 
 		payload = body.get("response_payload") or {}
+		if not payload.get("change_request_id"):
+			# Without the id the decision can never be read back: better a visible failure.
+			return IntegrationResult(
+				accepted=False, message="DA Registry gave no change_request_id", retryable=False, raw=payload
+			)
 		return IntegrationResult(
 			accepted=True,
-			external_reference=payload.get("change_request_id"),
+			external_reference=payload["change_request_id"],
 			message=f"Registry approval {payload.get('approval_status') or 'PENDING'}",
 			raw=payload,
 		)
@@ -490,18 +508,23 @@ class HttpDARegistryClient(DARegistryClient):
 			raise DARegistryUnavailable(f"DA Registry failed to {action} (HTTP {response.status_code})")
 		try:
 			data = response.json()
-		except ValueError as exc:
-			raise DARegistryUnavailable(f"DA Registry answered {action} with non-JSON") from exc
-
-		header = data.get("response_header") or {}
-		message = header.get("response_error_message") or ""
+		except ValueError:
+			data = None
 		if response.status_code >= 400:
-			# 401/403: token, role or CSRF problem. Retrying the same call will not help.
+			# 401/403: token, role or CSRF problem; 413 or an HTML 404 from the gateway.
+			# Retrying the same call will not help.
+			header = (data or {}).get("response_header") or {}
+			message = header.get("response_error_message") or getattr(response, "reason", "") or ""
 			_log_error(
 				title="DA Registry rejected request",
 				message=f"{action}: HTTP {response.status_code} {url}\n{message[:300]}",
 			)
 			raise DARegistryError(f"DA Registry refused to {action} (HTTP {response.status_code}): {message}")
+		if data is None:
+			raise DARegistryUnavailable(f"DA Registry answered {action} with non-JSON")
+
+		header = data.get("response_header") or {}
+		message = header.get("response_error_message") or ""
 		if header.get("response_status") != "SUCCESS":
 			if not_found and any(m in message.lower() for m in _NOT_FOUND_MARKERS):
 				raise DANotFound(not_found)
