@@ -12,7 +12,11 @@ from unittest.mock import Mock, patch
 import frappe
 
 from da_services.api.v1.crop_sown import crop_sown_payload
-from da_services.integrations.crop_registry.client import CropRegistryClientError, CropRegistryServerError
+from da_services.integrations.crop_registry.client import (
+	CropRegistryClientError,
+	CropRegistryError,
+	CropRegistryServerError,
+)
 from da_services.integrations.crop_registry.http import HTTPCropRegistryClient
 from da_services.integrations.crop_registry.intake import (
 	IntakeContractError,
@@ -110,64 +114,98 @@ class TestStaffAuth(unittest.TestCase):
 				)
 		self.assertEqual(caught.exception.status_code, 401)
 
-	def test_crop_client_requests_a_keycloak_token_and_matching_csrf(self):
+	def test_crop_client_forwards_the_sso_authorization_and_csrf(self):
+		"""Without a token provider the caller's SSO headers are sent as-is."""
+		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
+		client = HTTPCropRegistryClient(
+			staff_url="https://staff-crop.test",
+			keycloak={
+				"token_url": "https://keycloak.test/token",
+				"client_id": "staff-portal",
+				"client_secret": "secret",
+			},
+		)
+		keycloak_post = Mock()
+		with (
+			patch(
+				"da_services.integrations.crop_registry.http.frappe.get_request_header",
+				side_effect=request_headers.get,
+			),
+			patch("da_services.integrations.staff_api.auth.requests.post", keycloak_post),
+		):
+			headers, cookies = client._auth_and_csrf_headers()
+
+		keycloak_post.assert_not_called()
+		self.assertEqual(headers["Authorization"], "Bearer sso-token")
+		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(headers["Content-Type"], "application/json")
+		self.assertEqual(headers["Accept"], "application/json")
+		self.assertEqual(cookies, {"X-CSRF-Token": "sso-csrf"})
+		self.assertNotIn("Authorization", client.headers)
+
+	def test_forwarded_sso_headers_reach_the_staff_post(self):
 		seen = {}
+		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
 
 		def post(url, **kwargs):
-			seen["url"] = url
-			seen["data"] = kwargs["data"]
-			return _Resp(200, {"access_token": "staff-token", "expires_in": 300})
+			seen["headers"] = kwargs["headers"]
+			seen["cookies"] = kwargs["cookies"]
+			return _Resp(200, _envelope({"submission_id": "sub-1", "draft_status": "FINAL"}))
 
-		client = HTTPCropRegistryClient(
-			staff_url="https://staff-crop.test",
-			keycloak={
-				"token_url": "https://keycloak.test/token",
-				"client_id": "staff-portal",
-				"client_secret": "secret",
-			},
-		)
-		from da_services.integrations.staff_api import auth as staff_auth
+		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", api_key="unused-key")
+		with (
+			patch(
+				"da_services.integrations.crop_registry.http.frappe.get_request_header",
+				side_effect=request_headers.get,
+			),
+			patch("da_services.integrations.crop_registry.http.requests.post", post),
+		):
+			client.get_submission("sub-1")
 
-		staff_auth._CC_TOKEN_CACHE.clear()
-		with patch("da_services.integrations.staff_api.auth.requests.post", post):
-			headers, cookies = client._auth_and_csrf_headers()
+		self.assertEqual(seen["headers"]["Authorization"], "Bearer sso-token")
+		self.assertEqual(seen["headers"]["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(seen["cookies"], {"X-CSRF-Token": "sso-csrf"})
 
-		self.assertEqual(seen["url"], "https://keycloak.test/token")
-		self.assertEqual(seen["data"]["grant_type"], "client_credentials")
-		self.assertEqual(seen["data"]["client_id"], "staff-portal")
-		self.assertEqual(headers["Authorization"], "Bearer staff-token")
+	def test_missing_sso_header_is_a_401_client_error(self):
+		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", api_key="unused-key")
+		for request_headers in (
+			{"Authorization": "Bearer sso-token"},
+			{"X-CSRF-Token": "sso-csrf"},
+			{},
+		):
+			with self.subTest(headers=request_headers):
+				post = Mock()
+				with (
+					patch(
+						"da_services.integrations.crop_registry.http.frappe.get_request_header",
+						side_effect=request_headers.get,
+					),
+					patch("da_services.integrations.crop_registry.http.requests.post", post),
+					self.assertRaises(CropRegistryClientError) as caught,
+				):
+					client.get_submission("sub-1")
+				self.assertEqual(caught.exception.status_code, 401)
+				post.assert_not_called()
+
+	def test_token_provider_takes_precedence_over_request_headers(self):
+		get_header = Mock(return_value="Bearer sso-token")
+		with patch("da_services.integrations.crop_registry.http.frappe.get_request_header", get_header):
+			headers, cookies = _client()._auth_and_csrf_headers()
+
+		get_header.assert_not_called()
+		self.assertEqual(headers["Authorization"], "Bearer cached-token")
 		self.assertEqual(headers["X-CSRF-Token"], cookies["X-CSRF-Token"])
 
-	def test_staff_login_sends_the_iam_csrf_cookie(self):
-		seen = {}
-
-		def session(keycloak, timeout, **_kwargs):
-			seen["username"] = keycloak["username"]
-			seen["iam_base_url"] = keycloak["iam_base_url"]
-			seen["timeout"] = timeout
-			return "staff-user", "iam-csrf"
-
-		client = HTTPCropRegistryClient(
-			staff_url="https://staff-crop.test",
-			keycloak={
-				"username": "crop-agent",
-				"password": "secret",
-				"iam_base_url": "https://iam.crop.test",
-				"kc_realm_url": "https://keycloak.test/realms/staff",
-				"login_provider_id": "1",
-				"token_url": "https://keycloak.test/token",
-				"client_id": "staff-portal",
-				"client_secret": "secret",
-			},
-			registry_client_id="cropsown-registry-staff-portal",
-		)
-		with patch("da_services.integrations.staff_api.auth.staff_session", session):
-			headers, cookies = client._auth_and_csrf_headers()
-		self.assertEqual(seen["username"], "crop-agent")
-		self.assertEqual(seen["iam_base_url"], "https://iam.crop.test")
-		self.assertEqual(headers["Authorization"], "Bearer staff-user")
-		self.assertEqual(headers["X-CSRF-Token"], "iam-csrf")
-		self.assertEqual(cookies["X-CSRF-Token"], "iam-csrf")
+	def test_misconfigured_client_is_rejected(self):
+		with self.assertRaises(CropRegistryError):
+			HTTPCropRegistryClient(staff_url="staff-crop.test", api_key="key")
+		with self.assertRaises(CropRegistryError):
+			HTTPCropRegistryClient(staff_url="https://staff-crop.test")
+		with self.assertRaises(CropRegistryError):
+			HTTPCropRegistryClient(
+				staff_url="https://staff-crop.test",
+				keycloak={"token_url": "https://keycloak.test/token"},
+			)
 
 	def test_cleared_access_cookie_is_ignored(self):
 		class _Headers:

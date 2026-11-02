@@ -5,7 +5,7 @@ registry's SearchResultData / RecordData / RegisterTabRecordData, so the
 client, mappers and error mapping are exercised without a live registry.
 """
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -25,6 +25,7 @@ from da_services.integrations.farmer_registry.mapper import (
 )
 
 REGISTER_ID = "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd"
+SSO_HEADERS = {"Authorization": "Bearer sso-user-token", "X-CSRF-Token": "sso-csrf"}
 CONF_KEYS = (
 	"farmer_registry_url",
 	"farmer_registry_api_key",
@@ -274,6 +275,14 @@ class TestHttpReadPath(IntegrationTestCase):
 
 		frappe.cache.delete_keys(SUMMARY_CACHE_PREFIX)
 		self.client = HTTPFarmerRegistryClient()
+		# Staff calls forward the caller's SSO headers; tests have no live request.
+		self.request_headers = dict(SSO_HEADERS)
+		header_patch = patch(
+			"da_services.integrations.farmer_registry.http.frappe.get_request_header",
+			side_effect=lambda key, default=None: self.request_headers.get(key, default),
+		)
+		header_patch.start()
+		self.addCleanup(header_patch.stop)
 
 	def tearDown(self):
 		for k, v in self._saved.items():
@@ -379,11 +388,36 @@ class TestHttpReadPath(IntegrationTestCase):
 	def test_requests_carry_token_csrf_and_envelope(self, post):
 		self.client.get_farmer("frm-1")
 		_, kwargs = post.call_args_list[0]
-		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer static-test-token")
-		self.assertEqual(kwargs["headers"]["X-CSRF-Token"], kwargs["cookies"]["X-CSRF-Token"])
+		# The caller's SSO token is forwarded; the static API key is not sent.
+		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sso-user-token")
+		self.assertEqual(kwargs["headers"]["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(kwargs["cookies"], {"X-CSRF-Token": "sso-csrf"})
+		self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
 		env = kwargs["json"]
 		self.assertEqual(env["request_header"]["sender_app_mnemonic"], "DA_SERVICES")
 		self.assertEqual(env["request_body"]["request_payload"]["subject_register_id"], REGISTER_ID)
+
+	def test_missing_sso_header_is_a_401_before_any_call(self):
+		for headers in ({"Authorization": "Bearer sso-user-token"}, {"X-CSRF-Token": "sso-csrf"}, {}):
+			with self.subTest(headers=headers):
+				self.request_headers = headers
+				with (
+					patch("da_services.integrations.farmer_registry.http.requests.post") as post,
+					self.assertRaises(FarmerRegistryClientError) as cm,
+				):
+					self.client.get_farmer("frm-1")
+				self.assertEqual(cm.exception.status_code, 401)
+				post.assert_not_called()
+
+	def test_upload_forwards_sso_headers_without_json_content_type(self):
+		post = Mock(return_value=_Resp(_envelope([{"document_id": "doc-1"}])))
+		with patch("da_services.integrations.farmer_registry.http.requests.post", post):
+			self.assertEqual(self.client.upload_document("photo.jpg", b"jpg", "image/jpeg"), "doc-1")
+		_, kwargs = post.call_args
+		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sso-user-token")
+		self.assertEqual(kwargs["cookies"], {"X-CSRF-Token": "sso-csrf"})
+		self.assertNotIn("Content-Type", kwargs["headers"])
+		self.assertEqual(kwargs["files"]["documents"], ("photo.jpg", b"jpg", "image/jpeg"))
 
 	# -- list_farmers -------------------------------------------------------
 
