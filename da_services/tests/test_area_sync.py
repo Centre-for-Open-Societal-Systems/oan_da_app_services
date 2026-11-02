@@ -64,11 +64,19 @@ def _rows() -> dict:
 class TestAreaSync(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA Administrative Area", {"name": ("like", "ET7%")})
+		self._clear()
 
 	def tearDown(self):
-		frappe.db.delete("DA Administrative Area", {"name": ("like", "ET7%")})
+		self._clear()
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+
+	@staticmethod
+	def _clear():
+		# The sync owns every master_data row and refuses a run that would drop most of
+		# them, so a test site must hold none from an earlier live run. Fixture areas
+		# (no source) are recreated by the modules that need them.
+		frappe.db.delete("DA Administrative Area", {"name": ("like", "ET7%")})
+		frappe.db.delete("DA Administrative Area", {"source": area_sync.SOURCE})
 
 	def test_the_whole_tree_is_loaded_with_parents_and_names(self):
 		md = FakeMasterData(TREE)
