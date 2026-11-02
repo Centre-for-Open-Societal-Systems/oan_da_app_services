@@ -154,11 +154,14 @@ def get_livestock_geo_level_values():
 @frappe.whitelist()
 @handle_api_errors
 def get_farmer_livestock(farmer_id: str):
-	"""The farmer's Livestock submissions and approved register rows.
+	"""The farmer's Livestock submissions and the full rows of each section.
 
-	``kind`` is ``submission`` (a draft or one waiting for approval) or
-	``record`` (approved, with ``functional_record_id`` LS-…). With
-	``submission_id`` the route returns that one submission with every section.
+	``kind`` is ``submission`` or ``record``. A submission includes ``sections``,
+	each with its records. A record is the full section row: every column the
+	registry stores for that holding, animal, health event, vaccination, vital
+	event, breeding row, or other section of the intake form. The screen pairs
+	these values with labels from ``GET /livestock/intake-form``. With
+	``submission_id`` the route returns that one submission.
 	"""
 	ctx = require_roles(*READ_ROLES)
 	submission_id = (frappe.form_dict.get("submission_id") or "").strip()
@@ -192,7 +195,7 @@ def save_farmer_livestock(farmer_id: str):
 	            {"section_id": "livestock_farmer_lookup", "records": [{"fayda_id": "123456789012"}]},
 	            {
 	                "section_id": "livestock_animal_details_section_01",
-	                "records": [{"ear_tag_id": "ET-1", "species": "CATTLE", "gender": "FEMALE"}],
+	                "records": [{"ear_tag_id": "ET-1", "species": "CATTLE", "gender": "SEX_FEMALE"}],
 	            },
 	        ],
 	    }

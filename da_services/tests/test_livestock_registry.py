@@ -21,6 +21,7 @@ from da_services.integrations.livestock_registry.client import (
 from da_services.integrations.livestock_registry.http import HTTPLivestockRegistryClient
 from da_services.integrations.livestock_registry.intake import (
 	IntakeContractError,
+	_canonicalize_choice,
 	describe_form,
 	geo_hierarchy,
 	submit_with_metadata,
@@ -111,7 +112,18 @@ class TestDescribeForm(unittest.TestCase):
 
 	def test_sections_keep_screen_order_and_tables_list_their_columns(self):
 		self.assertEqual(
-			[s["section_id"] for s in self.form["sections"]], [LOOKUP, LOCATION, ANIMALS, HEALTH]
+			[s["section_id"] for s in self.form["sections"]],
+			[
+				LOOKUP,
+				"livestock_survey_personnel_section_02",
+				LOCATION,
+				ANIMALS,
+				HEALTH,
+				"livestock_retagging_details_section_01",
+				"livestock_vaccination_details_section_01",
+				"livestock_vital_event_details_section_01",
+				"livestock_breeding_details_section_01",
+			],
 		)
 		animals = self.sections[ANIMALS]
 		self.assertTrue(animals["is_list"])
@@ -121,13 +133,22 @@ class TestDescribeForm(unittest.TestCase):
 			[field["field_name"] for field in animals["fields"]],
 			["ear_tag_id", "species", "gender", "quantity", "date_of_birth", "age"],
 		)
-		self.assertNotIn("table", self.sections[LOOKUP])
+		farmer = next(tab for tab in self.form["screen_tabs"] if tab["key"] == "farmer")
+		self.assertEqual(
+			[section["section_id"] for section in farmer["sections"]],
+			[LOOKUP, "livestock_survey_personnel_section_02", LOCATION],
+		)
+		self.assertEqual(self.sections[LOOKUP]["screen_section"], "identity")
 
 	def test_fields_carry_what_the_frontend_renders(self):
 		fields = {field["field_name"]: field for field in self.sections[ANIMALS]["fields"]}
 		self.assertEqual(fields["species"]["widget"], "select")
 		self.assertTrue(fields["species"]["required"])
-		self.assertEqual(fields["species"]["choices"][0], {"value_id": "CATTLE", "value_display": "Cattle"})
+		self.assertEqual(
+			fields["species"]["choices"][0],
+			{"value_id": "CATTLE", "value_display": "Cattle", "value_code": "CATTLE"},
+		)
+		self.assertEqual(fields["species"]["value_key"], "value_id")
 		self.assertTrue(fields["species"]["catalog_loaded"])
 		self.assertEqual(fields["gender"]["options"][1], {"label": "Female", "value": "FEMALE"})
 		self.assertEqual(fields["quantity"]["data_type"], "integer")
@@ -149,12 +170,41 @@ class TestDescribeForm(unittest.TestCase):
 
 	def test_a_catalog_that_was_not_loaded_is_marked(self):
 		form = describe_form(MOCK_FORM, MOCK_FIELDS, {})
-		species = form["sections"][2]["fields"][1]
+		animals = next(section for section in form["sections"] if section["section_id"] == ANIMALS)
+		species = animals["fields"][1]
 		self.assertIsNone(species["choices"])
 		self.assertFalse(species["catalog_loaded"])
 
 
 class TestIntakeSubmit(unittest.TestCase):
+	def test_a_screen_section_id_resolves_to_the_staff_section(self):
+		result, saves = _submit(
+			[
+				{"section_id": "identity", "records": [{"fayda_id": "123456789012"}]},
+				{
+					"section_id": "survey-personnel",
+					"records": [{"surveyor_name": "Abebe Kebede", "surveyor_mobile_number": "0911223344"}],
+				},
+				{
+					"section_id": "vaccination",
+					"records": [
+						{
+							"ear_tag_id": "ET-1",
+							"species": "CATTLE",
+							"vaccine_type": "VACCINE_TYPE_ANTHRAX_CATTLE",
+							"vaccination_date": "2026-03-15",
+						}
+					],
+				},
+			]
+		)
+		self.assertEqual(
+			[save["section_id"] for save in saves],
+			[LOOKUP, "livestock_survey_personnel_section_02", "livestock_vaccination_details_section_01"],
+		)
+		self.assertEqual(result["subject_record_id"], "subject-1")
+		self.assertEqual(saves[2]["section_payload"][0]["link_internal_record_id"], "subject-1")
+
 	def test_main_section_is_saved_first_and_lists_are_linked_to_it(self):
 		result, saves = _submit(
 			[
@@ -194,7 +244,7 @@ class TestIntakeSubmit(unittest.TestCase):
 		self.assertEqual(saves[0]["section_payload"][0]["link_internal_record_id"], "subject-9")
 
 	def test_required_fields_and_form_rules_are_checked_per_row(self):
-		with self.assertRaisesRegex(IntakeContractError, rf"{ANIMALS}\[1\]\.species is required"):
+		with self.assertRaisesRegex(IntakeContractError, r"ls_animal_details\[1\]\.species is required"):
 			_submit([{"section_id": ANIMALS, "records": [ANIMAL, {"gender": "MALE"}]}], subject_record_id="s")
 		with self.assertRaisesRegex(IntakeContractError, "disease_type is required"):
 			_submit(
@@ -232,6 +282,33 @@ class TestIntakeSubmit(unittest.TestCase):
 		self.assertEqual(row["gender"], "FEMALE")
 		self.assertEqual(row["quantity"], 3)
 		self.assertEqual(row["date_of_birth"], "2021-05-14")
+
+	def test_widget_value_key_picks_the_stored_catalog_column(self):
+		health = {
+			"widget-data-source": {
+				"params": {"attribute_id": "LIVESTOCK_HEALTH_STATUS"},
+				"valueKey": "value_code",
+			}
+		}
+		catalog = {
+			"LIVESTOCK_HEALTH_STATUS": [
+				{
+					"value_id": "LIVESTOCK_HEALTH_STATUS_HEALTHY",
+					"value_code": "HEALTHY",
+					"value_display": "Healthy",
+				}
+			],
+			"LIVESTOCK_SPECIES": [{"value_id": "CATTLE", "value_code": "CATTLE", "value_display": "Cattle"}],
+		}
+		for sent in ("HEALTHY", "Healthy", "LIVESTOCK_HEALTH_STATUS_HEALTHY"):
+			self.assertEqual(_canonicalize_choice("health_status", health, sent, catalog), "HEALTHY")
+		species = {
+			"widget-data-source": {
+				"params": {"attribute_id": "LIVESTOCK_SPECIES"},
+				"valueKey": "value_id",
+			}
+		}
+		self.assertEqual(_canonicalize_choice("species", species, "Cattle", catalog), "CATTLE")
 
 	def test_bad_values_are_rejected(self):
 		cases = [
@@ -409,7 +486,8 @@ class TestHttpCalls(unittest.TestCase):
 		)
 		render = [body for path, body in calls if path == "/intake-form-metadata/render_intake_form"]
 		self.assertEqual(render[0]["request_body"]["request_payload"], {"form_id": "form-livestock"})
-		species = described["sections"][2]["fields"][1]
+		animals = next(section for section in described["sections"] if section["section_id"] == ANIMALS)
+		species = animals["fields"][1]
 		self.assertEqual([row["value_id"] for row in species["choices"]], ["CATTLE", "GOATS"])
 		catalog_calls = [path for path, _body in calls if path == "/attributes/get_attribute_values"]
 		self.assertEqual(
@@ -469,40 +547,118 @@ class TestHttpCalls(unittest.TestCase):
 		self.assertEqual(submission.record_name, FIXTURE_FARMER_ID)
 		self.assertEqual(submission.sections[0].section_id, LOOKUP)
 
-	def test_list_keeps_only_this_farmers_submissions_and_records(self):
+	def test_list_returns_full_section_records_for_this_farmer(self):
+		def search(body):
+			register_id = body["request_body"]["request_payload"]["register_id"]
+			if register_id != REGISTER_ID:
+				return _envelope([])
+			return _envelope(
+				[
+					{
+						"internal_record_id": "rec-1",
+						"functional_record_id": "LS-1",
+						"record_name": "Bekele",
+						"display_fields": [{"field_name": "farmer_id", "value": FIXTURE_FARMER_ID}],
+					},
+					{
+						"internal_record_id": "rec-2",
+						"display_fields": [{"field_name": "farmer_id", "value": "FR-x"}],
+					},
+				]
+			)
+
+		def section_records(body):
+			payload = body["request_body"]["request_payload"]
+			if payload["subject_record_id"] != "rec-1":
+				return _envelope([])
+			if payload["section_register_id"] == REGISTER_ID:
+				return _envelope(
+					[
+						{
+							"internal_record_id": "rec-1",
+							"farmer_id": FIXTURE_FARMER_ID,
+							"farmer_name": "Bekele",
+							"region": "Oromia",
+						}
+					]
+				)
+			if payload["section_register_id"] == ANIMAL_REGISTER_ID:
+				return _envelope(
+					[
+						{
+							"internal_record_id": "animal-1",
+							"link_internal_record_id": "rec-1",
+							"ear_tag_id": "ET-1",
+							"species": "CATTLE",
+							"breed": "HYBRID",
+							"gender": "FEMALE",
+							"health_status": "HEALTHY",
+							"vaccination_status": "UP_TO_DATE",
+							"quantity": 1,
+							"weight": 326,
+						}
+					]
+				)
+			return _envelope([])
+
 		responses = {
 			"/register-metadata/get_all_registers": _REGISTERS,
+			"/intake-form-metadata/get_all_intake_forms": _FORMS,
+			"/intake-form-metadata/render_intake_form": MOCK_FORM,
 			"/intake-form-data/search_in_intake_form_submissions": [
 				{"submission_id": "sub-1", "record_name": FIXTURE_FARMER_ID},
 				{"submission_id": "sub-2", "record_name": "FR-000000000001"},
 			],
-			"/register-data/search_in_a_register": [
-				{
-					"internal_record_id": "rec-1",
-					"functional_record_id": "LS-1",
-					"record_name": "Bekele",
-					"display_fields": [{"field_name": "farmer_id", "value": FIXTURE_FARMER_ID}],
-				},
-				{
-					"internal_record_id": "rec-2",
-					"display_fields": [{"field_name": "farmer_id", "value": "FR-x"}],
-				},
-			],
+			"/register-data/search_in_a_register": search,
+			"/register-data/get_section_records": section_records,
+			"/intake-form-data/get_intake_form_submission": {
+				"submission_id": "sub-1",
+				"record_name": FIXTURE_FARMER_ID,
+				"draft_status": "DRAFT",
+				"section_payloads": [
+					{
+						"section_id": ANIMALS,
+						"section_register_id": ANIMAL_REGISTER_ID,
+						"records": [
+							{
+								"internal_record_id": "draft-animal",
+								"ear_tag_id": "ET-1",
+								"species": "CATTLE",
+								"breed": "HYBRID",
+								"gender": "FEMALE",
+							}
+						],
+					}
+				],
+			},
 		}
 		rows, calls = self._run(responses, lambda client: client.list_for_farmer(FIXTURE_FARMER_ID))
-		self.assertEqual(
-			[(row["kind"], row.get("submission_id") or row["internal_record_id"]) for row in rows],
-			[
-				("submission", "sub-1"),
-				("record", "rec-1"),
-			],
-		)
-		searches = [body for path, body in calls if "search" in path]
-		self.assertTrue(
-			all(
-				body["request_body"]["pagination_request"]["search_text"] == FIXTURE_FARMER_ID
-				for body in searches
-			)
+		self.assertEqual(rows[0]["kind"], "submission")
+		self.assertEqual(rows[0]["submission_id"], "sub-1")
+		self.assertEqual(rows[0]["sections"][0]["records"][0]["breed"], "HYBRID")
+		holding = next(row for row in rows if row.get("internal_record_id") == "rec-1")
+		animal = next(row for row in rows if row.get("internal_record_id") == "animal-1")
+		self.assertEqual(holding["farmer_name"], "Bekele")
+		self.assertEqual(holding["region"], "Oromia")
+		self.assertEqual(animal["register_id"], ANIMAL_REGISTER_ID)
+		self.assertEqual(animal["ear_tag_id"], "ET-1")
+		self.assertEqual(animal["species"], "CATTLE")
+		self.assertEqual(animal["breed"], "HYBRID")
+		self.assertEqual(animal["gender"], "FEMALE")
+		self.assertEqual(animal["health_status"], "HEALTHY")
+		self.assertNotIn("rec-2", [row.get("internal_record_id") for row in rows])
+		section_calls = [
+			body["request_body"]["request_payload"]
+			for path, body in calls
+			if path == "/register-data/get_section_records"
+		]
+		self.assertIn(
+			{
+				"subject_register_id": REGISTER_ID,
+				"subject_record_id": "rec-1",
+				"section_register_id": ANIMAL_REGISTER_ID,
+			},
+			section_calls,
 		)
 
 	def test_errors_are_typed(self):
@@ -640,7 +796,13 @@ class TestRoutes(unittest.TestCase):
 		from da_services.api.v1.livestock import get_livestock_intake_form
 
 		result = self._call(get_livestock_intake_form, client=MockLivestockRegistryClient())
-		self.assertEqual(result["data"]["sections"][3]["section_register_id"], HEALTH_REGISTER_ID)
+		sections = {section["section_id"]: section for section in result["data"]["sections"]}
+		self.assertEqual(sections[HEALTH]["section_register_id"], HEALTH_REGISTER_ID)
+		self.assertEqual(sections[ANIMALS]["section_register_id"], ANIMAL_REGISTER_ID)
+		self.assertEqual(
+			[tab["key"] for tab in result["data"]["screen_tabs"]],
+			["farmer", "livestock", "health", "breeding"],
+		)
 
 
 if __name__ == "__main__":

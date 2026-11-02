@@ -15,6 +15,24 @@ from .schemas import LivestockSubmission
 REGISTER_ID = "reg-livestock"
 ANIMAL_REGISTER_ID = "reg-animal"
 HEALTH_REGISTER_ID = "reg-health-event"
+VACCINATION_REGISTER_ID = "reg-vaccination"
+VITAL_REGISTER_ID = "reg-vital-event"
+BREEDING_REGISTER_ID = "reg-breeding"
+RETAG_REGISTER_ID = "reg-retagging"
+
+# Staff section mnemonic for each intake section id. Screen ids in intake.py
+# resolve to these mnemonics.
+_MNEMONICS = {
+	"livestock_farmer_lookup": "ls_farmer_lookup",
+	"livestock_survey_personnel_section_02": "ls_survey_personnel",
+	"livestock_livestock_location_section_03": "ls_livestock_location",
+	"livestock_animal_details_section_01": "ls_animal_details",
+	"livestock_retagging_details_section_01": "ls_retagging_details",
+	"livestock_health_event_details_section_01": "ls_health_event_details",
+	"livestock_vaccination_details_section_01": "ls_vaccination_details",
+	"livestock_vital_event_details_section_01": "ls_vital_event_details",
+	"livestock_breeding_details_section_01": "ls_breeding_details",
+}
 FIXTURE_SUBMISSION_ID = "livestock-sub-001"
 FIXTURE_SUBJECT_ID = "livestock-rec-001"
 FIXTURE_FARMER_ID = "FR-512145929324"
@@ -40,12 +58,37 @@ def _select(column: str, label: str, attribute_id: str, **extra) -> dict:
 	}
 
 
+def _text(column: str, label: str, **extra) -> dict:
+	return {
+		"widget": "text",
+		"column-key": column,
+		"widget-label": label,
+		"widget-readonly": False,
+		**extra,
+	}
+
+
+def _table(widget_id: str, label: str, register_id: str, columns: list[dict]) -> dict:
+	return {
+		"widgets": [
+			{
+				"widget": "dialog-table",
+				"widget-id": widget_id,
+				"widget-label": label,
+				"widget-data-path": f"{register_id}.records",
+				"widget-data-operations": {"add": True, "edit": True, "remove": True},
+				"widget-data-columns": columns,
+			}
+		]
+	}
+
+
 def _section(section_id: str, register_id: str, description: str, order: int, panels: list, *, is_list=False):
 	return {
 		"register_id": REGISTER_ID,
 		"section_id": section_id,
 		"section_register_id": register_id,
-		"section_mnemonic": section_id,
+		"section_mnemonic": _MNEMONICS.get(section_id, section_id),
 		"section_description": description,
 		"is_list": is_list,
 		"section_order": order,
@@ -60,6 +103,7 @@ MOCK_FORM = {
 	"tabs": [
 		{
 			"tab_id": "tab-livestock",
+			"tab_label": "Livestock Intake",
 			"sections": [
 				_section(
 					"livestock_farmer_lookup",
@@ -87,6 +131,22 @@ MOCK_FORM = {
 										"pattern": r"^\s*(?:[0-9]{12}|[0-9](?:\s*[0-9]){15})\s*$"
 									},
 								},
+							]
+						}
+					],
+				),
+				_section(
+					"livestock_survey_personnel_section_02",
+					REGISTER_ID,
+					"Survey Personnel",
+					2,
+					[
+						{
+							"widgets": [
+								_text("surveyor_name", "DA Name"),
+								_text("surveyor_mobile_number", "DA Mobile Number"),
+								_text("supervisor_name", "Supervisor Name"),
+								_text("supervisor_mobile_number", "Supervisor Mobile Number"),
 							]
 						}
 					],
@@ -297,6 +357,109 @@ MOCK_FORM = {
 					],
 					is_list=True,
 				),
+				_section(
+					"livestock_retagging_details_section_01",
+					RETAG_REGISTER_ID,
+					"Ear Tag Replacement",
+					6,
+					[
+						_table(
+							"ls_retagging_details_table",
+							"Ear Tag Replacement",
+							RETAG_REGISTER_ID,
+							[
+								_text("ear_tag_id", "Old Ear Tag"),
+								_select("species", "Species", "LIVESTOCK_SPECIES"),
+								_text("new_ear_tag_id", "New Ear Tag"),
+								_text("reason", "Reason for Replacement"),
+								_text("retag_date", "Date of Retagging"),
+								_text("approving_officer", "Approving Officer"),
+								_text("justification", "Justification Notes"),
+							],
+						)
+					],
+					is_list=True,
+				),
+				_section(
+					"livestock_vaccination_details_section_01",
+					VACCINATION_REGISTER_ID,
+					"Vaccination Details",
+					7,
+					[
+						_table(
+							"ls_vaccination_details_table",
+							"Vaccination Details",
+							VACCINATION_REGISTER_ID,
+							[
+								_text(
+									"ear_tag_id",
+									"Ear Tag",
+									**{
+										"widget-autofill": {
+											"fields": {"age": "age", "species": "species"},
+											"matchField": "ear_tag_id",
+											"sourceWidgetId": "ls_animal_details_table",
+										}
+									},
+								),
+								_select(
+									"species", "Species", "LIVESTOCK_SPECIES", **{"widget-readonly": True}
+								),
+								_text("age", "Age", **{"widget-readonly": True}),
+								_text("vaccine_type", "Vaccine"),
+								_text("vaccination_date", "Vaccination Date"),
+								_text("next_due_date", "Next Due Date"),
+							],
+						)
+					],
+					is_list=True,
+				),
+				_section(
+					"livestock_vital_event_details_section_01",
+					VITAL_REGISTER_ID,
+					"Vital Event Details",
+					8,
+					[
+						_table(
+							"ls_vital_event_details_table",
+							"Vital Event Details",
+							VITAL_REGISTER_ID,
+							[
+								_text("ear_tag_id", "Ear Tag"),
+								_select(
+									"species", "Species", "LIVESTOCK_SPECIES", **{"widget-readonly": True}
+								),
+								_text("event_type", "Event Type"),
+								_text("event_date", "Event Date"),
+								_text("offspring_count", "Number of Offspring"),
+							],
+						)
+					],
+					is_list=True,
+				),
+				_section(
+					"livestock_breeding_details_section_01",
+					BREEDING_REGISTER_ID,
+					"Breeding Details",
+					9,
+					[
+						_table(
+							"ls_breeding_details_table",
+							"Breeding Details",
+							BREEDING_REGISTER_ID,
+							[
+								_text("ear_tag_id", "Ear Tag"),
+								_select(
+									"species", "Species", "LIVESTOCK_SPECIES", **{"widget-readonly": True}
+								),
+								_text("event_type", "Breeding Type"),
+								_text("breeding_date", "Breeding Date"),
+								_text("outcome", "Outcome"),
+							],
+						)
+					],
+					is_list=True,
+				),
 			],
 		}
 	],
@@ -309,6 +472,10 @@ MOCK_FIELDS = {
 		{"field_name": "geo_code_hierarchy_json", "data_type": "json"},
 		{"field_name": "latitude", "data_type": "number"},
 		{"field_name": "longitude", "data_type": "number"},
+		{"field_name": "surveyor_name", "data_type": "string"},
+		{"field_name": "surveyor_mobile_number", "data_type": "string"},
+		{"field_name": "supervisor_name", "data_type": "string"},
+		{"field_name": "supervisor_mobile_number", "data_type": "string"},
 		{"field_name": "internal_record_id", "data_type": "string", "required": True},
 	],
 	ANIMAL_REGISTER_ID: [
@@ -326,6 +493,37 @@ MOCK_FIELDS = {
 		{"field_name": "event_type", "data_type": "string"},
 		{"field_name": "disease_type", "data_type": "string"},
 		{"field_name": "is_notifiable", "data_type": "boolean"},
+	],
+	VACCINATION_REGISTER_ID: [
+		{"field_name": "ear_tag_id", "data_type": "string"},
+		{"field_name": "species", "data_type": "string"},
+		{"field_name": "age", "data_type": "string"},
+		{"field_name": "vaccine_type", "data_type": "string"},
+		{"field_name": "vaccination_date", "data_type": "date"},
+		{"field_name": "next_due_date", "data_type": "date"},
+	],
+	VITAL_REGISTER_ID: [
+		{"field_name": "ear_tag_id", "data_type": "string"},
+		{"field_name": "species", "data_type": "string"},
+		{"field_name": "event_type", "data_type": "string"},
+		{"field_name": "event_date", "data_type": "date"},
+		{"field_name": "offspring_count", "data_type": "integer"},
+	],
+	BREEDING_REGISTER_ID: [
+		{"field_name": "ear_tag_id", "data_type": "string"},
+		{"field_name": "species", "data_type": "string"},
+		{"field_name": "event_type", "data_type": "string"},
+		{"field_name": "breeding_date", "data_type": "date"},
+		{"field_name": "outcome", "data_type": "string"},
+	],
+	RETAG_REGISTER_ID: [
+		{"field_name": "ear_tag_id", "data_type": "string"},
+		{"field_name": "species", "data_type": "string"},
+		{"field_name": "new_ear_tag_id", "data_type": "string"},
+		{"field_name": "reason", "data_type": "string"},
+		{"field_name": "retag_date", "data_type": "date"},
+		{"field_name": "approving_officer", "data_type": "string"},
+		{"field_name": "justification", "data_type": "string"},
 	],
 }
 
@@ -369,8 +567,16 @@ _FIXTURE = {
 					"internal_record_id": "animal-rec-001",
 					"link_internal_record_id": FIXTURE_SUBJECT_ID,
 					"ear_tag_id": "ET2149721223",
+					"secondary_identifier": "NAME-LUCY",
 					"species": "CATTLE",
+					"breed": "HYBRID",
+					"quantity": 1,
+					"weight": 326,
+					"date_of_birth": "2022-03-01",
 					"gender": "FEMALE",
+					"health_status": "HEALTHY",
+					"vaccination_status": "UP_TO_DATE",
+					"registration_date": "2026-11-02",
 				}
 			],
 		},
@@ -452,12 +658,26 @@ class MockLivestockRegistryClient(LivestockRegistryClient):
 	def list_for_farmer(self, farmer_id: str) -> list[dict]:
 		if farmer_id != FIXTURE_FARMER_ID:
 			return []
+		holding = _FIXTURE["section_payloads"][0]["records"][0]
+		animal = _FIXTURE["section_payloads"][1]["records"][0]
+		sections = [
+			{
+				"section_id": section["section_id"],
+				"section_register_id": section["section_register_id"],
+				"records": section["records"],
+			}
+			for section in _FIXTURE["section_payloads"]
+		]
 		return [
 			{
 				"kind": "submission",
+				"register_id": REGISTER_ID,
 				"submission_id": FIXTURE_SUBMISSION_ID,
 				"record_name": FIXTURE_FARMER_ID,
 				"draft_status": "FINAL",
 				"approval_status": "PENDING",
-			}
+				"sections": sections,
+			},
+			{"kind": "record", "register_id": REGISTER_ID, **holding},
+			{"kind": "record", "register_id": ANIMAL_REGISTER_ID, **animal},
 		]

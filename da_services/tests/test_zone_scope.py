@@ -9,6 +9,7 @@ from frappe.utils import add_days, now_datetime, today
 from da_services.patches import backfill_zone
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
+from da_services.tests.fixtures import ensure_doctype_schema
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "zone-da1@da.local"  # DA-000001: ET04 / ET04-Z01 / ET04-W01
@@ -73,6 +74,7 @@ def _ctx(user):
 class TestZoneScope(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		ensure_doctype_schema("DA Profile Change Request")
 		for dt in DOCTYPES:
 			frappe.db.delete(dt)
 		for code, level, parent in AREAS:

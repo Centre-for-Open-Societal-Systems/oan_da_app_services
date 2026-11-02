@@ -20,7 +20,31 @@ Staff calls forward the caller's `Authorization` and `X-CSRF-Token` headers, the
 
 ## The form
 
-The Livestock register has one intake form with one tab and eight sections.
+The Livestock register's intake form is one staff tab. The response also
+groups those sections into the screen tabs the Livestock Report uses
+(`screen_tabs`: Farmer, Livestock, Health & Vaccination, Breeding & Vital
+Events). `screen_section` on a section is the id the screen may send instead
+of `section_id`.
+
+| Screen section id | Staff section |
+| --- | --- |
+| `identity` | `livestock_farmer_lookup` |
+| `survey-personnel` | `livestock_survey_personnel_section_02` |
+| `address`, `location` | `livestock_livestock_location_section_03` |
+| `herd`, `livestock-details` | `livestock_animal_details_section_01` |
+| `ear-tag-replacement` | `livestock_retagging_details_section_01` |
+| `disease`, `health-event` | `livestock_health_event_details_section_01` |
+| `vaccination` | `livestock_vaccination_details_section_01` |
+| `vital-event` | `livestock_vital_event_details_section_01` |
+| `breeding`, `breeding-details` | `livestock_breeding_details_section_01` |
+
+The Submit Livestock Report sections Holding, Herd Structure, Feed, Water,
+Production and Sales are not sections of this registry. They are not accepted.
+
+`GET /farmers/{id}/livestock` reads every register `get_all_registers` returns
+on the livestock host. A row on another register is kept when it names this
+farmer, or when `link_internal_record_id` is the internal id of this farmer's
+Livestock row.
 
 | # | Section id | Register | Kind |
 | --- | --- | --- | --- |
@@ -70,18 +94,18 @@ Prefix: `/api/v1/da-services`
 | --- | --- |
 | `GET /livestock/intake-form` | Discover the register and form, render it, `get_register_fields`, every catalog page |
 | `GET /livestock/geo-level-values?level_id=&parent_level_value_id=` | `POST /geo/get_geo_level_values` |
-| `GET /farmers/{id}/livestock` | `search_in_intake_form_submissions` and `search_in_a_register`, both by Farmer-ID |
+| `GET /farmers/{id}/livestock` | Search submissions and the Livestock register by Farmer-ID, then `get_section_records` for every section register on the rendered form. Each record is the full row, not the search `display_fields` |
 | `GET /farmers/{id}/livestock?submission_id=` | `get_intake_form_submission` |
 | `POST /farmers/{id}/livestock` | `save_intake_form_submission` per section |
 | `POST /farmers/{id}/livestock/{submission_id}/finalize` | `finalize_intake_form_submission` |
 
 Read: DA, Supervisor, Executive, Admin. Write: DA, Supervisor, Admin. `{id}` is the Farmer-ID, or an internal id that DA Farmer Reference maps to one. A Livestock record names its farmer by Farmer-ID, so an id without one is refused.
 
-The list returns `kind: submission` for drafts and submissions waiting for approval (`record_name` is the Farmer-ID), and `kind: record` for approved register rows (`functional_record_id` LS-…, `farmer_id` in `display_fields`). A submission of another farmer is refused on read, save and finalize.
+The list returns `kind: submission` for drafts and submissions waiting for approval. Each submission includes `sections`, and each section includes its records. `kind: record` is a full section row. A livestock holding carries the farmer, survey and location columns. An animal row carries `ear_tag_id`, `species`, `breed`, `gender`, `health_status`, `vaccination_status` and the other animal columns. The screen labels those names from `GET /livestock/intake-form`. A submission of another farmer is refused on read, save and finalize.
 
 ## What the intake form returns
 
-The frontend renders the form from this payload and sends field names back as they are.
+The frontend renders the form from this payload and sends field names back as they are. The screen sequence and the field list are in [livestock-frontend.md](livestock-frontend.md) and [livestock-field-maps.md](livestock-field-maps.md).
 
 Each section has `section_id`, `title`, `is_list`, `required_for_submit` and `fields` in screen order. A list section also has `table` (label, add / edit / remove, dialog titles); its `fields` are the table columns.
 
@@ -89,7 +113,7 @@ Each field has `field_name`, `widget` (`text`, `number`, `date`, `select`, `radi
 
 | Key | Meaning |
 | --- | --- |
-| `choices` | Catalog rows `{value_id, value_display}`. Store `value_id`. `catalog_loaded: false` means the catalog was not read |
+| `choices` | Catalog rows `{value_id, value_code, value_display}`. Store the field's `value_key` (`value_id`, `value_code`, or `value_display`). `catalog_loaded: false` means the catalog was not read |
 | `options` | Static `{label, value}` pairs (sex, yes / no) |
 | `rules` | `show` and `require` actions, each with `condition {field, operator, value}`; operators `empty`, `notEmpty`, `equals`, `notEquals` on another field of the same row |
 | `pattern`, `pattern_message`, `placeholder`, `min_date` | Input checks and hints |

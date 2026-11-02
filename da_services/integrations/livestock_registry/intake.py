@@ -37,6 +37,43 @@ _GEO_WIDGETS = {"geo-hierarchy", "oan-geo-point"}
 _GEO_CODE = re.compile(r"^ET\d{2}(?:\d{2}){0,3}$")
 _GEO_LEVELS = (("region", "l1"), ("zone", "l2"), ("woreda", "l3"), ("kebele", "l4"))
 
+# Submit Livestock Report section ids (DA-registry-frontend livestockReport.ts)
+# and the profile's Livestock Details sections. The value is the staff
+# section mnemonic. Holding, herd structure, feed, water and sales are not
+# sections of the Livestock intake form, so they are not in this map.
+_SCREEN_SECTIONS = {
+	"identity": "ls_farmer_lookup",
+	"address": "ls_livestock_location",
+	"location": "ls_livestock_location",
+	"survey-personnel": "ls_survey_personnel",
+	"herd": "ls_animal_details",
+	"livestock-details": "ls_animal_details",
+	"ear-tag-replacement": "ls_retagging_details",
+	"disease": "ls_health_event_details",
+	"health-event": "ls_health_event_details",
+	"vaccination": "ls_vaccination_details",
+	"vital-event": "ls_vital_event_details",
+	"breeding": "ls_breeding_details",
+	"breeding-details": "ls_breeding_details",
+}
+_SCREENS_BY_MNEMONIC: dict[str, list[str]] = {}
+for _screen, _mnemonic in _SCREEN_SECTIONS.items():
+	_SCREENS_BY_MNEMONIC.setdefault(_mnemonic, []).append(_screen)
+
+# Frontend Livestock Details tab key for a staff section mnemonic.
+# A mnemonic that is not here stays on the tab the rendered form gives it.
+_SCREEN_TAB_OF_MNEMONIC = {
+	"ls_farmer_lookup": ("farmer", "Farmer"),
+	"ls_survey_personnel": ("farmer", "Farmer"),
+	"ls_livestock_location": ("farmer", "Farmer"),
+	"ls_animal_details": ("livestock", "Livestock"),
+	"ls_retagging_details": ("livestock", "Livestock"),
+	"ls_health_event_details": ("health", "Health & Vaccination"),
+	"ls_vaccination_details": ("health", "Health & Vaccination"),
+	"ls_vital_event_details": ("breeding", "Breeding & Vital Events"),
+	"ls_breeding_details": ("breeding", "Breeding & Vital Events"),
+}
+
 _DMY = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
 
 _TYPE_OK = {
@@ -81,6 +118,8 @@ def section_index(form: dict) -> list[dict]:
 			found.append(
 				{
 					"section_id": section_id,
+					"tab_id": str(tab.get("tab_id") or ""),
+					"tab_label": tab.get("tab_label") or tab.get("tab_description"),
 					"section_register_id": str(section.get("section_register_id") or ""),
 					"section_mnemonic": section.get("section_mnemonic"),
 					"title": section.get("section_description"),
@@ -161,8 +200,13 @@ def describe_form(
 	"""
 	catalogs = catalogs or {}
 	sections = []
+	form_tabs: list[dict] = []
+	screen_tabs: list[dict] = []
+	form_tab_at: dict[str, dict] = {}
+	screen_tab_at: dict[str, dict] = {}
 	for section in section_index(form):
 		types = _field_types(fields_by_register.get(section["section_register_id"]))
+		screen_sections = _SCREENS_BY_MNEMONIC.get(str(section.get("section_mnemonic") or ""), [])
 		described = {
 			"section_id": section["section_id"],
 			"section_register_id": section["section_register_id"],
@@ -172,6 +216,9 @@ def describe_form(
 			"required_for_submit": section["required_for_submit"],
 			"fields": [_describe_widget(widget, types, catalogs) for widget in section["ordered"]],
 		}
+		if screen_sections:
+			described["screen_section"] = screen_sections[0]
+			described["screen_sections"] = screen_sections
 		table = section["table"]
 		if table:
 			described["table"] = {
@@ -183,12 +230,40 @@ def describe_form(
 				"dialog_title_edit": table.get("widget-data-dialog-title-edit"),
 			}
 		sections.append(described)
+		_append_tab(
+			form_tabs,
+			form_tab_at,
+			section.get("tab_id") or "",
+			section.get("tab_label"),
+			described,
+		)
+		screen_key, screen_label = _screen_tab(section)
+		_append_tab(screen_tabs, screen_tab_at, screen_key, screen_label, described)
 	return {
 		"form_id": form.get("form_id"),
 		"register_id": form.get("register_id"),
 		"form_mnemonic": form.get("form_mnemonic"),
+		"tabs": form_tabs,
+		"screen_tabs": screen_tabs,
 		"sections": sections,
 	}
+
+
+def _screen_tab(section: dict) -> tuple[str, str | None]:
+	"""Frontend tab for one section. An unmapped mnemonic keeps the form tab."""
+	mapped = _SCREEN_TAB_OF_MNEMONIC.get(str(section.get("section_mnemonic") or ""))
+	if mapped:
+		return mapped
+	return str(section.get("tab_id") or ""), section.get("tab_label")
+
+
+def _append_tab(tabs: list[dict], index: dict[str, dict], key: str, label, section: dict) -> None:
+	tab = index.get(key)
+	if tab is None:
+		tab = {"key": key, "label": label, "sections": []}
+		index[key] = tab
+		tabs.append(tab)
+	tab["sections"].append(section)
 
 
 def _field_types(fields) -> dict[str, str | None]:
@@ -238,6 +313,7 @@ def _describe_widget(widget: dict, types: dict, catalogs: dict[str, list]) -> di
 		key = str(attribute_id)
 		described["choices"] = _catalog_choices(catalogs[key]) if key in catalogs else None
 		described["catalog_loaded"] = key in catalogs
+		described["value_key"] = source.get("valueKey") or "value_id"
 	return described
 
 
@@ -315,26 +391,37 @@ def submit_with_metadata(
 
 
 def resolve_section(sections: list[dict], request: dict) -> dict:
-	"""Find the one form section named by ``section_id``, ``section_mnemonic`` or ``section_register_id``.
+	"""Find the one form section named by the caller.
 
-	Three main sections share the Livestock register, so a register id alone
-	is accepted only when it names one section.
+	``section_id`` is the intake section, or a screen id such as ``vaccination``
+	(mapped to the staff mnemonic). ``section_register_id`` alone is accepted
+	only when it names one section: several sections share the Livestock register.
 	"""
 	section_id = str(request.get("section_id") or "").strip()
-	mnemonic = str(request.get("section_mnemonic") or "").strip()
+	mnemonic = str(request.get("section_mnemonic") or "").strip() or _SCREEN_SECTIONS.get(section_id, "")
 	register_id = str(request.get("section_register_id") or "").strip()
-	if section_id:
-		matches = [section for section in sections if section["section_id"] == section_id]
-	elif mnemonic:
-		matches = [section for section in sections if str(section.get("section_mnemonic") or "") == mnemonic]
-	elif register_id:
-		matches = [section for section in sections if section["section_register_id"] == register_id]
+	by_id = [section for section in sections if section_id and section["section_id"] == section_id]
+	by_mnemonic = [
+		section for section in sections if mnemonic and str(section.get("section_mnemonic") or "") == mnemonic
+	]
+	by_register = [
+		section for section in sections if register_id and section["section_register_id"] == register_id
+	]
+	if section_id and by_id:
+		matches = by_id
+	elif section_id in _SCREEN_SECTIONS or (mnemonic and not section_id):
+		matches = by_mnemonic
+	elif register_id and not section_id:
+		matches = by_register
+	elif mnemonic and not section_id:
+		matches = by_mnemonic
+	elif section_id or mnemonic or register_id:
+		matches = by_id or by_mnemonic or by_register
 	else:
 		raise IntakeContractError("section_id, section_mnemonic, or section_register_id is required")
+	named = section_id or mnemonic or register_id
 	if len(matches) != 1:
-		raise IntakeContractError(
-			f"Livestock section {section_id or mnemonic or register_id} is missing or ambiguous"
-		)
+		raise IntakeContractError(f"Livestock section {named} is missing or ambiguous")
 	section = matches[0]
 	if register_id and register_id != section["section_register_id"]:
 		raise IntakeContractError("section_register_id does not match the intake form")
@@ -580,14 +667,18 @@ def _option_values(options) -> list | None:
 
 
 def _catalog_choices(rows) -> list[dict]:
-	"""Live catalog rows. ``value_id`` is the stored value."""
+	"""Live catalog rows. The widget's ``value_key`` says which column is stored."""
 	if not isinstance(rows, list):
 		return []
-	return [
-		{"value_id": row.get("value_id"), "value_display": row.get("value_display")}
-		for row in rows
-		if isinstance(row, dict) and row.get("value_id")
-	]
+	choices = []
+	for row in rows:
+		if not isinstance(row, dict) or not row.get("value_id"):
+			continue
+		choice = {"value_id": row.get("value_id"), "value_display": row.get("value_display")}
+		if row.get("value_code"):
+			choice["value_code"] = row.get("value_code")
+		choices.append(choice)
+	return choices
 
 
 def _check_type(name: str, data_type, value) -> None:
@@ -634,8 +725,17 @@ def _same(left, right) -> bool:
 	return isinstance(left, str) and isinstance(right, str) and left.casefold() == right.casefold()
 
 
+def _stored_catalog_value(row: dict, value_key: str):
+	"""The column this widget stores. Species stores ``value_id``; health stores ``value_code``."""
+	if value_key == "value_code" and row.get("value_code"):
+		return row.get("value_code")
+	if value_key == "value_display" and row.get("value_display"):
+		return row.get("value_display")
+	return row.get("value_id")
+
+
 def _canonicalize_choice(name: str, widget: dict, value, catalogs: dict[str, list]):
-	"""Keep a staff code, or the code whose label is the text the screen sent."""
+	"""Keep the widget's stored code, or the code whose label is the text the screen sent."""
 	source = widget.get("widget-data-source") or {}
 	options = source.get("options")
 	if isinstance(options, list) and options:
@@ -650,11 +750,12 @@ def _canonicalize_choice(name: str, widget: dict, value, catalogs: dict[str, lis
 	catalog = catalogs.get(attribute_id) if attribute_id else None
 	if not catalog:
 		return value
+	value_key = str(source.get("valueKey") or "value_id")
 	for row in catalog:
 		if not isinstance(row, dict):
 			continue
 		if value in {row.get("value_id"), row.get("value_code")} or _same(value, row.get("value_display")):
-			return row.get("value_id")
+			return _stored_catalog_value(row, value_key)
 	raise IntakeContractError(f"{name} is not an allowed value")
 
 

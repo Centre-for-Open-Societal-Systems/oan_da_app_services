@@ -85,6 +85,7 @@ class HTTPLivestockRegistryClient(LivestockRegistryClient):
 		self._tokens = tokens
 		self.master_data_url = master_data_url.rstrip("/") if master_data_url else None
 		self._register_id: str | None = (register_id or "").strip() or None
+		self._registers: list[dict] | None = None
 		self._form: dict | None = None
 		self._fields: dict[str, list[dict]] = {}
 		self._catalog_rows: dict[str, list] | None = None
@@ -202,14 +203,21 @@ class HTTPLivestockRegistryClient(LivestockRegistryClient):
 
 	# ------------------------------------------------------------------ discovery
 
+	def _all_registers(self) -> list[dict]:
+		"""Every register on the livestock staff host. One call per client."""
+		if self._registers is not None:
+			return self._registers
+		payload = self._post("/register-metadata/get_all_registers", {}, action="discover livestock register")
+		if not isinstance(payload, list):
+			raise LivestockRegistryClientError("Livestock registers were not a list")
+		self._registers = [row for row in payload if isinstance(row, dict) and row.get("register_id")]
+		return self._registers
+
 	def _discover_register_id(self) -> str:
 		if self._register_id:
 			return self._register_id
-		payload = self._post("/register-metadata/get_all_registers", {}, action="discover livestock register")
 		matches = [
-			row
-			for row in (payload or [])
-			if isinstance(row, dict) and row.get("register_mnemonic") == self.register_mnemonic
+			row for row in self._all_registers() if row.get("register_mnemonic") == self.register_mnemonic
 		]
 		if len(matches) != 1 or not matches[0].get("register_id"):
 			raise LivestockRegistryClientError("Livestock register is missing or ambiguous")
@@ -424,33 +432,84 @@ class HTTPLivestockRegistryClient(LivestockRegistryClient):
 		return submission_to_livestock(payload)
 
 	def list_for_farmer(self, farmer_id: str) -> list[dict]:
-		"""Drafts and pending submissions (named with the Farmer-ID) and approved register rows.
+		"""Drafts, then every full section record of this farmer's Livestock rows.
 
-		Both searches use the Farmer-ID as search text; rows for another farmer
-		are dropped.
+		Search finds the Livestock holdings and the drafts. Each draft is read
+		back with its sections. ``get_section_records`` reads every section of
+		the rendered form for a holding, including the holding itself. A search
+		hit only carries ``display_fields``; the section read is the record the
+		registry screen shows.
 		"""
 		farmer_id = str(farmer_id or "").strip()
 		if not farmer_id:
 			raise LivestockRegistryClientError("farmer_id is required")
-		register_id = self._discover_register_id()
+		main_id = self._discover_register_id()
 		found: list[dict] = []
 		seen: set[str] = set()
-		for path, action, kind in (
-			(
-				"/intake-form-data/search_in_intake_form_submissions",
-				"search livestock submissions",
-				"submission",
-			),
-			("/register-data/search_in_a_register", "search livestock register", "record"),
+		subject_ids: set[str] = set()
+
+		def take(row: dict, *, kind: str, register_id: str) -> None:
+			key = str(row.get("submission_id") or row.get("internal_record_id") or "")
+			if key and key in seen:
+				return
+			if key:
+				seen.add(key)
+			found.append({"kind": kind, "register_id": register_id, **row})
+
+		for body in self._pages(
+			"/intake-form-data/search_in_intake_form_submissions",
+			{"register_id": main_id},
+			action="search livestock submissions",
+			search_text=farmer_id,
 		):
-			for body in self._pages(path, {"register_id": register_id}, action=action, search_text=farmer_id):
-				for row in body if isinstance(body, list) else []:
-					if not isinstance(row, dict) or not _row_matches_farmer(row, farmer_id):
-						continue
-					key = str(row.get("submission_id") or row.get("internal_record_id") or "")
-					if key and key in seen:
-						continue
-					if key:
-						seen.add(key)
-					found.append({"kind": kind, **row})
+			for row in body if isinstance(body, list) else []:
+				if not isinstance(row, dict) or not _row_matches_farmer(row, farmer_id):
+					continue
+				item = dict(row)
+				submission_id = str(row.get("submission_id") or "")
+				if submission_id:
+					submission = self.get_submission(submission_id)
+					if submission is not None:
+						item["sections"] = [section.model_dump() for section in submission.sections]
+				take(item, kind="submission", register_id=main_id)
+
+		for body in self._pages(
+			"/register-data/search_in_a_register",
+			{"register_id": main_id},
+			action="search livestock register",
+			search_text=farmer_id,
+		):
+			for row in body if isinstance(body, list) else []:
+				if (
+					isinstance(row, dict)
+					and row.get("internal_record_id")
+					and _row_matches_farmer(row, farmer_id)
+				):
+					subject_ids.add(str(row["internal_record_id"]))
+
+		section_registers: list[str] = []
+		seen_registers: set[str] = set()
+		for section in section_index(self._rendered_form()):
+			register_id = str(section.get("section_register_id") or "")
+			if register_id and register_id not in seen_registers:
+				seen_registers.add(register_id)
+				section_registers.append(register_id)
+		if main_id not in seen_registers:
+			section_registers.insert(0, main_id)
+
+		for subject_id in sorted(subject_ids):
+			for register_id in section_registers:
+				payload = self._post(
+					"/register-data/get_section_records",
+					{
+						"subject_register_id": main_id,
+						"subject_record_id": subject_id,
+						"section_register_id": register_id,
+					},
+					action=f"read livestock section records {register_id}",
+				)
+				rows = payload if isinstance(payload, list) else []
+				for row in rows:
+					if isinstance(row, dict):
+						take(row, kind="record", register_id=register_id)
 		return found

@@ -11,6 +11,7 @@ from da_services.integrations.da_registry.mapper import PROFILE_FIELDS
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import profile as svc
+from da_services.tests.fixtures import ensure_doctype_schema
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "pcr-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -48,6 +49,7 @@ def _grant(user, role, **kw):
 class TestProfileChangeRequest(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		ensure_doctype_schema("DA Profile Change Request")
 		for dt in DOCTYPES:
 			frappe.db.delete(dt)
 		MockDARegistryClient.reset()

@@ -184,6 +184,15 @@
    },
    "event": [
     {
+     "listen": "prerequest",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "if (!pm.variables.get(\"refresh_token\")) pm.execution.skipRequest();"
+      ]
+     }
+    },
+    {
      "listen": "test",
      "script": {
       "type": "text/javascript",
@@ -411,10 +420,10 @@
       "livestock"
      ]
     },
-    "description": "New draft: farmer lookup (farmer_id is filled from the URL), survey personnel, location, one animal. Stores submission_id and subject_record_id.",
+    "description": "New draft: farmer lookup (farmer_id is filled from the URL), survey personnel, location, one animal. Species and breed store value_id (CATTLE, BREED_LOCAL). Sex, health and vaccination store value_code (SEX_FEMALE, HEALTHY, UP_TO_DATE). Stores submission_id and subject_record_id.",
     "body": {
      "mode": "raw",
-     "raw": "{\n  \"submission_id\": null,\n  \"sections\": [\n    {\n      \"section_id\": \"livestock_farmer_lookup\",\n      \"records\": [\n        {\n          \"fayda_id\": \"{{fayda_id}}\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_survey_personnel_section_02\",\n      \"records\": [\n        {\n          \"surveyor_name\": \"Abebe Kebede\",\n          \"surveyor_mobile_number\": \"0911223344\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_livestock_location_section_03\",\n      \"records\": [\n        {\n          \"geo_lowest_level_value_id\": \"{{kebele_level_value_id}}\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_animal_details_section_01\",\n      \"records\": [\n        {\n          \"ear_tag_id\": \"{{ear_tag_id}}\",\n          \"species\": \"CATTLE\",\n          \"breed\": \"BREED_LOCAL\",\n          \"gender\": \"FEMALE\",\n          \"date_of_birth\": \"2021-05-14\",\n          \"weight\": 312.5,\n          \"health_status\": \"HEALTHY\",\n          \"vaccination_status\": \"UP_TO_DATE\",\n          \"registration_date\": \"2026-11-02\"\n        }\n      ]\n    }\n  ]\n}",
+     "raw": "{\n  \"submission_id\": null,\n  \"sections\": [\n    {\n      \"section_id\": \"livestock_farmer_lookup\",\n      \"records\": [\n        {\n          \"fayda_id\": \"{{fayda_id}}\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_survey_personnel_section_02\",\n      \"records\": [\n        {\n          \"surveyor_name\": \"Abebe Kebede\",\n          \"surveyor_mobile_number\": \"0911223344\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_livestock_location_section_03\",\n      \"records\": [\n        {\n          \"geo_lowest_level_value_id\": \"{{kebele_level_value_id}}\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_animal_details_section_01\",\n      \"records\": [\n        {\n          \"ear_tag_id\": \"{{ear_tag_id}}\",\n          \"species\": \"CATTLE\",\n          \"breed\": \"BREED_LOCAL\",\n          \"gender\": \"SEX_FEMALE\",\n          \"date_of_birth\": \"2021-05-14\",\n          \"weight\": 312.5,\n          \"health_status\": \"HEALTHY\",\n          \"vaccination_status\": \"UP_TO_DATE\",\n          \"registration_date\": \"2026-11-02\"\n        }\n      ]\n    }\n  ]\n}",
      "options": {
       "raw": {
        "language": "json"
@@ -470,7 +479,7 @@
       "livestock"
      ]
     },
-    "description": "Later sections go onto the same draft with submission_id. ear_tag_id names the animal.",
+    "description": "Later sections go onto the same draft with submission_id. Skipped when the save did not return a submission_id. ear_tag_id names the animal. vaccine_type stores value_id.",
     "body": {
      "mode": "raw",
      "raw": "{\n  \"submission_id\": \"{{submission_id}}\",\n  \"subject_record_id\": \"{{subject_record_id}}\",\n  \"sections\": [\n    {\n      \"section_id\": \"livestock_vaccination_details_section_01\",\n      \"records\": [\n        {\n          \"ear_tag_id\": \"{{ear_tag_id}}\",\n          \"species\": \"CATTLE\",\n          \"vaccine_type\": \"VACCINE_TYPE_ANTHRAX_CATTLE\",\n          \"vaccination_date\": \"2026-03-15\",\n          \"next_due_date\": \"2027-03-15\"\n        }\n      ]\n    }\n  ]\n}",
@@ -482,6 +491,15 @@
     }
    },
    "event": [
+    {
+     "listen": "prerequest",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "if (!pm.variables.get(\"submission_id\")) pm.execution.skipRequest();"
+      ]
+     }
+    },
     {
      "listen": "test",
      "script": {
@@ -524,15 +542,31 @@
       }
      ]
     },
-    "description": "One submission with every section."
+    "description": "One submission with every section. Skipped when submission_id is empty, because an empty query returns the full list."
    },
    "event": [
+    {
+     "listen": "prerequest",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "if (!pm.variables.get(\"submission_id\")) pm.execution.skipRequest();"
+      ]
+     }
+    },
     {
      "listen": "test",
      "script": {
       "type": "text/javascript",
       "exec": [
-       "pm.test(\"Read saved submission returns 200\", function () { pm.response.to.have.status(200); });"
+       "const body = pm.response.json() || {};",
+       "const data = body.data || {};",
+       "pm.test(\"Read saved submission returns that submission\", function () {",
+       "    pm.response.to.have.status(200);",
+       "    pm.expect(data.submission_id).to.eql(pm.variables.get(\"submission_id\"));",
+       "    pm.expect(data.sections).to.be.an(\"array\").that.is.not.empty;",
+       "    pm.expect(data.livestock).to.equal(undefined);",
+       "});"
       ]
      }
     }
@@ -564,9 +598,18 @@
       "finalize"
      ]
     },
-    "description": "Send the draft for approval: FINAL and PENDING."
+    "description": "Send the draft for approval: FINAL and PENDING. Skipped when submission_id is empty so the path is not //finalize."
    },
    "event": [
+    {
+     "listen": "prerequest",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "if (!pm.variables.get(\"submission_id\")) pm.execution.skipRequest();"
+      ]
+     }
+    },
     {
      "listen": "test",
      "script": {
@@ -602,7 +645,7 @@
       "livestock"
      ]
     },
-    "description": "kind submission (drafts, pending) and kind record (approved, LS-…)."
+    "description": "Full section rows for this farmer: submissions include sections, and records include the register columns (ear tag, species, holding, health, vaccination, vital, breeding). Not the search display_fields list."
    },
    "event": [
     {
@@ -610,7 +653,22 @@
      "script": {
       "type": "text/javascript",
       "exec": [
-       "pm.test(\"List farmer livestock returns 200\", function () { pm.response.to.have.status(200); });"
+       "const rows = (((pm.response.json() || {}).data || {}).livestock) || [];",
+       "pm.test(\"List farmer livestock returns full section rows\", function () {",
+       "    pm.response.to.have.status(200);",
+       "    pm.expect(rows.length).to.be.above(0);",
+       "    const animal = rows.find(row => row.kind === \"record\" && row.ear_tag_id && row.breed);",
+       "    pm.expect(animal, \"an animal row with ear_tag_id\").to.be.an(\"object\");",
+       "    pm.expect(animal.species).to.be.a(\"string\").that.is.not.empty;",
+       "    pm.expect(animal.breed).to.be.a(\"string\").that.is.not.empty;",
+       "    pm.expect(animal.gender).to.be.a(\"string\").that.is.not.empty;",
+       "    pm.expect(animal.health_status).to.be.a(\"string\").that.is.not.empty;",
+       "    const holding = rows.find(row => row.kind === \"record\" && row.farmer_id);",
+       "    pm.expect(holding, \"a holding row\").to.be.an(\"object\");",
+       "    pm.expect(holding.farmer_name).to.be.a(\"string\").that.is.not.empty;",
+       "    const submission = rows.find(row => row.kind === \"submission\");",
+       "    if (submission) pm.expect(submission.sections).to.be.an(\"array\");",
+       "});"
       ]
      }
     }
@@ -650,7 +708,7 @@
        "value": "application/json"
       }
      ],
-     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-512145929324\",\n    \"livestock\": [\n      {\n        \"kind\": \"submission\",\n        \"submission_id\": \"0348c99d-2f76-46c9-9be6-34aa0dbe9347\",\n        \"record_name\": \"FR-512145929324\",\n        \"draft_status\": \"FINAL\",\n        \"approval_status\": \"PENDING\"\n      },\n      {\n        \"kind\": \"record\",\n        \"internal_record_id\": \"0d8f7083-59a5-4aca-b59b-f5199a9547cd\",\n        \"functional_record_id\": \"LS-467029269057\",\n        \"record_name\": \"Bekele Mulugeta Mekonnen\",\n        \"display_fields\": [\n          {\n            \"field_name\": \"farmer_id\",\n            \"value\": \"FR-512145929324\",\n            \"order\": 1\n          },\n          {\n            \"field_name\": \"total_animals\",\n            \"value\": \"1\",\n            \"order\": 6\n          }\n        ]\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-512145929324\",\n    \"livestock\": [\n      {\n        \"kind\": \"submission\",\n        \"submission_id\": \"0348c99d-2f76-46c9-9be6-34aa0dbe9347\",\n        \"record_name\": \"FR-512145929324\",\n        \"draft_status\": \"FINAL\",\n        \"approval_status\": \"PENDING\",\n        \"sections\": [\n          {\n            \"section_id\": \"livestock_animal_details_section_01\",\n            \"records\": [\n              {\"ear_tag_id\": \"ET7936016202\", \"species\": \"CATTLE\"}\n            ]\n          }\n        ]\n      },\n      {\n        \"kind\": \"record\",\n        \"register_id\": \"997676d3-7008-59f9-b23e-613ad79bbb08\",\n        \"internal_record_id\": \"0d8f7083-59a5-4aca-b59b-f5199a9547cd\",\n        \"functional_record_id\": \"LS-467029269057\",\n        \"farmer_id\": \"FR-512145929324\",\n        \"farmer_name\": \"Bekele Mulugeta Mekonnen\",\n        \"region\": \"Oromia\",\n        \"kebele\": \"Bengua 01\"\n      },\n      {\n        \"kind\": \"record\",\n        \"register_id\": \"041a9f79-2142-548a-a15b-a4c76fc9f6f7\",\n        \"ear_tag_id\": \"ET7936016202\",\n        \"species\": \"CATTLE\",\n        \"breed\": \"BREED_LOCAL\",\n        \"gender\": \"SEX_FEMALE\",\n        \"health_status\": \"HEALTHY\",\n        \"vaccination_status\": \"NONE\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
     }
    ]
   }

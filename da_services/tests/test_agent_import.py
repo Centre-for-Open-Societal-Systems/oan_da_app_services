@@ -15,6 +15,7 @@ from da_services.integrations.da_registry.client import DARegistryUnavailable
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import agent_import as svc
 from da_services.services import constants as C
+from da_services.tests.fixtures import ensure_doctype_schema
 
 DA_USER = "import-da@da.local"
 
@@ -63,6 +64,7 @@ def _multipart(content: bytes, filename: str):
 class TestAgentImport(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		ensure_doctype_schema("DA Integration Event")
 		frappe.db.delete("DA Integration Event", {"event_type": svc.EVENT_TYPE})
 		frappe.cache.delete_keys("rl:da:da_services.api.v1.agent_import")  # per-user rate limits
 		MockDARegistryClient.reset()
