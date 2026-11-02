@@ -632,6 +632,14 @@ class TestHttpIntake(IntegrationTestCase):
 		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
 
 		self.client = HTTPFarmerRegistryClient()
+		# Staff calls forward the caller's SSO headers; tests have no live request.
+		request_headers = {"Authorization": "Bearer sso-user-token", "X-CSRF-Token": "sso-csrf"}
+		header_patch = patch(
+			"da_services.integrations.farmer_registry.http.frappe.get_request_header",
+			side_effect=lambda key, default=None: request_headers.get(key, default),
+		)
+		header_patch.start()
+		self.addCleanup(header_patch.stop)
 
 	def tearDown(self):
 		for k, v in self._saved.items():
@@ -655,7 +663,9 @@ class TestHttpIntake(IntegrationTestCase):
 		url, kwargs = post.call_args_list[0].args[0], post.call_args_list[0].kwargs
 		self.assertEqual(url, "https://registry.test/intake-form-data/save_intake_form_submission")
 		self.assertEqual(kwargs["json"]["request_body"]["request_payload"]["section_id"], "s1")
-		self.assertEqual(kwargs["headers"]["X-CSRF-Token"], kwargs["cookies"]["X-CSRF-Token"])
+		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sso-user-token")
+		self.assertEqual(kwargs["headers"]["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(kwargs["cookies"], {"X-CSRF-Token": "sso-csrf"})
 
 		final = self.client.finalize_intake_submission("sub-1")
 		self.assertEqual((final["draft_status"], final["approval_status"]), ("FINAL", "PENDING"))
@@ -676,6 +686,7 @@ class TestHttpIntake(IntegrationTestCase):
 		kwargs = post.call_args.kwargs
 		self.assertEqual(kwargs["files"]["documents"], ("id.pdf", b"%PDF", "application/pdf"))
 		self.assertNotIn("Content-Type", kwargs["headers"])
+		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sso-user-token")
 		self.assertNotIn("json", kwargs)
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post")
