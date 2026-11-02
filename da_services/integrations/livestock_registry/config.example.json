@@ -1,0 +1,13 @@
+{
+  "livestock_registry_backend": "mock",
+  "livestock_registry_staff_url": "https://staff-livestock.development.oanstaging.com",
+  "livestock_registry_master_data_url": "https://master-data.development.oanstaging.com",
+  "livestock_registry_timeout": 30,
+  "livestock_registry_register_mnemonic": "Livestock",
+  "_comment_register_id": "Optional Livestock register UUID. When set, form and list reads skip get_all_registers.",
+  "livestock_registry_register_id": "",
+  "livestock_registry_form_name_contains": "Livestock Intake",
+  "livestock_registry_sender_app": "OAN_REGISTRY_API_TEST",
+  "_comment_auth": "Staff calls forward the caller's SSO Authorization and X-CSRF-Token headers. livestock_registry_keycloak (or farmer_registry_keycloak) is used only by livestock_auth_headers, for callers without a request.",
+  "livestock_registry_keycloak": {}
+}

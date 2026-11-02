@@ -1,0 +1,658 @@
+{
+ "info": {
+  "_postman_id": "oan-da-livestock",
+  "name": "OAN DA Livestock",
+  "description": "DA Services Livestock routes. Every request sends Authorization: Bearer {{access_token}} and, when csrf_token is set, X-CSRF-Token: {{csrf_token}}. DA Services forwards both to the Livestock staff host, so put the SSO (Keycloak) staff token in access_token and its CSRF value in csrf_token. Save stores submission_id and subject_record_id. Example responses are shortened reads from the development hosts on 2026-11-02. Guide: docs/livestock-integration.md.",
+  "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+ },
+ "auth": {
+  "type": "bearer",
+  "bearer": [
+   {
+    "key": "token",
+    "value": "{{access_token}}",
+    "type": "string"
+   }
+  ]
+ },
+ "event": [
+  {
+   "listen": "prerequest",
+   "script": {
+    "type": "text/javascript",
+    "exec": [
+     "const csrf = pm.variables.get(\"csrf_token\");",
+     "if (csrf) pm.request.headers.upsert({ key: \"X-CSRF-Token\", value: csrf });"
+    ]
+   }
+  }
+ ],
+ "variable": [
+  {
+   "key": "base_url",
+   "value": "http://127.0.0.1:8200"
+  },
+  {
+   "key": "usr",
+   "value": ""
+  },
+  {
+   "key": "pwd",
+   "value": ""
+  },
+  {
+   "key": "access_token",
+   "value": ""
+  },
+  {
+   "key": "refresh_token",
+   "value": ""
+  },
+  {
+   "key": "csrf_token",
+   "value": ""
+  },
+  {
+   "key": "farmer_id",
+   "value": "FR-512145929324"
+  },
+  {
+   "key": "fayda_id",
+   "value": "824459234875"
+  },
+  {
+   "key": "ear_tag_id",
+   "value": "ET2149721223"
+  },
+  {
+   "key": "region_level_value_id",
+   "value": ""
+  },
+  {
+   "key": "kebele_level_value_id",
+   "value": "ET01010101"
+  },
+  {
+   "key": "submission_id",
+   "value": ""
+  },
+  {
+   "key": "subject_record_id",
+   "value": ""
+  }
+ ],
+ "item": [
+  {
+   "name": "Login",
+   "request": {
+    "method": "POST",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     },
+     {
+      "key": "Content-Type",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/auth/login",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "auth",
+      "login"
+     ]
+    },
+    "description": "Local DA Services login. Stores access_token and refresh_token. Livestock calls also need the SSO token and csrf_token; see the collection description.",
+    "auth": {
+     "type": "noauth"
+    },
+    "body": {
+     "mode": "raw",
+     "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+     "options": {
+      "raw": {
+       "language": "json"
+      }
+     }
+    }
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+       "const data = (pm.response.json() || {}).data || {};",
+       "function save(key, value) {",
+       "    if (!value) return;",
+       "    pm.collectionVariables.set(key, value);",
+       "    if (pm.environment.name) pm.environment.set(key, value);",
+       "}",
+       "save(\"access_token\", data.access_token);",
+       "save(\"refresh_token\", data.refresh_token);"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Refresh token",
+   "request": {
+    "method": "POST",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     },
+     {
+      "key": "Content-Type",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/auth/refresh",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "auth",
+      "refresh"
+     ]
+    },
+    "description": "Keep the new refresh_token it returns.",
+    "auth": {
+     "type": "noauth"
+    },
+    "body": {
+     "mode": "raw",
+     "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+     "options": {
+      "raw": {
+       "language": "json"
+      }
+     }
+    }
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Refresh token returns 200\", function () { pm.response.to.have.status(200); });",
+       "const data = (pm.response.json() || {}).data || {};",
+       "function save(key, value) {",
+       "    if (!value) return;",
+       "    pm.collectionVariables.set(key, value);",
+       "    if (pm.environment.name) pm.environment.set(key, value);",
+       "}",
+       "save(\"access_token\", data.access_token);",
+       "save(\"refresh_token\", data.refresh_token);"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Read intake form",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/livestock/intake-form",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "livestock",
+      "intake-form"
+     ]
+    },
+    "description": "The live form to render: 8 sections, fields in screen order with widget, label, data_type, required, readonly, choices (store value_id) or options, rules (show / require), autofill. List sections carry table."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Read intake form returns 200\", function () { pm.response.to.have.status(200); });"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Read regions",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/livestock/geo-level-values?level_id=l1",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "livestock",
+      "geo-level-values"
+     ],
+     "query": [
+      {
+       "key": "level_id",
+       "value": "l1",
+       "description": "l1 region, l2 zone, l3 woreda, l4 kebele"
+      }
+     ]
+    },
+    "description": "Level l1. Stores the first region's level_value_id. Rows also carry level_value_mnemonic (shortened here)."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Read regions returns 200\", function () { pm.response.to.have.status(200); });",
+       "const values = (((pm.response.json() || {}).data || {}).values) || [];",
+       "function save(key, value) {",
+       "    if (!value) return;",
+       "    pm.collectionVariables.set(key, value);",
+       "    if (pm.environment.name) pm.environment.set(key, value);",
+       "}",
+       "if (values.length) save(\"region_level_value_id\", values[0].level_value_id);"
+      ]
+     }
+    }
+   ],
+   "response": [
+    {
+     "name": "Read regions success",
+     "originalRequest": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Accept",
+        "value": "application/json"
+       }
+      ],
+      "url": {
+       "raw": "{{base_url}}/api/v1/da-services/livestock/geo-level-values?level_id=l1",
+       "host": [
+        "{{base_url}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "da-services",
+        "livestock",
+        "geo-level-values"
+       ],
+       "query": [
+        {
+         "key": "level_id",
+         "value": "l1",
+         "description": "l1 region, l2 zone, l3 woreda, l4 kebele"
+        }
+       ]
+      }
+     },
+     "status": "OK",
+     "code": 200,
+     "_postman_previewlanguage": "json",
+     "header": [
+      {
+       "key": "Content-Type",
+       "value": "application/json"
+      }
+     ],
+     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"level_id\": \"l1\",\n    \"parent_level_value_id\": null,\n    \"values\": [\n      {\n        \"level_value_id\": \"ET01\"\n      },\n      {\n        \"level_value_id\": \"ET02\"\n      },\n      {\n        \"level_value_id\": \"ET03\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+    }
+   ]
+  },
+  {
+   "name": "Read zones of the region",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/livestock/geo-level-values?level_id=l2&parent_level_value_id={{region_level_value_id}}",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "livestock",
+      "geo-level-values"
+     ],
+     "query": [
+      {
+       "key": "level_id",
+       "value": "l2",
+       "description": ""
+      },
+      {
+       "key": "parent_level_value_id",
+       "value": "{{region_level_value_id}}",
+       "description": ""
+      }
+     ]
+    },
+    "description": "Same call one level down. Repeat with l3 and l4; the kebele's level_value_id is geo_lowest_level_value_id."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Read zones of the region returns 200\", function () { pm.response.to.have.status(200); });"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Save main sections and an animal",
+   "request": {
+    "method": "POST",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     },
+     {
+      "key": "Content-Type",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock"
+     ]
+    },
+    "description": "New draft: farmer lookup (farmer_id is filled from the URL), survey personnel, location, one animal. Stores submission_id and subject_record_id.",
+    "body": {
+     "mode": "raw",
+     "raw": "{\n  \"submission_id\": null,\n  \"sections\": [\n    {\n      \"section_id\": \"livestock_farmer_lookup\",\n      \"records\": [\n        {\n          \"fayda_id\": \"{{fayda_id}}\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_survey_personnel_section_02\",\n      \"records\": [\n        {\n          \"surveyor_name\": \"Abebe Kebede\",\n          \"surveyor_mobile_number\": \"0911223344\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_livestock_location_section_03\",\n      \"records\": [\n        {\n          \"geo_lowest_level_value_id\": \"{{kebele_level_value_id}}\"\n        }\n      ]\n    },\n    {\n      \"section_id\": \"livestock_animal_details_section_01\",\n      \"records\": [\n        {\n          \"ear_tag_id\": \"{{ear_tag_id}}\",\n          \"species\": \"CATTLE\",\n          \"breed\": \"BREED_LOCAL\",\n          \"gender\": \"FEMALE\",\n          \"date_of_birth\": \"2021-05-14\",\n          \"weight\": 312.5,\n          \"health_status\": \"HEALTHY\",\n          \"vaccination_status\": \"UP_TO_DATE\",\n          \"registration_date\": \"2026-11-02\"\n        }\n      ]\n    }\n  ]\n}",
+     "options": {
+      "raw": {
+       "language": "json"
+      }
+     }
+    }
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Save main sections and an animal returns 200\", function () { pm.response.to.have.status(200); });",
+       "const data = (pm.response.json() || {}).data || {};",
+       "function save(key, value) {",
+       "    if (!value) return;",
+       "    pm.collectionVariables.set(key, value);",
+       "    if (pm.environment.name) pm.environment.set(key, value);",
+       "}",
+       "save(\"submission_id\", data.submission_id);",
+       "save(\"subject_record_id\", data.subject_record_id);"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Add a vaccination to the draft",
+   "request": {
+    "method": "POST",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     },
+     {
+      "key": "Content-Type",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock"
+     ]
+    },
+    "description": "Later sections go onto the same draft with submission_id. ear_tag_id names the animal.",
+    "body": {
+     "mode": "raw",
+     "raw": "{\n  \"submission_id\": \"{{submission_id}}\",\n  \"subject_record_id\": \"{{subject_record_id}}\",\n  \"sections\": [\n    {\n      \"section_id\": \"livestock_vaccination_details_section_01\",\n      \"records\": [\n        {\n          \"ear_tag_id\": \"{{ear_tag_id}}\",\n          \"species\": \"CATTLE\",\n          \"vaccine_type\": \"VACCINE_TYPE_ANTHRAX_CATTLE\",\n          \"vaccination_date\": \"2026-03-15\",\n          \"next_due_date\": \"2027-03-15\"\n        }\n      ]\n    }\n  ]\n}",
+     "options": {
+      "raw": {
+       "language": "json"
+      }
+     }
+    }
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Add a vaccination to the draft returns 200\", function () { pm.response.to.have.status(200); });"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Read saved submission",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock?submission_id={{submission_id}}",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock"
+     ],
+     "query": [
+      {
+       "key": "submission_id",
+       "value": "{{submission_id}}",
+       "description": ""
+      }
+     ]
+    },
+    "description": "One submission with every section."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Read saved submission returns 200\", function () { pm.response.to.have.status(200); });"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "Finalize submission",
+   "request": {
+    "method": "POST",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock/{{submission_id}}/finalize",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock",
+      "{{submission_id}}",
+      "finalize"
+     ]
+    },
+    "description": "Send the draft for approval: FINAL and PENDING."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Finalize submission returns 200\", function () { pm.response.to.have.status(200); });"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "List farmer livestock",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock"
+     ]
+    },
+    "description": "kind submission (drafts, pending) and kind record (approved, LS-…)."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"List farmer livestock returns 200\", function () { pm.response.to.have.status(200); });"
+      ]
+     }
+    }
+   ],
+   "response": [
+    {
+     "name": "List farmer livestock success",
+     "originalRequest": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Accept",
+        "value": "application/json"
+       }
+      ],
+      "url": {
+       "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock",
+       "host": [
+        "{{base_url}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "da-services",
+        "farmers",
+        "{{farmer_id}}",
+        "livestock"
+       ]
+      }
+     },
+     "status": "OK",
+     "code": 200,
+     "_postman_previewlanguage": "json",
+     "header": [
+      {
+       "key": "Content-Type",
+       "value": "application/json"
+      }
+     ],
+     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-512145929324\",\n    \"livestock\": [\n      {\n        \"kind\": \"submission\",\n        \"submission_id\": \"0348c99d-2f76-46c9-9be6-34aa0dbe9347\",\n        \"record_name\": \"FR-512145929324\",\n        \"draft_status\": \"FINAL\",\n        \"approval_status\": \"PENDING\"\n      },\n      {\n        \"kind\": \"record\",\n        \"internal_record_id\": \"0d8f7083-59a5-4aca-b59b-f5199a9547cd\",\n        \"functional_record_id\": \"LS-467029269057\",\n        \"record_name\": \"Bekele Mulugeta Mekonnen\",\n        \"display_fields\": [\n          {\n            \"field_name\": \"farmer_id\",\n            \"value\": \"FR-512145929324\",\n            \"order\": 1\n          },\n          {\n            \"field_name\": \"total_animals\",\n            \"value\": \"1\",\n            \"order\": 6\n          }\n        ]\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+    }
+   ]
+  }
+ ]
+}
