@@ -26,20 +26,20 @@ Officer actions (resolve, reopen, close, reassign) are not exposed on the DA rou
 | DA route | Upstream |
 |---|---|
 | `POST /api/v1/da-services/grievances` | `POST /v1/grievances` |
-| `GET /api/v1/da-services/grievances/{ticket}` | `GET /v1/grievances/{ticket_number}`, then `GET /v1/grievances/{ticket_number}/timeline` on 404 |
+| `GET /api/v1/da-services/grievances/{ticket}` | `GET /v1/grievances/{ticket_number}/timeline` |
 | `GET /api/v1/da-services/grievances/{ticket}/timeline` | `GET /v1/grievances/{ticket_number}/timeline` |
 | `GET /api/v1/da-services/grievances` | `GET /v1/grievances` |
 | `GET /api/v1/da-services/grievances/summary` | `GET /v1/grievances/summary` |
-| `GET /api/v1/da-services/grievances/options` | `GET /v1/submitters/options` (no bearer token) |
+| `GET /api/v1/da-services/grievances/options` | `GET /v1/submitters/options` (no bearer), then `GET /v1/grievances/options` |
 | `POST /api/v1/da-services/grievances/sync/retry` | Retries a failed DA Integration Event. DA Services Admin only. |
 
-A successful submit returns `data.ticket_number` as both `ticket_id` and `ticket_number`. The timeline read is the case when the bare ticket GET is missing: summary, submitter, SLA, and timeline. Timeline rows map `created_on`, `entry_type`, `author_name`, and `body` to `timestamp`, `action`, `actor`, and `detail`.
+A successful submit returns `data.ticket_number` as both `ticket_id` and `ticket_number`. There is no `GET /v1/grievances/{ticket_number}`. The case is `GET /v1/grievances/{ticket_number}/timeline`: description, category, type, submitter, SLA, and timeline. Timeline rows map `created_on`, `entry_type`, `author_name`, and `body` to `timestamp`, `action`, `actor`, and `detail`. `sla_consumed_percent` is not on that SLA object.
 
-List requests send `page`, `page_size`, and `sort_order=desc`. Items are `data` rows with `status`, `category`, `location`, `created_at`, and the other list fields. Optional filters are `status`, `category`, `location`, `from_date`, `to_date`, and `search`. `complainant_id` is not sent: a Development Agent's list is limited by the agent token. Scoped callers who are not Development Agents still have `region` or `woreda` narrowed to their grant.
+List requests send `page`, `page_size`, and `sort_order=desc`. Rows are `data.grievances`. `creation` and `modified` become `created_at` and `updated_at`. A row has no `description`, so `subject` is `grievance_type_name` or `grievance_type`. `location` is the display string or hierarchy when the service sends one, otherwise `administrative_unit`, otherwise the `administrative_area` id. Optional filters are `status`, `category`, `location`, `from_date`, `to_date`, and `search`. `complainant_id` is not sent: a Development Agent's list is limited by the agent token. Scoped callers who are not Development Agents still have `region` or `woreda` narrowed to their grant.
 
-Options map `service_categories` and `grievance_types` into `categories`, and also return `statuses`.
+Options call public `GET /v1/submitters/options` for categories, types, submitter types, and channels, then `GET /v1/grievances/options` for queue `statuses`, `departments`, and `submission_channels`. Category and type rows are `{value, label, code}`. A type is listed under a category only when that row names `service_category`. The DA route forwards `service_category`, `category`, `department`, `administrative_area`, `search_country`, `country`, and `include_phone_extensions`.
 
-Summary returns the upstream `data` object unchanged. An HTTP error, or a `200` body whose `status` is `error`, is not returned as a summary.
+Summary returns the upstream `data` object unchanged: `cards` of `status`, `label`, `order`, `is_open`, `is_terminal`, and `count`. An HTTP error, or a `200` body whose `status` is `error`, is not returned as a summary. The mock uses the same cards. A fixture status that is not a card counts under In Progress.
 
 ### Submit body
 

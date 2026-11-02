@@ -25,6 +25,7 @@ from da_services.integrations.grievance.mapper import (
 	location_text,
 	normalize_summary,
 	ticket_from_duplicate,
+	to_options,
 	to_upstream_submission,
 )
 from da_services.integrations.grievance.mock import MockGrievanceClient
@@ -183,16 +184,29 @@ class TestUpstreamMapping(unittest.TestCase):
 		self.assertNotIn("complainant_id", body)
 		self.assertNotIn("priority", body)
 
+	def test_named_type_still_nests_under_its_category(self):
+		options = to_options(
+			{
+				"service_categories": [{"category_name": "Inputs"}],
+				"grievance_types": [{"type_name": "Fertilizer Shortage", "service_category": "Inputs"}],
+			}
+		)
+		self.assertEqual(options["categories"][0]["value"], "Inputs")
+		self.assertEqual(options["categories"][0]["label"], "Inputs")
+		self.assertEqual(options["categories"][0]["subcategories"], ["Fertilizer Shortage"])
+
 	def test_duplicate_message_names_the_original_ticket(self):
 		text = "This submission has already been filed as B-001-0012-0."
 		self.assertEqual(ticket_from_duplicate(text), "B-001-0012-0")
 
 	def test_mock_summary_counts_fixtures(self):
 		summary = MockGrievanceClient().get_summary()
-		self.assertEqual(summary["cards"][0], {"status": "All", "count": 3})
+		self.assertEqual(summary["cards"][0]["status"], "All")
+		self.assertEqual(summary["cards"][0]["count"], 3)
+		self.assertEqual(summary["cards"][0]["label"], "All")
 		statuses = {card["status"]: card["count"] for card in summary["cards"]}
-		self.assertEqual(statuses["Open"], 1)
-		self.assertEqual(statuses["In Progress"], 1)
+		self.assertNotIn("Open", statuses)
+		self.assertEqual(statuses["In Progress"], 2)
 		self.assertEqual(statuses["Resolved"], 1)
 
 	def test_mock_replay_returns_the_same_ticket(self):
@@ -218,22 +232,24 @@ class TestHttpClient(unittest.TestCase):
 				{
 					"status": "success",
 					"data": {
-						"items": [
+						"grievances": [
 							{
 								"ticket_number": ticket,
 								"status": "Submitted",
-								"description": "The fertilizer voucher never arrived.",
 								"service_category": "Inputs",
+								"grievance_type": "FERTILIZER_SHORTAGE",
+								"grievance_type_name": "Fertilizer Shortage",
 								"submitter_name": "Agent Walk-in Farmer",
-								"submitted_on": "2026-10-27T10:00:00Z",
-								"location": "Kebele 01, Adama, East Shewa, Oromia",
+								"creation": "2026-10-27T10:00:00Z",
+								"modified": "2026-10-28T10:00:00Z",
+								"administrative_area": "kebele-ET140108101008",
+								"administrative_unit": "Kebele 01 Center",
 							}
 						],
 						"pagination": {"total_count": 1},
 					},
 				},
 			),
-			_Response(404, {"status": "error"}),
 			_Response(
 				200,
 				{
@@ -241,14 +257,17 @@ class TestHttpClient(unittest.TestCase):
 					"data": {
 						"ticket_number": ticket,
 						"status": "Submitted",
-						"summary": {
-							"description": "The fertilizer voucher never arrived.",
-							"service_category": "Inputs",
-							"grievance_type_name": "Fertilizer Shortage",
-							"administrative_area": "kebele-ET140108101008",
+						"description": "The fertilizer voucher never arrived.",
+						"service_category": "Inputs",
+						"grievance_type": "FERTILIZER_SHORTAGE",
+						"grievance_type_name": "Fertilizer Shortage",
+						"administrative_area": "kebele-ET140108101008",
+						"submitter": {
+							"name": "Agent Walk-in Farmer",
+							"submitter_type": "Individual Farmer",
+							"is_anonymous": False,
 						},
-						"submitter": {"name": "Agent Walk-in Farmer", "submitter_type": "Individual Farmer"},
-						"sla": {"sla_due_date": "2026-11-10T00:00:00Z", "sla_consumed_percent": 12},
+						"sla": {"sla_due_date": "2026-11-10T00:00:00Z", "is_paused": False},
 						"timeline": [
 							{
 								"entry_type": "submission",
@@ -292,7 +311,10 @@ class TestHttpClient(unittest.TestCase):
 		self.assertEqual(total, 1)
 		self.assertEqual(items[0].ticket_number, ticket)
 		self.assertEqual(items[0].category, "Inputs")
-		self.assertEqual(items[0].location, "Kebele 01, Adama, East Shewa, Oromia")
+		self.assertEqual(items[0].subject, "Fertilizer Shortage")
+		self.assertEqual(items[0].created_at, "2026-10-27T10:00:00Z")
+		self.assertEqual(items[0].updated_at, "2026-10-28T10:00:00Z")
+		self.assertEqual(items[0].location, "Kebele 01 Center")
 		self.assertNotIn("priority", items[0].to_dict())
 		list_call = request.call_args_list[1]
 		self.assertNotIn("complainant_id", list_call.kwargs["params"])
@@ -302,17 +324,19 @@ class TestHttpClient(unittest.TestCase):
 		self.assertEqual(detail.ticket_number, ticket)
 		self.assertEqual(detail.category, "Inputs")
 		self.assertEqual(detail.subcategory, "Fertilizer Shortage")
-		self.assertEqual(detail.sla_consumed_percent, 12)
+		self.assertEqual(detail.sla_due_date, "2026-11-10T00:00:00Z")
+		self.assertIsNone(detail.sla_consumed_percent)
 		self.assertNotIn("priority", detail.to_dict())
 		self.assertEqual(
-			request.call_args_list[2].args[1], f"https://grievance.example/api/v1/grievances/{ticket}"
-		)
-		self.assertEqual(
-			request.call_args_list[3].args[1],
+			request.call_args_list[2].args[1],
 			f"https://grievance.example/api/v1/grievances/{ticket}/timeline",
 		)
 
 		timeline = client.get_timeline(ticket)
+		self.assertEqual(
+			request.call_args_list[3].args[1],
+			f"https://grievance.example/api/v1/grievances/{ticket}/timeline",
+		)
 		self.assertEqual(timeline[0]["action"], "submission")
 		self.assertEqual(timeline[0]["detail"], "filed")
 
@@ -392,6 +416,18 @@ class TestHttpClient(unittest.TestCase):
 			}
 		)
 		self.assertEqual(summary["location"], "Adama, Oromia")
+		area_only = normalize_summary(
+			{
+				"ticket_number": "B-2",
+				"status": "Submitted",
+				"creation": "2026-10-27T10:00:00Z",
+				"grievance_type_name": "Canal maintenance problems",
+				"administrative_area": "kebele-ET140108101008",
+			}
+		)
+		self.assertEqual(area_only["subject"], "Canal maintenance problems")
+		self.assertEqual(area_only["created_at"], "2026-10-27T10:00:00Z")
+		self.assertEqual(area_only["location"], "kebele-ET140108101008")
 
 	@patch("da_services.integrations.grievance.client.requests.request")
 	def test_repeated_uuid_returns_the_named_ticket(self, request):
@@ -450,24 +486,60 @@ class TestHttpClient(unittest.TestCase):
 			self._client().get_summary()
 
 	@patch("da_services.integrations.grievance.client.requests.request")
-	def test_options_are_public(self, request):
-		request.return_value = _Response(
-			200,
-			{
-				"status": "success",
-				"data": {
-					"service_categories": [{"category_name": "Inputs"}],
-					"grievance_types": [{"type_name": "Fertilizer Shortage", "service_category": "Inputs"}],
-					"submitter_types": ["Individual Farmer"],
-					"submission_types": [{"type_name": "Development Agent Assisted", "code": "DA"}],
+	def test_options_keep_labels_and_load_statuses_with_the_token(self, request):
+		request.side_effect = [
+			_Response(
+				200,
+				{
+					"status": "success",
+					"data": {
+						"service_categories": [
+							{"value": "Inputs", "label": "Agricultural Inputs", "code": "IN"}
+						],
+						"grievance_types": [
+							{"value": "FERTILIZER_SHORTAGE", "label": "Fertilizer Shortage", "code": "FS"}
+						],
+						"submitter_types": [{"type_name": "Individual Farmer", "code": "IND_FARMER"}],
+						"submission_types": [{"type_name": "Development Agent Assisted", "code": "DA"}],
+					},
 				},
-			},
-		)
-		options = self._client().get_options()
+			),
+			_Response(
+				200,
+				{
+					"status": "success",
+					"data": {
+						"statuses": [
+							{
+								"status": "Submitted",
+								"label": "Submitted",
+								"order": 1,
+								"is_open": 1,
+								"is_terminal": 0,
+							}
+						],
+						"departments": [{"department_id": "AG", "department_name": "Agriculture"}],
+						"service_categories": [{"value": "Inputs", "label": "Agricultural Inputs"}],
+						"grievance_types": [{"value": "FERTILIZER_SHORTAGE", "label": "Fertilizer Shortage"}],
+						"submission_channels": ["Development Agent Assisted"],
+					},
+				},
+			),
+		]
+		options = self._client().get_options(service_category="Inputs")
 		self.assertEqual(options["categories"][0]["value"], "Inputs")
-		self.assertEqual(options["categories"][0]["subcategories"], ["Fertilizer Shortage"])
-		self.assertNotIn("Authorization", request.call_args.kwargs["headers"])
-		self.assertTrue(request.call_args.args[1].endswith("/v1/submitters/options"))
+		self.assertEqual(options["categories"][0]["label"], "Agricultural Inputs")
+		self.assertEqual(options["categories"][0]["subcategories"], [])
+		self.assertEqual(options["grievance_types"][0]["label"], "Fertilizer Shortage")
+		self.assertEqual(options["statuses"][0]["status"], "Submitted")
+		self.assertEqual(options["departments"][0]["department_name"], "Agriculture")
+		intake, staff = request.call_args_list
+		self.assertTrue(intake.args[1].endswith("/v1/submitters/options"))
+		self.assertNotIn("Authorization", intake.kwargs["headers"])
+		self.assertEqual(intake.kwargs["params"]["service_category"], "Inputs")
+		self.assertTrue(staff.args[1].endswith("/v1/grievances/options"))
+		self.assertEqual(staff.kwargs["headers"]["Authorization"], "Bearer static-token")
+		self.assertEqual(staff.kwargs["params"]["service_category"], "Inputs")
 
 
 if __name__ == "__main__":

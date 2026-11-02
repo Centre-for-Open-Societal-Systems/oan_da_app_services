@@ -255,9 +255,24 @@ def get_timeline(ticket_id: str):
 def get_options():
 	require_roles(*C.GRIEVANCE_ROLES)
 
+	params = {}
+	for name in (
+		"service_category",
+		"category",
+		"department",
+		"administrative_area",
+		"search_country",
+		"country",
+		"include_phone_extensions",
+	):
+		value = frappe.form_dict.get(name)
+		if value is None or value == "":
+			continue
+		params[name] = value
+
 	try:
 		client = get_client()
-		options = client.get_options()
+		options = client.get_options(**params)
 		return success_response(data=options)
 	except GrievanceRejected as exc:
 		frappe.throw(str(exc), frappe.ValidationError)

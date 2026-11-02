@@ -108,7 +108,7 @@ class GrievanceClient(ABC):
 		"""Fetch the timeline of events for a ticket."""
 
 	@abstractmethod
-	def get_options(self) -> dict:
+	def get_options(self, **params) -> dict:
 		"""Fetch category and status options for form dropdowns."""
 
 	@abstractmethod
@@ -240,17 +240,15 @@ class HttpGrievanceClient(GrievanceClient):
 		data = self._request("GET", "/v1/grievances", params=params)
 		if not isinstance(data, dict):
 			data = {}
-		rows = data.get("items") or data.get("results") or []
+		rows = data.get("grievances") or data.get("items") or data.get("results") or []
 		items = [to_grievance_summary(normalize_summary(row)) for row in rows]
 		pagination = data.get("pagination") or {}
 		total = int(pagination.get("total_count", pagination.get("total", data.get("total", len(items)))))
 		return items, total
 
 	def get_grievance(self, ticket_id: str) -> GrievanceDetail:
-		try:
-			data = self._request("GET", f"/v1/grievances/{ticket_id}")
-		except GrievanceNotFound:
-			data = self._request("GET", f"/v1/grievances/{ticket_id}/timeline")
+		"""The case is the timeline envelope. There is no ticket GET."""
+		data = self._request("GET", f"/v1/grievances/{ticket_id}/timeline")
 		if not isinstance(data, dict):
 			raise GrievanceNotFound(ticket_id)
 		return to_grievance_detail(normalize_case(data))
@@ -280,11 +278,32 @@ class HttpGrievanceClient(GrievanceClient):
 			if isinstance(entry, dict)
 		]
 
-	def get_options(self) -> dict:
-		data = self._request("GET", "/v1/submitters/options", auth=False)
-		if not isinstance(data, dict):
-			return {}
-		return to_options(data)
+	def get_options(self, **params) -> dict:
+		"""Intake lists are public. Queue statuses come from the authenticated options route."""
+		service_category = _query_param(params.get("service_category") or params.get("category"))
+		intake_params: dict[str, str] = {}
+		if service_category:
+			intake_params["service_category"] = service_category
+		for name in ("search_country", "country", "include_phone_extensions"):
+			encoded = _query_param(params.get(name))
+			if encoded is not None:
+				intake_params[name] = encoded
+		intake = self._request("GET", "/v1/submitters/options", params=intake_params or None, auth=False)
+		if not isinstance(intake, dict):
+			intake = {}
+		staff_params: dict[str, str] = {}
+		for name in ("service_category", "category", "department", "administrative_area"):
+			encoded = _query_param(params.get(name))
+			if encoded is not None:
+				staff_params[name] = encoded
+		staff = self._request("GET", "/v1/grievances/options", params=staff_params or None)
+		if isinstance(staff, dict):
+			if staff.get("statuses"):
+				intake["statuses"] = staff["statuses"]
+			for key in ("departments", "submission_channels", "officers"):
+				if key in staff:
+					intake[key] = staff[key]
+		return to_options(intake)
 
 	def get_summary(self) -> dict:
 		"""GET /v1/grievances/summary. A 200 body with an error is refused, not forwarded."""
