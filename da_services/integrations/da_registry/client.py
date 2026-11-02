@@ -120,9 +120,30 @@ class DARegistryClient(ABC):
 		returned. Raises DANotFound when the registry has no such change request.
 		"""
 
+	@abstractmethod
+	def geo_levels(self) -> list[dict]:
+		"""Master Data's geography levels: [{"level_id", "mnemonic", "parent_level_id"}].
 
-def get_client() -> DARegistryClient:
-	"""Build the configured client. Defaults to the mock outside production."""
+		``mnemonic`` is country, region, zone, woreda or kebele.
+		"""
+
+	@abstractmethod
+	def geo_level_values(self, level_id: str, parent: str | None = None) -> list[dict]:
+		"""The areas of one level under ``parent`` (the whole level when None):
+		[{"code": "ET010101", "name": "Tahtay Adiyabo", "parent": "ET0101"}].
+		"""
+
+	def geo_level_values_many(self, level_id: str, parents: list[str | None]) -> dict[str | None, list[dict]]:
+		"""``geo_level_values`` for every parent, {parent: areas}. The http client fans out."""
+		return {parent: self.geo_level_values(level_id, parent) for parent in parents}
+
+
+def get_client(auth_mode: str | None = None) -> DARegistryClient:
+	"""Build the configured client. Defaults to the mock outside production.
+
+	``auth_mode`` overrides ``da_registry_auth`` for the http client: a scheduled job or a
+	bench command has no signed-in user and passes ``"service"``.
+	"""
 	backend = (frappe.conf.get("da_registry_backend") or "mock").lower()
 	if backend == "mock":
 		from .mock import MockDARegistryClient
@@ -131,5 +152,5 @@ def get_client() -> DARegistryClient:
 	if backend == "http":
 		from .http import HttpDARegistryClient
 
-		return HttpDARegistryClient.from_conf()
+		return HttpDARegistryClient.from_conf(auth_mode=auth_mode)
 	raise DARegistryError(f"Unknown da_registry_backend: {backend!r}")

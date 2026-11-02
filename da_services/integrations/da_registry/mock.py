@@ -87,6 +87,25 @@ FIXTURE_DAS: dict[str, dict] = {
 }
 
 
+# Master Data geography of the demo site; setup/seed_demo.py seeds the same list: (code, level, parent, name)
+GEO_LEVELS = ("region", "zone", "woreda", "kebele")
+FIXTURE_GEO = (
+	("ET04", "region", None, "Oromia"),
+	("ET04-Z01", "zone", "ET04", "West Shewa"),
+	("ET04-W01", "woreda", "ET04-Z01", "Bako Tibe"),
+	("ET04-W01-K01", "kebele", "ET04-W01", "Bako 01"),
+	("ET04-W01-K02", "kebele", "ET04-W01", "Bako 02"),
+	("ET04-W01-K03", "kebele", "ET04-W01", "Dambi Gobu"),
+	("ET04-W01-K04", "kebele", "ET04-W01", "Koye Feche"),
+	("ET04-W01-K05", "kebele", "ET04-W01", "Amarti Gibe"),
+	("ET04-W01-K07", "kebele", "ET04-W01", "Gombo"),
+	("ET03", "region", None, "Amhara"),
+	("ET03-Z02", "zone", "ET03", "North Shewa"),
+	("ET03-W02", "woreda", "ET03-Z02", "Ankober"),
+	("ET03-W02-K01", "kebele", "ET03-W02", "Ankober 01"),
+)
+
+
 class MockDARegistryClient(DARegistryClient):
 	_instance: MockDARegistryClient | None = None
 
@@ -183,3 +202,19 @@ class MockDARegistryClient(DARegistryClient):
 		if not str(reference or "").startswith("MOCK-"):
 			raise DANotFound(reference)
 		return "Approved"
+
+	def geo_levels(self) -> list[dict]:
+		return [{"level_id": "l0", "mnemonic": "country", "parent_level_id": None}] + [
+			{"level_id": f"l{i + 1}", "mnemonic": mnemonic, "parent_level_id": f"l{i}"}
+			for i, mnemonic in enumerate(GEO_LEVELS)
+		]
+
+	def geo_level_values(self, level_id: str, parent: str | None = None) -> list[dict]:
+		index = int(str(level_id).lstrip("l")) - 1
+		if not 0 <= index < len(GEO_LEVELS):
+			return []
+		return [
+			{"code": code, "name": name, "parent": parent_code}
+			for code, level, parent_code, name in FIXTURE_GEO
+			if level == GEO_LEVELS[index] and (parent is None or parent_code == parent)
+		]

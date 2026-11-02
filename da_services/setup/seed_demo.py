@@ -15,6 +15,7 @@ import json
 import frappe
 from frappe.utils import add_days, today
 
+from da_services.integrations.da_registry.mock import FIXTURE_GEO
 from da_services.services import assignments, notifications, tasks, visits
 from da_services.services import constants as C
 from da_services.utils.permissions import get_scope_context
@@ -116,21 +117,8 @@ def _tasks(ctx) -> None:
 
 # Region > Zone > Woreda > Kebele codes match the mock DA Registry fixtures (ET04-W01-K03 ...).
 # Names are placeholders until the administrative master is synced.
-AREAS = [
-	("ET04", "Region", None, "Oromia"),
-	("ET04-Z01", "Zone", "ET04", "West Shewa"),
-	("ET04-W01", "Woreda", "ET04-Z01", "Bako Tibe"),
-	("ET04-W01-K01", "Kebele", "ET04-W01", "Bako 01"),
-	("ET04-W01-K02", "Kebele", "ET04-W01", "Bako 02"),
-	("ET04-W01-K03", "Kebele", "ET04-W01", "Dambi Gobu"),
-	("ET04-W01-K04", "Kebele", "ET04-W01", "Koye Feche"),
-	("ET04-W01-K05", "Kebele", "ET04-W01", "Amarti Gibe"),
-	("ET04-W01-K07", "Kebele", "ET04-W01", "Gombo"),
-	("ET03", "Region", None, "Amhara"),
-	("ET03-Z02", "Zone", "ET03", "North Shewa"),
-	("ET03-W02", "Woreda", "ET03-Z02", "Ankober"),
-	("ET03-W02-K01", "Kebele", "ET03-W02", "Ankober 01"),
-]
+# The demo geography is the mock registry's Master Data (one list, two readers).
+AREAS = [(code, level.capitalize(), parent, name) for code, level, parent, name in FIXTURE_GEO]
 # One demo boundary so the geofence check can be exercised: a box around Dambi Gobu.
 DEMO_BOUNDARY = {
 	"ET04-W01-K03": {
