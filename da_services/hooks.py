@@ -191,9 +191,11 @@ scheduler_events = {
 			"da_services.services.profile.sync_registry_approvals",
 		],
 	},
-	# Start approved leaves on their first day; end active leaves after their last day.
 	"daily": [
+		# Start approved leaves on their first day; end active leaves after their last day.
 		"da_services.services.leave.process_leave_schedule",
+		# Region / Zone / Woreda / Kebele from Master Data (needs the service identity).
+		"da_services.services.area_sync.sync_areas_scheduled",
 	],
 }
 

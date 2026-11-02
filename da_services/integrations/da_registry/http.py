@@ -143,12 +143,14 @@ class HttpDARegistryClient(DARegistryClient):
 		self.sender_app = sender_app
 
 	@classmethod
-	def from_conf(cls) -> HttpDARegistryClient:
+	def from_conf(cls, auth_mode: str | None = None) -> HttpDARegistryClient:
+		"""The client for this site. ``auth_mode`` overrides ``da_registry_auth``: a
+		scheduled job or a bench command has no signed-in user and needs the service identity."""
 		conf = frappe.conf
 		base_url = str(conf.get("da_registry_base_url") or "")
 		if not base_url.startswith(("http://", "https://")):
 			raise DARegistryError("da_registry_base_url must be an http(s) URL in site_config.json")
-		auth_mode = str(conf.get("da_registry_auth") or "service").lower()
+		auth_mode = str(auth_mode or conf.get("da_registry_auth") or "service").lower()
 		if auth_mode not in ("user", "service"):
 			raise DARegistryError(f"Unknown da_registry_auth: {auth_mode!r}")
 		keycloak = conf.get("da_registry_keycloak") or {}
@@ -237,6 +239,71 @@ class HttpDARegistryClient(DARegistryClient):
 
 	def _cache_record(self, internal_id: str, record: dict) -> None:
 		frappe.cache.set_value(self._record_key(internal_id), record, expires_in_sec=RECORD_CACHE_SECONDS)
+
+	# ------------------------------------------------------------------ Master Data geography
+
+	def geo_levels(self) -> list[dict]:
+		rows = self._master_data_pages(
+			"/geo/get_all_geo_levels", {}, action="read Master Data geography levels"
+		)
+		return [
+			{
+				"level_id": row["level_id"],
+				"mnemonic": str(row.get("level_mnemonic") or "").strip().lower(),
+				"parent_level_id": row.get("parent_level_id"),
+			}
+			for row in rows
+			if isinstance(row, dict) and row.get("level_id")
+		]
+
+	def geo_level_values(self, level_id: str, parent: str | None = None) -> list[dict]:
+		rows = self._master_data_pages(
+			"/geo/get_geo_level_values",
+			{"level_id": level_id, "parent_level_value_id": parent or ""},
+			action=f"read Master Data {level_id} values",
+		)
+		return [
+			{
+				"code": row["level_value_id"],
+				"name": row.get("level_value_mnemonic") or row["level_value_id"],
+				"parent": row.get("parent_level_value_id") or None,
+			}
+			for row in rows
+			if isinstance(row, dict) and row.get("level_value_id")
+		]
+
+	def geo_level_values_many(self, level_id: str, parents: list[str | None]) -> dict[str | None, list[dict]]:
+		# A full tree is one call per Region, Zone and Woreda: fan out like list_das.
+		self._credentials()  # resolve the token here: the workers have no request context
+		with ThreadPoolExecutor(max_workers=min(LIST_WORKERS, max(1, len(parents)))) as pool:
+			areas = pool.map(lambda parent: self.geo_level_values(level_id, parent), parents)
+			return dict(zip(parents, areas, strict=True))
+
+	def _master_data_pages(self, path: str, payload: dict, *, action: str) -> list:
+		"""Every row of a Master Data list call (the same token as the registry)."""
+		if not self.master_data_url:
+			raise DARegistryError("da_registry_master_data_url is not set in site_config.json")
+		rows: list = []
+		page = 1
+		while True:
+			body = self._post(
+				path,
+				payload,
+				action=action,
+				pagination={
+					"current_page": page,
+					"page_size": PAGE_SIZE,
+					"search_text": "",
+					"sort_by": "",
+					"filter_by": "",
+				},
+				base=self.master_data_url,
+			)
+			rows.extend(body.get("response_payload") or [])
+			pages = (body.get("pagination_response") or {}).get("number_of_pages") or 1
+			if page >= pages:
+				return rows
+			page += 1
 
 	def _labels(self) -> dict[str, dict]:
 		"""Master Data labels of the DA's coded fields, {attribute_id: {value_id: label}}.
