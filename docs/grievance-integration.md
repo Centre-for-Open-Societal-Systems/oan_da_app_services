@@ -24,12 +24,12 @@ sequenceDiagram
     alt Submit
       Client->>GS: POST /v1/grievances
     else Read one ticket
-      Client->>GS: GET /v1/grievances/{ticket}
-      Client->>GS: GET timeline when the ticket GET is missing
+      Client->>GS: GET /v1/grievances/{ticket}/timeline
     else List or summary
       Client->>GS: GET /v1/grievances or /summary
     else Form options
       Client->>GS: GET /v1/submitters/options, no bearer
+      Client->>GS: GET /v1/grievances/options
     end
   end
   DA-->>Agent: DA response

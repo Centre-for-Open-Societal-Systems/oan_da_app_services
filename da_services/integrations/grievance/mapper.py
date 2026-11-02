@@ -88,7 +88,11 @@ def _ticket(payload: dict) -> str:
 
 
 def location_text(payload: dict) -> str | None:
-	"""Comma-separated place, leaf to root, matching the grievance list ``location`` field."""
+	"""Place label for a list row.
+
+	A display string or hierarchy wins. A list row that only has the area id
+	uses ``administrative_unit``, then that id.
+	"""
 	location = payload.get("location")
 	if isinstance(location, str) and location.strip():
 		return location.strip()
@@ -99,7 +103,15 @@ def location_text(payload: dict) -> str | None:
 		name = source.get(level)
 		if isinstance(name, str) and name and name not in parts:
 			parts.append(name)
-	return ", ".join(parts) if parts else None
+	if parts:
+		return ", ".join(parts)
+	unit = payload.get("administrative_unit")
+	if isinstance(unit, str) and unit.strip():
+		return unit.strip()
+	area = payload.get("administrative_area")
+	if isinstance(area, str) and area.strip():
+		return area.strip()
+	return None
 
 
 def normalize_summary(payload: dict) -> dict:
@@ -107,7 +119,11 @@ def normalize_summary(payload: dict) -> dict:
 	if payload.get("ticket_id") and "ticket_number" not in payload and "submitter_name" not in payload:
 		return payload
 	description = payload.get("description") or ""
-	subject = payload.get("subject") or str(description).split("\n", 1)[0][:140]
+	subject = (payload.get("subject") or "").strip()
+	if not subject and description:
+		subject = str(description).split("\n", 1)[0][:140]
+	if not subject:
+		subject = payload.get("grievance_type_name") or payload.get("grievance_type") or ""
 	ticket = _ticket(payload)
 	return {
 		"ticket_id": ticket,
@@ -116,8 +132,8 @@ def normalize_summary(payload: dict) -> dict:
 		"status": payload.get("status") or "",
 		"category": payload.get("service_category") or payload.get("category") or "",
 		"complainant_name": payload.get("submitter_name") or payload.get("complainant_name") or "",
-		"created_at": payload.get("submitted_on") or payload.get("created_at"),
-		"updated_at": payload.get("updated_at"),
+		"created_at": payload.get("submitted_on") or payload.get("created_at") or payload.get("creation"),
+		"updated_at": payload.get("updated_at") or payload.get("modified"),
 		"location": location_text(payload),
 		"kebele": payload.get("kebele"),
 		"woreda": payload.get("woreda"),
@@ -164,6 +180,7 @@ def normalize_case(payload: dict) -> dict:
 		or "",
 		"subcategory": (summary or {}).get("grievance_type_name")
 		or (summary or {}).get("grievance_type_id")
+		or payload.get("grievance_type_name")
 		or payload.get("grievance_type")
 		or payload.get("subcategory")
 		or "",
@@ -194,42 +211,74 @@ def normalize_case(payload: dict) -> dict:
 
 
 def to_options(payload: dict) -> dict:
-	"""Public ``/v1/submitters/options`` into the dropdown shape the DA route already returns."""
-	categories: dict[str, list[str]] = {}
+	"""Intake options plus queue statuses.
+
+	Categories and types are ``{value, label, code}``. A type is nested under a
+	category only when the row names its ``service_category``. Status objects
+	keep ``label``, ``order``, ``is_open``, and ``is_terminal``.
+	"""
+	categories: dict[str, dict] = {}
 	raw_categories = payload.get("service_categories") or []
 	for item in raw_categories:
-		name = _label(item, "category_name", "name", "value")
-		if name:
-			categories.setdefault(name, [])
+		value = _option_value(item)
+		if not value:
+			continue
+		entry = {"value": value, "label": _option_label(item) or value, "subcategories": []}
+		code = item.get("code") if isinstance(item, dict) else None
+		if code:
+			entry["code"] = code
+		categories[value] = entry
 	for item in payload.get("grievance_types") or []:
-		type_name = _label(item, "type_name", "name", "value")
-		parent = ""
-		if isinstance(item, dict):
-			parent = _label(item.get("service_category"), "category_name", "name") or _label(
-				item, "service_category"
-			)
-		if isinstance(item, str):
-			type_name = item
+		type_name = item if isinstance(item, str) else _option_value(item)
 		if not type_name:
 			continue
-		if parent:
-			categories.setdefault(parent, [])
-			if type_name not in categories[parent]:
-				categories[parent].append(type_name)
-		elif categories:
-			first = next(iter(categories))
-			if type_name not in categories[first]:
-				categories[first].append(type_name)
-	return {
-		"categories": [{"value": name, "subcategories": types} for name, types in categories.items()],
-		"statuses": [
-			_label(item, "status", "name", "value") or item for item in (payload.get("statuses") or [])
-		],
+		parent = _category_parent(item)
+		if not parent:
+			continue
+		bucket = categories.setdefault(parent, {"value": parent, "label": parent, "subcategories": []})
+		if type_name not in bucket["subcategories"]:
+			bucket["subcategories"].append(type_name)
+	options = {
+		"categories": list(categories.values()),
+		"statuses": _statuses(payload.get("statuses")),
 		"service_categories": raw_categories,
 		"grievance_types": payload.get("grievance_types") or [],
 		"submitter_types": payload.get("submitter_types") or [],
 		"submission_types": payload.get("submission_types") or [],
 	}
+	for key in ("departments", "submission_channels", "officers", "preferred_languages", "phone_extensions"):
+		if key in payload:
+			options[key] = payload[key]
+	return options
+
+
+def _option_value(item) -> str:
+	return _label(item, "value", "category_name", "type_name", "name")
+
+
+def _option_label(item) -> str:
+	return _label(item, "label", "category_name", "type_name", "name", "value")
+
+
+def _category_parent(item) -> str:
+	if not isinstance(item, dict):
+		return ""
+	parent = item.get("service_category")
+	if isinstance(parent, dict):
+		return _label(parent, "value", "label", "category_name", "name")
+	if isinstance(parent, str) and parent.strip():
+		return parent.strip()
+	return ""
+
+
+def _statuses(raw) -> list:
+	statuses = []
+	for item in raw or []:
+		if isinstance(item, str) and item:
+			statuses.append(item)
+		elif isinstance(item, dict) and (item.get("status") or item.get("label") or item.get("value")):
+			statuses.append(item)
+	return statuses
 
 
 def _label(item, *keys: str) -> str:

@@ -161,14 +161,44 @@ def _field_matches(record: dict, key: str, expected) -> bool:
 	return actual is not None and str(actual) in choices
 
 
+# Queue cards on GET /v1/grievances/summary. Open is not a card.
+_SUMMARY_CARDS = (
+	("All", "All", 0, 0),
+	("Submitted", "Submitted", 1, 0),
+	("Reopened", "Reopened", 1, 0),
+	("In Progress", "In Progress", 1, 0),
+	("More Info Needed", "More Info Needed", 1, 0),
+	("Rejected", "Rejected", 0, 1),
+	("Resolved", "Resolved", 0, 1),
+	("Closed", "Closed", 0, 1),
+)
+_CARD_STATUSES = {status for status, _label, _is_open, _is_terminal in _SUMMARY_CARDS if status != "All"}
+
+
 FIXTURE_OPTIONS: dict = {
 	"categories": [
-		{"value": "Supply Chain", "subcategories": ["Input Delivery", "Equipment", "Storage"]},
-		{"value": "Training", "subcategories": ["Scheduling", "Content", "Logistics"]},
-		{"value": "Data Quality", "subcategories": ["KPI", "Registration", "Survey"]},
-		{"value": "Administrative", "subcategories": ["Leave", "Transfer", "Policy"]},
+		{
+			"value": "Supply Chain",
+			"label": "Supply Chain",
+			"subcategories": ["Input Delivery", "Equipment", "Storage"],
+		},
+		{"value": "Training", "label": "Training", "subcategories": ["Scheduling", "Content", "Logistics"]},
+		{
+			"value": "Data Quality",
+			"label": "Data Quality",
+			"subcategories": ["KPI", "Registration", "Survey"],
+		},
+		{
+			"value": "Administrative",
+			"label": "Administrative",
+			"subcategories": ["Leave", "Transfer", "Policy"],
+		},
 	],
-	"statuses": ["Open", "In Progress", "Escalated", "Resolved", "Closed"],
+	"statuses": [
+		{"status": status, "label": label, "order": order, "is_open": is_open, "is_terminal": is_terminal}
+		for order, (status, label, is_open, is_terminal) in enumerate(_SUMMARY_CARDS, start=1)
+		if status != "All"
+	],
 }
 
 
@@ -353,15 +383,33 @@ class MockGrievanceClient(GrievanceClient):
 			raise GrievanceNotFound(ticket_id)
 		return record.get("timeline") or []
 
-	def get_options(self) -> dict:
+	def get_options(self, **_params) -> dict:
 		return FIXTURE_OPTIONS
 
 	def get_summary(self) -> dict:
-		counts: dict[str, int] = {}
+		"""Queue cards from the grievance summary contract.
+
+		A fixture status that is not a card, such as Open, counts under In Progress.
+		``is_open`` and ``is_terminal`` follow that card list. A live summary is not remapped.
+		"""
+		counts = {status: 0 for status in _CARD_STATUSES}
 		for record in self._records.values():
 			status = record.get("status") or ""
-			if status:
-				counts[status] = counts.get(status, 0) + 1
-		cards = [{"status": "All", "count": len(self._records)}]
-		cards.extend({"status": status, "count": count} for status, count in sorted(counts.items()))
+			if status in counts:
+				counts[status] += 1
+			elif status:
+				counts["In Progress"] += 1
+		cards = []
+		for order, (status, label, is_open, is_terminal) in enumerate(_SUMMARY_CARDS, start=1):
+			count = len(self._records) if status == "All" else counts[status]
+			cards.append(
+				{
+					"status": status,
+					"label": label,
+					"order": order,
+					"is_open": is_open,
+					"is_terminal": is_terminal,
+					"count": count,
+				}
+			)
 		return {"cards": cards}
