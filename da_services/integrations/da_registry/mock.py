@@ -87,7 +87,7 @@ FIXTURE_DAS: dict[str, dict] = {
 }
 
 
-# Master Data geography of the demo site (setup/seed_demo.py AREAS): (code, level, parent, name)
+# Master Data geography of the demo site; setup/seed_demo.py seeds the same list: (code, level, parent, name)
 GEO_LEVELS = ("region", "zone", "woreda", "kebele")
 FIXTURE_GEO = (
 	("ET04", "region", None, "Oromia"),

@@ -21,7 +21,12 @@ upserts one row per area:
 
 Rows carry `source = master_data`, `source_version` (the sync time) and `last_synced_at`.
 An area Master Data no longer lists is set `active = 0`, never deleted: assignments and
-visits link to it. If Master Data answers with no areas at all, nothing is changed.
+visits link to it.
+
+The run is one transaction and refuses to change anything when the answer cannot be
+trusted: a call fails half-way (rolled back), a level comes back empty, or more than a
+fifth of the areas the sync owns would be deactivated (`MAX_DEACTIVATION_SHARE`), which
+means Master Data answered partially. A code listed twice keeps its first parent.
 
 The same P-codes come back from the DA Registry on every DA record
 (`region_code`, `woreda_code`, `geo_lowest_level_value_id`), so after the sync the
@@ -42,8 +47,11 @@ bench --site <site> execute da_services.services.area_sync.sync_areas
 ```
 
 It prints the counts: `{"inserted": …, "updated": …, "unchanged": …, "deactivated": …}`.
-The scheduler then runs it daily (`sync_areas_scheduled`); a run that cannot reach Master
-Data or has no service identity writes one Error Log entry and skips.
+The scheduler then runs it daily on the long queue (`daily_long`, `sync_areas_scheduled`);
+a run that cannot reach Master Data or has no service identity writes one Error Log entry
+and skips.
 
 Master Data answers one level per parent, so a full tree is roughly one call per Region,
-Zone and Woreda (about a thousand calls on production data, a few minutes).
+Zone and Woreda, fanned out on 8 workers. Dev (14 Regions, 125 Zones, 1,362 Woredas,
+19,535 Kebeles) loads in about six minutes the first time; later runs read every existing
+row once and write only what changed.

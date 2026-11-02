@@ -6,7 +6,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.integrations.da_registry import http as http_mod
-from da_services.integrations.da_registry.client import DARegistryError
+from da_services.integrations.da_registry.client import DARegistryError, DARegistryUnavailable
 from da_services.integrations.da_registry.http import HttpDARegistryClient
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import area_sync
@@ -117,6 +117,41 @@ class TestAreaSync(IntegrationTestCase):
 		).insert(ignore_permissions=True)
 		area_sync.sync_areas(FakeMasterData(TREE))
 		self.assertTrue(frappe.db.get_value("DA Administrative Area", "ET78", "active"))
+
+	def test_a_partial_answer_changes_nothing(self):
+		area_sync.sync_areas(FakeMasterData(TREE))
+		# a level comes back empty (parent id mismatch, permission regression): no mass deactivation
+		with self.assertRaises(DARegistryError):
+			area_sync.sync_areas(FakeMasterData({**TREE, "kebele": []}))
+		# too many areas gone at once: Master Data answered partially
+		with self.assertRaises(DARegistryError):
+			area_sync.sync_areas(FakeMasterData({**TREE, "kebele": TREE["kebele"][:1]}))
+		self.assertTrue(all(r.active for r in _rows().values()))
+		self.assertEqual(len(_rows()), 7)
+
+	def test_a_failure_half_way_rolls_everything_back(self):
+		class Flaky(FakeMasterData):
+			def geo_level_values(self, level_id, parent=None):
+				if level_id == "l3":
+					raise DARegistryUnavailable("Master Data timed out")
+				return super().geo_level_values(level_id, parent)
+
+		with self.assertRaises(DARegistryUnavailable):
+			area_sync.sync_areas(Flaky(TREE))
+		self.assertEqual(_rows(), {})  # the regions and zones already upserted are gone
+		with (
+			patch.object(frappe, "log_error") as log,
+			patch.object(area_sync, "get_client", return_value=Flaky(TREE)),
+		):
+			area_sync.sync_areas_scheduled()  # logged and skipped, nothing committed
+		self.assertTrue(log.called)
+		self.assertEqual(_rows(), {})
+
+	def test_a_code_listed_twice_keeps_its_first_parent(self):
+		tree = {**TREE, "kebele": TREE["kebele"] + [("ET77010101", "ET770102", "Kebele One again")]}
+		counts = area_sync.sync_areas(FakeMasterData(tree))
+		self.assertEqual(counts["inserted"], 7)
+		self.assertEqual(_rows()["ET77010101"].parent_area, "ET770101")
 
 	def test_an_empty_or_incomplete_master_data_changes_nothing(self):
 		area_sync.sync_areas(FakeMasterData(TREE))

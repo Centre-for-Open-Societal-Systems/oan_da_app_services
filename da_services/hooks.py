@@ -194,7 +194,10 @@ scheduler_events = {
 	"daily": [
 		# Start approved leaves on their first day; end active leaves after their last day.
 		"da_services.services.leave.process_leave_schedule",
-		# Region / Zone / Woreda / Kebele from Master Data (needs the service identity).
+	],
+	"daily_long": [
+		# Region / Zone / Woreda / Kebele from Master Data: about a thousand calls, needs
+		# the long queue's timeout and the service identity.
 		"da_services.services.area_sync.sync_areas_scheduled",
 	],
 }

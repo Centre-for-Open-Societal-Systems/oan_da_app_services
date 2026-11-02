@@ -283,27 +283,7 @@ class HttpDARegistryClient(DARegistryClient):
 		"""Every row of a Master Data list call (the same token as the registry)."""
 		if not self.master_data_url:
 			raise DARegistryError("da_registry_master_data_url is not set in site_config.json")
-		rows: list = []
-		page = 1
-		while True:
-			body = self._post(
-				path,
-				payload,
-				action=action,
-				pagination={
-					"current_page": page,
-					"page_size": PAGE_SIZE,
-					"search_text": "",
-					"sort_by": "",
-					"filter_by": "",
-				},
-				base=self.master_data_url,
-			)
-			rows.extend(body.get("response_payload") or [])
-			pages = (body.get("pagination_response") or {}).get("number_of_pages") or 1
-			if page >= pages:
-				return rows
-			page += 1
+		return list(self._pages(path, payload, action=action, base=self.master_data_url))
 
 	def _labels(self) -> dict[str, dict]:
 		"""Master Data labels of the DA's coded fields, {attribute_id: {value_id: label}}.
@@ -352,11 +332,30 @@ class HttpDARegistryClient(DARegistryClient):
 		return None
 
 	def _search(self, search_text: str, filter_by: dict | None) -> Iterator[dict]:
+		return self._pages(
+			"/register-data/search_in_a_register",
+			{"register_id": self.register_id},
+			action="search DAs",
+			search_text=search_text,
+			filter_by=filter_by,
+		)
+
+	def _pages(
+		self,
+		path: str,
+		payload: dict,
+		*,
+		action: str,
+		base: str | None = None,
+		search_text: str = "",
+		filter_by: dict | None = None,
+	) -> Iterator[dict]:
+		"""Every row of a paginated list call, page after page."""
 		page = 1
 		while True:
 			body = self._post(
-				"/register-data/search_in_a_register",
-				{"register_id": self.register_id},
+				path,
+				payload,
 				pagination={
 					"current_page": page,
 					"page_size": PAGE_SIZE,
@@ -364,7 +363,8 @@ class HttpDARegistryClient(DARegistryClient):
 					"sort_by": "",
 					"filter_by": json.dumps(filter_by) if filter_by else "",
 				},
-				action="search DAs",
+				action=action,
+				base=base,
 			)
 			yield from body.get("response_payload") or []
 			pages = (body.get("pagination_response") or {}).get("number_of_pages") or 1
