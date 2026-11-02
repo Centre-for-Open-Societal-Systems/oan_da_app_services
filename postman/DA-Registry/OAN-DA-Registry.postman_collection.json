@@ -1,0 +1,1580 @@
+{
+  "info": {
+    "_postman_id": "oan-da-registry",
+    "name": "OAN DA Services - DA Registry",
+    "description": "Every DA Services API that reads or writes the DA Registry. DA Services is a wrapper: it checks the caller's DA Services RBAC (DA: own record, Supervisor: Woreda, Executive: Region/Zone, Admin: all), then calls the DA Registry staff API with the caller's own staff IAM access token and CSRF value.\n\nEvery request sends `Authorization: Bearer {{access_token}}` and `X-CSRF-Token: {{csrf_token}}`.\n\nHow to run: set username and password in the environment, run folder 0 (sign in), then the folder for the user's role. The token lives 5 minutes on dev: run folder 0 again on a 401. Add keycloak.development.oanstaging.com and staff-iam.development.oanstaging.com to Cookies > Domains allowlist so 0.1 can clear old sessions.\n\nDA Services roles come from the staff IAM token: the Keycloak user's client roles on `oan-client` (Supervisor, OAN Administrator, ...) plus the login option's default role (Development Agent); roles added by hand in DA Services are reset at the next sign-in. The user also needs a DA Services DA RBAC Assignment (a DA's assignment carries their DA-ID) and the DA Registry roles for the calls (Data Editor to read DAs and open change requests, Intake Officer to import, Integration Manager for the exceptions list).\n\nRequests 2.6 (Approve) and 3.3 write to the DA Registry.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "iam_key",
+      "value": "agent"
+    },
+    {
+      "key": "return_url",
+      "value": "http://localhost:3000/api/auth/iam/complete"
+    },
+    {
+      "key": "cookie_prefix",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "csrf_token",
+      "value": ""
+    },
+    {
+      "key": "kc_auth_url",
+      "value": ""
+    },
+    {
+      "key": "kc_login_action",
+      "value": ""
+    },
+    {
+      "key": "iam_callback",
+      "value": ""
+    },
+    {
+      "key": "my_da_id",
+      "value": ""
+    },
+    {
+      "key": "new_telegram",
+      "value": "+251911223344"
+    },
+    {
+      "key": "new_alternate_mobile",
+      "value": "+251911556677"
+    },
+    {
+      "key": "change_reason",
+      "value": "New SIM card"
+    },
+    {
+      "key": "client_op_id",
+      "value": ""
+    },
+    {
+      "key": "my_change_request_id",
+      "value": ""
+    },
+    {
+      "key": "cr_status",
+      "value": "Pending"
+    },
+    {
+      "key": "da_id",
+      "value": "DA-7485687914"
+    },
+    {
+      "key": "region",
+      "value": "ET01"
+    },
+    {
+      "key": "woreda",
+      "value": "ET010101"
+    },
+    {
+      "key": "kebele",
+      "value": "ET01010101"
+    },
+    {
+      "key": "active_status",
+      "value": "Active"
+    },
+    {
+      "key": "education_tier",
+      "value": "Diploma"
+    },
+    {
+      "key": "fayda_status",
+      "value": ""
+    },
+    {
+      "key": "assignment_status",
+      "value": "Effective"
+    },
+    {
+      "key": "specialisation",
+      "value": "Agronomy"
+    },
+    {
+      "key": "search",
+      "value": ""
+    },
+    {
+      "key": "limit",
+      "value": "20"
+    },
+    {
+      "key": "start",
+      "value": "0"
+    },
+    {
+      "key": "change_request_id",
+      "value": ""
+    },
+    {
+      "key": "decision",
+      "value": "Request changes"
+    },
+    {
+      "key": "decision_note",
+      "value": "Please attach the new SIM registration"
+    },
+    {
+      "key": "registry_import_id",
+      "value": ""
+    },
+    {
+      "key": "page",
+      "value": "1"
+    },
+    {
+      "key": "page_size",
+      "value": "50"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Sign in (staff IAM / Keycloak)",
+      "description": "Run first, and again after 5 minutes. Saves access_token (0.4) and csrf_token (0.4).",
+      "item": [
+        {
+          "name": "0.1 Start staff IAM sign-in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/iam/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "iam",
+                "login"
+              ]
+            },
+            "description": "Public. DA Services asks the staff IAM to start the Keycloak sign-in for login option `iam_key` and returns the Keycloak URL. Clears old Keycloak and IAM cookies first: an old Keycloak session makes 0.2 skip the login form.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key\": \"{{iam_key}}\",\n  \"return_url\": \"{{return_url}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Old cookies break the login: clear them (needs these domains in Cookies > Domains allowlist).",
+                  "const jar = pm.cookies.jar();",
+                  "['keycloak.development.oanstaging.com', 'staff-iam.development.oanstaging.com', 'development.oanstaging.com'].forEach(function (d) {",
+                  "    try { jar.clear(d, function () {}); } catch (e) {}",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('IAM sign-in started', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const body = (pm.response.json() || {}).data || {};",
+                  "pm.test('redirect_url returned', function () { pm.expect(body.redirect_url).to.be.a('string'); });",
+                  "save('kc_auth_url', body.redirect_url ? body.redirect_url + (body.redirect_url.includes('?') ? '&' : '?') + 'prompt=login' : '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "0.2 Open the Keycloak sign-in form",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/html"
+              }
+            ],
+            "url": "{{kc_auth_url}}",
+            "description": "Opens the Keycloak URL from 0.1 (prompt=login added so an old session still shows the form) and follows the redirects to the form. Saves the form's action URL."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Keycloak form returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const html = pm.response.text();",
+                  "const form = html.match(/<form[^>]*id=\"kc-form-login\"[^>]*>/);",
+                  "const action = form && form[0].match(/action=\"([^\"]+)\"/);",
+                  "pm.test('Keycloak login form present', function () { pm.expect(action, 'login form').to.be.ok; });",
+                  "if (action) save('kc_login_action', action[1].replace(/&amp;/g, '&'));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": true
+          }
+        },
+        {
+          "name": "0.3 Sign in to Keycloak",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": "{{kc_login_action}}",
+            "description": "Posts `username` and `password` to the Keycloak form. Keycloak answers 302 to the staff IAM callback; the redirect is not followed so its Location can be kept.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{password}}",
+                  "type": "text"
+                },
+                {
+                  "key": "credentialId",
+                  "value": "",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "// A 200 is the form again: show Keycloak's own message (wrong password, pending action, ...).",
+                  "const feedback = (pm.response.text().match(/class=\"[^\"]*(?:error|feedback)[^\"]*\"[^>]*>\\s*([^<]{3,200})/) || [])[1] || '';",
+                  "pm.test('Keycloak accepted the credentials (302)', function () {",
+                  "    pm.expect(pm.response.code, 'Keycloak says: ' + feedback.trim()).to.be.oneOf([302, 303]);",
+                  "});",
+                  "const location = pm.response.headers.get('Location') || '';",
+                  "pm.test('Redirect goes to the staff IAM callback', function () { pm.expect(location).to.include('/auth/callback'); });",
+                  "save('iam_callback', location);"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "name": "0.4 Complete the IAM callback (access token + CSRF)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "*/*"
+              }
+            ],
+            "url": "{{iam_callback}}",
+            "description": "The staff IAM exchanges the Keycloak code and sets the X-Access-Token and X-CSRF-Token cookies. Saves them as access_token and csrf_token for every DA Services call. The token lives 5 minutes on dev: run 0.1-0.4 again when a call answers 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('IAM callback redirects (302/303/307)', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([302, 303, 307]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const prefix = pm.variables.get('cookie_prefix') || '';",
+                  "function cookie(name) {",
+                  "    const all = pm.response.headers.all().filter(h => h.key.toLowerCase() === 'set-cookie').map(h => h.value);",
+                  "    const hits = all.filter(v => v.startsWith(prefix + name + '=')).map(v => v.split(';')[0].substring((prefix + name).length + 1).replace(/^\"|\"$/g, '')).filter(v => v);",
+                  "    if (hits.length) return hits[hits.length - 1];",
+                  "    const c = pm.cookies.get(prefix + name);",
+                  "    return c ? String(c).replace(/^\"|\"$/g, '') : '';",
+                  "}",
+                  "const token = cookie('X-Access-Token'), csrf = cookie('X-CSRF-Token');",
+                  "pm.test('IAM issued the access token and CSRF value', function () {",
+                  "    pm.expect(token, 'access token').to.not.be.empty;",
+                  "    pm.expect(csrf, 'csrf').to.not.be.empty;",
+                  "});",
+                  "save('access_token', token);",
+                  "save('csrf_token', csrf);"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "name": "0.5 Who am I (token check)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Checks the access token against DA Services (OAN Auth) and shows the user's DA Services roles and scope. A 401 here means the token expired or the user has no active DA RBAC assignment."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Token accepted by DA Services', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Development Agent",
+      "description": "Sign in as a DA (DA RBAC assignment with their DA-ID).",
+      "item": [
+        {
+          "name": "1.1 Who am I in DA Services (with registry profile)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "me"
+              ]
+            },
+            "description": "Roles, scope, DA-ID and menu. For a DA, `agent` is the DA's record read from the DA Registry with the user's token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const body = (pm.response.json() || {}).data || {};",
+                  "save('my_da_id', body.da_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 My profile (DA Registry record)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "me"
+              ]
+            },
+            "description": "The signed-in DA's own record from the DA Registry (name parts, Fayda ID, gender, birth month/year EC, contact, education, position, Region/Zone/Woreda/Kebele with names) plus editable fields and open change requests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "const p = ((pm.response.json() || {}).data || {}).profile || {};",
+                  "pm.test('Profile comes from the registry', function () { pm.expect(p.da_id).to.match(/^DA-/); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Request a contact change",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests"
+              ]
+            },
+            "description": "The DA asks to change their own contact fields (here Telegram and alternate number). Goes to the Woreda supervisor; on approval DA Services opens a change request in the DA Registry with the approver's token. Identity fields are refused. client_op_id is generated per run.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": {\n    \"telegram\": \"{{new_telegram}}\",\n    \"alternate_mobile\": \"{{new_alternate_mobile}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('client_op_id', 'postman-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Change request created', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([201, 200]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const body = (pm.response.json() || {}).data || {};",
+                  "save('my_change_request_id', body.name);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 My change requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests?status={{cr_status}}&limit={{limit}}&start={{start}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "{{cr_status}}",
+                  "description": "Pending, Approved, Applied, Rejected, Changes requested, Cancelled"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}",
+                  "description": "Page size"
+                },
+                {
+                  "key": "start",
+                  "value": "{{start}}",
+                  "description": "Offset"
+                },
+                {
+                  "key": "da_id",
+                  "value": "{{da_id}}",
+                  "description": "Officers only: one DA's requests",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Change requests in the caller's scope. A DA sees only their own."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.5 One change request",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{my_change_request_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests",
+                "{{my_change_request_id}}"
+              ]
+            },
+            "description": "Uses my_change_request_id saved by 1.3. Shows registry_sync_state, registry_reference and registry_approval once a supervisor approves."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.6 Cancel my pending change request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{my_change_request_id}}/cancel",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests",
+                "{{my_change_request_id}}",
+                "cancel"
+              ]
+            },
+            "description": "Cancels the request from 1.3 so the run leaves nothing pending. Skip it to let a supervisor decide the request instead.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Cancelled', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Supervisor / Executive / Admin",
+      "description": "Sign in as an officer. A supervisor sees and decides only their Woreda's DAs.",
+      "item": [
+        {
+          "name": "2.1 List DAs (Agents master registry)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agents?woreda={{woreda}}&limit={{limit}}&start={{start}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agents"
+              ],
+              "query": [
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "description": "Woreda P-code, e.g. ET010101"
+                },
+                {
+                  "key": "region",
+                  "value": "{{region}}",
+                  "description": "Region P-code, e.g. ET01",
+                  "disabled": true
+                },
+                {
+                  "key": "kebele",
+                  "value": "{{kebele}}",
+                  "description": "Kebele id, e.g. ET01010101",
+                  "disabled": true
+                },
+                {
+                  "key": "active_status",
+                  "value": "{{active_status}}",
+                  "description": "Active, On-leave or Separated",
+                  "disabled": true
+                },
+                {
+                  "key": "education_tier",
+                  "value": "{{education_tier}}",
+                  "description": "Certificate, Diploma, Degree or Masters",
+                  "disabled": true
+                },
+                {
+                  "key": "fayda_status",
+                  "value": "{{fayda_status}}",
+                  "description": "Not held by the DA Registry (always empty)",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "{{search}}",
+                  "description": "Part of a DA-ID or name",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}",
+                  "description": "Page size"
+                },
+                {
+                  "key": "start",
+                  "value": "{{start}}",
+                  "description": "Offset"
+                }
+              ]
+            },
+            "description": "DAs from the DA Registry within the caller's scope (Supervisor: Woreda, Executive: Region/Zone, Admin: all), with filters and search. Each item carries da_id, full_name, fayda_id, position, active_status, education_tier and the posting by code and name. Disabled params are optional filters."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const agents = (((pm.response.json() || {}).data || {}).agents) || [];",
+                  "pm.test('DAs returned from the registry', function () { pm.expect(agents.length).to.be.above(0); });",
+                  "if (agents.length && !pm.variables.get('da_id')) save('da_id', agents[0].da_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 One DA (scope-checked)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agents/{{da_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agents",
+                "{{da_id}}"
+              ]
+            },
+            "description": "One DA read live from the DA Registry. Answers 403 when the DA is outside the caller's Region/Zone/Woreda."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "pm.test('Same DA returned', function () { pm.expect(d.da_id).to.eql(pm.variables.get('da_id')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 Agent assignments of a Woreda",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/assignments?limit={{limit}}&start={{start}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "assignments"
+              ],
+              "query": [
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "description": "Woreda P-code (from the area master)",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "{{active_status}}",
+                  "description": "DA active status",
+                  "disabled": true
+                },
+                {
+                  "key": "assignment_status",
+                  "value": "{{assignment_status}}",
+                  "description": "Effective, Pending or Unassigned",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "{{search}}",
+                  "description": "Part of a DA-ID or name",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}",
+                  "description": "Page size"
+                },
+                {
+                  "key": "start",
+                  "value": "{{start}}",
+                  "description": "Offset"
+                }
+              ]
+            },
+            "description": "The DAs posted in the Woreda (from the DA Registry) with their Kebele assignment state. woreda must exist in DA Services' administrative area master; leave it out to use the caller's own Woreda."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.4 Experts / My Team",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/experts?limit={{limit}}&start={{start}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "experts"
+              ],
+              "query": [
+                {
+                  "key": "specialisation",
+                  "value": "{{specialisation}}",
+                  "description": "e.g. Agronomy",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "{{search}}",
+                  "description": "Part of a name",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}",
+                  "description": "Page size"
+                },
+                {
+                  "key": "start",
+                  "value": "{{start}}",
+                  "description": "Offset"
+                }
+              ]
+            },
+            "description": "DAs visible to the caller, read from the DA Registry, filterable by specialisation."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.5 Pending change requests (approval queue)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests?status=Pending&limit={{limit}}&start={{start}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "Pending",
+                  "description": "Approval queue"
+                },
+                {
+                  "key": "da_id",
+                  "value": "{{da_id}}",
+                  "description": "One DA only",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}",
+                  "description": "Page size"
+                },
+                {
+                  "key": "start",
+                  "value": "{{start}}",
+                  "description": "Offset"
+                }
+              ]
+            },
+            "description": "Change requests of the DAs in the supervisor's Woreda. Saves the first pending one as change_request_id for 2.6."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const rows = (pm.response.json() || {}).data || [];",
+                  "const items = Array.isArray(rows) ? rows : (rows.items || rows.requests || []);",
+                  "if (items.length) save('change_request_id', items[0].name);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.6 Decide a change request (Approve opens a registry change request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{change_request_id}}/decide",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests",
+                "{{change_request_id}}",
+                "decide"
+              ]
+            },
+            "description": "Supervisor (or Admin) of the DA's Woreda. decision: Approve, Reject or Request changes (note of 5+ characters needed for the last two). Approve sends the change to the DA Registry with the supervisor's own token, where it waits for the registry's two-stage approval. A user cannot decide their own request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"{{decision}}\",\n  \"note\": \"{{decision_note}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Decision recorded', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "if (d.registry_sync_state) pm.test('Registry sync recorded', function () { pm.expect(d.registry_sync_state).to.be.oneOf(['Accepted', 'Failed', 'Not sent']); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. OAN Administrator: bulk agent import",
+      "description": "Sign in as an OAN Administrator whose staff user has Intake Officer and Integration Manager on the DA Registry.",
+      "item": [
+        {
+          "name": "3.1 Import template (v3 columns)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agent-imports/template",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agent-imports",
+                "template"
+              ]
+            },
+            "description": "OAN Administrator. The DA Registry's import template v3: 21 columns, required columns, an empty CSV, limits."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 Validate an import file (nothing is sent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agent-imports/validate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agent-imports",
+                "validate"
+              ]
+            },
+            "description": "Checks the columns and every row (required fields, 16-digit Fayda ID, duplicates, phone, email, EC birth month/year, joining date). Nothing reaches the registry. Choose agent-import-sample.csv from this folder.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "agent-import-sample.csv"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 Import agents into the DA Registry",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agent-imports",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agent-imports"
+              ]
+            },
+            "description": "Validates, then uploads the file to the DA Registry and queues it with the admin's own token (needs Intake Officer on the registry). Each row becomes a submission on the registry's two-stage approval. WRITES TO THE REGISTRY: change the Fayda ID and phone in the CSV before each real run, and ask the approvers to reject test rows.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "agent-import-sample.csv"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Queued (201) or row errors (400)', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([201, 400]);",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (value === undefined || value === null || value === '') return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "save('registry_import_id', d.registry_import_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.4 Past imports",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agent-imports?limit={{limit}}&start={{start}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agent-imports"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "{{limit}}",
+                  "description": "Page size"
+                },
+                {
+                  "key": "start",
+                  "value": "{{start}}",
+                  "description": "Offset"
+                }
+              ]
+            },
+            "description": "Imports made from DA Services, newest first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.5 Rows the registry refused (exceptions)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/agent-imports/exceptions?page={{page}}&page_size={{page_size}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "agent-imports",
+                "exceptions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}",
+                  "description": "Page from 1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "{{page_size}}",
+                  "description": "1-200"
+                }
+              ]
+            },
+            "description": "The DA Registry's exceptions list for file imports (needs Integration Manager on the registry), with the reason per row."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -19,7 +19,7 @@ import frappe
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
-from da_services.integrations.da_registry.client import DARegistryError, get_client
+from da_services.integrations.da_registry.client import DARegistryAuthError, DARegistryError, get_client
 from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext, require_roles
 
@@ -134,6 +134,11 @@ def profile_for(ctx: ScopeContext, include_agent: bool = True) -> dict:
 	if include_agent and da_id:
 		try:
 			data["agent"] = get_client().get_da(da_id).to_dict()
+		except DARegistryAuthError as exc:
+			# Roles, scope and menu still come from DA Services; the registry's refusal
+			# (expired token, or no registry role) is reported on the profile screen.
+			data["agent"] = None
+			data["agent_error"] = f"registry refused the token ({exc.http_status_code})"
 		except DARegistryError as exc:
 			data["agent"] = None
 			data["agent_error"] = f"registry unavailable: {exc.__class__.__name__}"

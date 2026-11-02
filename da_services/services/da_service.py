@@ -196,4 +196,11 @@ def _da_reference_to_list_dict(da_ref) -> dict:
 		"specialisation": da_ref.specialisation,
 		"joined_at": da_ref.joined_at,
 		"farmer_count": da_ref.farmer_count,
+		# Master registry columns: Fayda ID, position, and the posting by name
+		"fayda_id": da_ref.fayda_id,
+		"position": da_ref.position,
+		"region_name": da_ref.region_name,
+		"zone_name": da_ref.zone_name,
+		"woreda_name": da_ref.woreda_name,
+		"kebele_name": da_ref.kebele_name,
 	}

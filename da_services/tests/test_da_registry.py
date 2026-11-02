@@ -8,9 +8,10 @@ from da_services.api.v1 import da as da_api
 from da_services.integrations.da_registry.client import (
 	DANotFound,
 	DARegistryContractPending,
-	HttpDARegistryClient,
+	DARegistryError,
 	get_client,
 )
+from da_services.integrations.da_registry.http import HttpDARegistryClient
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.integrations.da_registry.schemas import LifecycleOutcome
 from da_services.services import constants as C
@@ -79,10 +80,31 @@ class TestClientFactory(IntegrationTestCase):
 		self.assertIsInstance(get_client(), MockDARegistryClient)
 		self.assertIs(get_client(), get_client())  # shared instance
 
-	def test_http_backend_is_blocked_until_contract_exists(self):
-		client = HttpDARegistryClient("https://registry.example")
+	def test_http_backend_needs_url_and_service_account(self):
+		keys = ("da_registry_backend", "da_registry_auth", "da_registry_base_url", "da_registry_keycloak")
+		saved = {k: frappe.conf.get(k) for k in keys}
+		try:
+			frappe.conf.da_registry_backend = "http"
+			frappe.conf.da_registry_auth = "service"
+			frappe.conf.da_registry_base_url = "https://registry.example"
+			frappe.conf.da_registry_keycloak = {}
+			with self.assertRaises(DARegistryError):
+				get_client()
+			frappe.conf.da_registry_keycloak = {
+				"token_url": "https://kc/t",
+				"client_id": "c",
+				"client_secret": "s",
+			}
+			self.assertIsInstance(get_client(), HttpDARegistryClient)
+		finally:
+			for k, v in saved.items():
+				frappe.conf[k] = v
+
+	def test_http_backend_has_no_lifecycle_api_yet(self):
+		client = HttpDARegistryClient("https://registry.example", keycloak={})
+		outcome = LifecycleOutcome("DA-000001", "Leave", "On-leave", today(), "r", "sup", "ref-1")
 		with self.assertRaises(DARegistryContractPending):
-			client.get_da("DA-000001")
+			client.push_lifecycle_outcome(outcome)
 
 
 class TestGetDaEndpoint(IntegrationTestCase):
@@ -112,6 +134,24 @@ class TestGetDaEndpoint(IntegrationTestCase):
 		ref = get_da_reference("DA-000001")
 		self.assertEqual(ref.da_id, "DA-000001")
 		self.assertEqual(ref.woreda, "ET04-W01")
+
+	def test_da_id_with_surrounding_spaces_still_resolves(self):
+		frappe.set_user(SUPERVISOR)
+		ref = get_da_reference("  DA-000001 \t")
+		self.assertEqual(ref.da_id, "DA-000001")
+
+	def test_assignment_strips_pasted_da_id_and_scope(self):
+		grant = frappe.new_doc("DA RBAC Assignment")
+		grant.user = SUPERVISOR
+		grant.role = C.ROLE_DA
+		grant.da_id = " DA-000001 "
+		grant.region_scope = " ET04"
+		grant.woreda_scope = "ET04-W01 "
+		grant.effective_from = today()
+		grant.insert(ignore_permissions=True, ignore_links=True)
+		self.assertEqual(grant.da_id, "DA-000001")
+		self.assertEqual(grant.region_scope, "ET04")
+		self.assertEqual(grant.woreda_scope, "ET04-W01")
 
 	def test_supervisor_is_denied_outside_woreda(self):
 		frappe.set_user(SUPERVISOR)

@@ -160,6 +160,21 @@ class TestMe(_Base):
 		self.assertNotIn("/approvals", d["menu"])
 		self.assertNotIn("/agents", d["menu"])
 
+	def test_me_survives_a_registry_token_refusal(self):
+		from unittest.mock import patch
+
+		from da_services.integrations.da_registry.client import DARegistryAuthError
+		from da_services.integrations.da_registry.mock import MockDARegistryClient
+
+		# Roles and menu come from DA Services; a registry 401/403 must not lock the user out.
+		frappe.set_user(DA_USER)
+		with patch.object(MockDARegistryClient, "get_da", side_effect=DARegistryAuthError("no role", 403)):
+			out = me_api.get_me()
+		self.assertEqual(out["status"], "success", out)
+		self.assertIsNone(out["data"]["agent"])
+		self.assertIn("403", out["data"]["agent_error"])
+		self.assertEqual(out["data"]["role"], "DA")
+
 	def test_administrator_is_admin_with_full_menu(self):
 		frappe.set_user("Administrator")
 		d = me_api.get_me()["data"]

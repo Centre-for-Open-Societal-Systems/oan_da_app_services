@@ -20,6 +20,7 @@ from frappe.utils import now_datetime
 
 from da_services.da_services.doctype.da_profile_change_request.da_profile_change_request import OPEN_STATES
 from da_services.integrations.da_registry.client import (
+	DANotFound,
 	DARegistryContractPending,
 	DARegistryError,
 	DARegistryUnavailable,
@@ -41,6 +42,8 @@ DECISIONS = {"Approve": "Approved", "Reject": "Rejected", "Request changes": "Ch
 # the Registry's own re-verification.
 EDITABLE = {
 	"mobile": ("Contact", "phone"),
+	"telegram": ("Contact", "telegram_number"),
+	"alternate_mobile": ("Contact", "alternate_number"),
 	"email": ("Contact", "email"),
 	"language": ("Contact", "language"),
 	"photo": ("Contact", "photo_url"),
@@ -49,6 +52,7 @@ EDITABLE = {
 }
 LOCKED = ("full_name", "first_name", "last_name", "date_of_birth", "dob", "gender", "fayda_id", "id_number")
 LANGUAGES = ("en", "am", "om", "ti")
+PHONE_FIELDS = ("mobile", "telegram", "alternate_mobile")
 EDUCATION_TIERS = ("Certificate", "Diploma", "Degree", "Masters")
 
 FIELDS = [
@@ -67,6 +71,7 @@ FIELDS = [
 	"decision_note",
 	"registry_sync_state",
 	"registry_reference",
+	"registry_approval",
 	"registry_error",
 	"applied_at",
 	"client_op_id",
@@ -95,11 +100,20 @@ def _own_da_id(ctx: ScopeContext) -> str:
 # -- view ----------------------------------------------------------------------------
 
 
+def editable_fields() -> dict[str, tuple[str, str]]:
+	"""EDITABLE limited to the fields the configured registry backend can apply."""
+	allowed = get_client().editable_profile_fields
+	if allowed is None:
+		return EDITABLE
+	return {field: spec for field, spec in EDITABLE.items() if spec[1] in allowed}
+
+
 def my_profile(ctx: ScopeContext | None = None) -> dict:
 	"""The DA's profile as the Registry holds it, plus open change requests."""
 	ctx = ctx or require_roles(C.ROLE_DA)
 	da_id = _own_da_id(ctx)
 	ref = get_da_reference(da_id, ctx)
+	_refresh_own_registry_approvals(da_id)
 	profile = {
 		"da_id": ref.da_id,
 		"full_name": ref.full_name,
@@ -116,16 +130,37 @@ def my_profile(ctx: ScopeContext | None = None) -> dict:
 		"active_status": ref.active_status,
 		"joined_at": ref.joined_at,
 		"fayda_status": ref.fayda_status,
+		# Demographics & personal details, as the DA Registry holds them
+		"salutation": ref.salutation,
+		"first_name": ref.first_name,
+		"father_name": ref.father_name,
+		"grandfather_name": ref.grandfather_name,
+		"fayda_id": ref.fayda_id,
+		"gender": ref.gender,
+		"marital_status": ref.marital_status,
+		"birth_month_ec": ref.birth_month_ec,
+		"birth_month_name": ref.birth_month_name,
+		"birth_year_ec": ref.birth_year_ec,
+		"telegram_number": ref.telegram_number,
+		"alternate_number": ref.alternate_number,
+		"position": ref.position,
+		"country": ref.country,
+		"region_name": ref.region_name,
+		"zone_name": ref.zone_name,
+		"woreda_name": ref.woreda_name,
+		"kebele_name": ref.kebele_name,
 	}
 	pending = frappe.get_all(
 		"DA Profile Change Request",
-		filters={"da_id": da_id, "status": ("in", list(OPEN_STATES))},
+		filters={"da_id": da_id},
+		# Open here, or applied and still waiting for the registry's own approval
+		or_filters=[["status", "in", list(OPEN_STATES)], ["registry_approval", "=", "Pending"]],
 		fields=FIELDS,
 		order_by="creation desc",
 	)
 	return {
 		"profile": profile,
-		"editable_fields": sorted(EDITABLE),
+		"editable_fields": sorted(editable_fields()),
 		"locked_fields": list(LOCKED),
 		"pending_requests": [serialize(r) for r in pending],
 	}
@@ -149,6 +184,12 @@ def _validate_changes(changes: dict) -> str:
 	unknown = sorted(set(changes) - set(EDITABLE))
 	if unknown:
 		frappe.throw(_("Unknown field(s): {0}").format(", ".join(unknown)), frappe.ValidationError)
+	unsupported = sorted(set(changes) - set(editable_fields()))
+	if unsupported:
+		frappe.throw(
+			_("The DA Registry does not hold {0}; it cannot be changed here.").format(", ".join(unsupported)),
+			frappe.ValidationError,
+		)
 	sections = {EDITABLE[f][0] for f in changes}
 	if len(sections) > 1:
 		frappe.throw(
@@ -162,8 +203,8 @@ def _validate_changes(changes: dict) -> str:
 			frappe.throw(_("{0} is too long.").format(field), frappe.ValidationError)
 		if field == "email" and not frappe.utils.validate_email_address(value):
 			frappe.throw(_("email is not a valid address."), frappe.ValidationError)
-		if field == "mobile" and not frappe.utils.validate_phone_number(value, throw=False):
-			frappe.throw(_("mobile is not a valid phone number."), frappe.ValidationError)
+		if field in PHONE_FIELDS and not frappe.utils.validate_phone_number(value, throw=False):
+			frappe.throw(_("{0} is not a valid phone number.").format(field), frappe.ValidationError)
 		if field == "language" and value not in LANGUAGES:
 			frappe.throw(
 				_("language must be one of {0}.").format(", ".join(LANGUAGES)), frappe.ValidationError
@@ -198,6 +239,7 @@ def submit_change_request(
 	section = _validate_changes(changes)
 	da_id = _own_da_id(ctx)
 	ref = get_da_reference(da_id, ctx)
+	_refresh_own_registry_approvals(da_id)
 
 	if frappe.db.exists(
 		"DA Profile Change Request", {"da_id": da_id, "section": section, "status": ("in", list(OPEN_STATES))}
@@ -208,9 +250,19 @@ def submit_change_request(
 			),
 			frappe.ValidationError,
 		)
+	# The registry takes one pending change per DA and section.
+	if frappe.db.exists(
+		"DA Profile Change Request", {"da_id": da_id, "section": section, "registry_approval": "Pending"}
+	):
+		frappe.throw(
+			_("Your previous {0} change is still waiting for the DA Registry's approval.").format(section),
+			frappe.ValidationError,
+		)
 
 	current = {
 		"mobile": ref.phone,
+		"telegram": ref.telegram_number,
+		"alternate_mobile": ref.alternate_number,
 		"email": ref.email,
 		"language": ref.language,
 		"photo": ref.photo_url,
@@ -374,8 +426,100 @@ def _apply(doc) -> None:
 		return
 	doc.db_set("registry_sync_state", "Accepted", update_modified=False)
 	doc.db_set("registry_reference", result.external_reference, update_modified=False)
+	doc.db_set("registry_approval", "Pending", update_modified=False)
 	doc.db_set("applied_at", now_datetime(), update_modified=False)
 	doc.db_set("status", "Applied", update_modified=True)
+
+
+# -- registry approval read-back -------------------------------------------------------
+
+
+def sync_registry_approvals(limit: int = 200) -> int:
+	"""Read the registry's two-stage decision on changes DA Services has pushed.
+
+	Scheduled every 15 minutes. A pushed change shows on the profile only once the
+	registry approves it, so the DA is told when that happens (or when it is rejected).
+	Returns the number of rows that got a final decision.
+	"""
+	if str(frappe.conf.get("da_registry_auth") or "service").lower() == "user":
+		# A scheduled job has no signed-in user, so no token to call the registry with;
+		# the DA's own calls read the decision back instead (_refresh_own_registry_approvals).
+		return 0
+	names = frappe.get_all(
+		"DA Profile Change Request",
+		filters={"registry_sync_state": "Accepted", "registry_approval": "Pending"},
+		pluck="name",
+		order_by="applied_at asc",
+		limit=limit,
+	)
+	if not names:
+		return 0
+	client = get_client()
+	decided = sum(
+		1 for name in names if _read_back(frappe.get_doc("DA Profile Change Request", name), client)
+	)
+	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+	return decided
+
+
+def _refresh_own_registry_approvals(da_id: str) -> None:
+	"""Read the registry's decision on this DA's pushed changes with the caller's own
+	credentials, when the DA opens their profile or sends a new request."""
+	names = frappe.get_all(
+		"DA Profile Change Request",
+		filters={"da_id": da_id, "registry_sync_state": "Accepted", "registry_approval": "Pending"},
+		pluck="name",
+	)
+	if not names:
+		return
+	client = get_client()
+	for name in names:
+		_read_back(frappe.get_doc("DA Profile Change Request", name), client)
+
+
+def _read_back(doc, client) -> str | None:
+	"""Record the registry's decision on one pushed change and tell the DA.
+
+	Returns the final outcome ("Approved" / "Rejected"), or None while the registry is
+	still deciding or cannot be asked right now.
+	"""
+	if not doc.registry_reference:
+		doc.db_set("registry_error", "The DA Registry gave no change request id", update_modified=False)
+		doc.db_set("registry_approval", "Rejected", update_modified=False)
+		return None
+	try:
+		outcome = client.change_request_status(doc.registry_reference)
+	except DANotFound:
+		doc.db_set(
+			"registry_error", "The DA Registry no longer has this change request", update_modified=False
+		)
+		doc.db_set("registry_approval", "Rejected", update_modified=False)
+		return None
+	except DARegistryError:
+		# Registry down or refusing for now: try again next time.
+		frappe.log_error(title=f"DA Profile Change Request {doc.name}: registry status check failed")
+		return None
+	if outcome == "Pending":
+		return None
+	doc.db_set("registry_approval", outcome, update_modified=True)
+	titles = {
+		"Approved": _("Your {0} update is now in the DA Registry"),
+		"Rejected": _("The DA Registry rejected your {0} update"),
+	}
+	try:
+		notify_da(
+			doc.da_id,
+			kind="Approval",
+			title=titles[outcome].format(doc.section.lower())[:140],
+			body=None,
+			href="/profile",
+			event="profile_change_registry_decided",
+			reference_doctype=doc.doctype,
+			reference_name=doc.name,
+		)
+	except Exception:
+		frappe.log_error(title=f"DA Profile Change Request {doc.name}: notification failed")
+	return outcome
 
 
 def _notify(doc) -> None:

@@ -1,10 +1,13 @@
 """DA self-service profile: change request → Supervisor decision → Registry (FSD 3.7)."""
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
 from da_services.api.v1 import profile_self as api
+from da_services.integrations.da_registry.mapper import PROFILE_FIELDS
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import profile as svc
@@ -107,6 +110,22 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual([p["name"] for p in d["pending_requests"]], [r["name"]])
 		self.assertEqual(d["profile"]["mobile"], "+251911000001")
 
+	def test_da_id_in_the_request_is_ignored(self):
+		# The registry trusts the service account with every DA, so the DA-ID must come
+		# from the signed-in user's own assignment: DA1 naming DA3's record changes DA1's.
+		out = self._submit(da_id="DA-000004", internal_record_id="someone-else")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["da_id"], "DA-000001")
+		self.assertFalse(frappe.db.exists("DA Profile Change Request", {"da_id": "DA-000004"}))
+
+	def test_identity_fields_cannot_be_changed(self):
+		frappe.set_user(DA1)
+		frappe.db.commit()  # nosemgrep: error calls below roll back uncommitted rows
+		for field in ("first_name", "full_name", "fayda_id", "gender"):
+			out = api.submit(changes={field: "X"}, reason="test")
+			self.assertEqual(out["status"], "error", (field, out))
+		self.assertEqual(frappe.db.count("DA Profile Change Request"), 0)
+
 	def test_submit_validation(self):
 		frappe.set_user(DA1)
 		frappe.db.commit()  # nosemgrep: error calls below roll back uncommitted rows
@@ -162,6 +181,39 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		frappe.set_user(DA1)
 		self.assertEqual(api.my_profile()["data"]["profile"]["mobile"], "+251911999888")
 
+	def test_registry_decision_is_read_back_and_the_da_told(self):
+		saved = frappe.conf.get("da_registry_auth")
+		frappe.conf.da_registry_auth = "service"  # the read-back needs the service identity
+		self.addCleanup(frappe.conf.__setitem__, "da_registry_auth", saved)
+		r = self._submit()["data"]
+		frappe.set_user(SUP)
+		api.decide(r["name"], decision="Approve")
+		frappe.set_user("Administrator")
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Pending"
+		)
+		self.assertEqual(svc.sync_registry_approvals(), 1)  # the mock registry approves at once
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Approved"
+		)
+		self.assertEqual(
+			frappe.db.count("DA Notification", {"user": DA1, "event": "profile_change_registry_decided"}), 1
+		)
+		self.assertEqual(svc.sync_registry_approvals(), 0)  # decided rows are not read again
+
+	def test_telegram_and_alternate_number_are_contact_changes(self):
+		out = self._submit(changes={"telegram": "+251911222333", "alternate_mobile": "+251911444555"})
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["section"], "Contact")
+		frappe.set_user(SUP)
+		d = api.decide(out["data"]["name"], decision="Approve")["data"]
+		self.assertEqual(d["registry_sync_state"], "Accepted", d)
+		frappe.set_user(DA1)
+		p = api.my_profile()["data"]["profile"]
+		self.assertEqual((p["telegram_number"], p["alternate_number"]), ("+251911222333", "+251911444555"))
+		bad = api.submit(changes={"telegram": "not-a-phone"}, reason="test")
+		self.assertEqual(bad["status"], "error", bad)
+
 	def test_reject_and_request_changes_need_a_note(self):
 		r = self._submit()["data"]
 		frappe.set_user(SUP)
@@ -204,6 +256,77 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual((d["status"], d["registry_sync_state"]), ("Approved", "Failed"))
 		self.assertIn("DARegistryUnavailable", d["registry_error"])
 
+	def test_fields_the_registry_does_not_hold_are_not_editable(self):
+		# The staff API has no language or photo (the http client says so): the portal
+		# must not offer them, and a request for one is refused before anything is stored.
+		with patch.object(MockDARegistryClient, "editable_profile_fields", frozenset(PROFILE_FIELDS)):
+			frappe.set_user(DA1)
+			fields = api.my_profile()["data"]["editable_fields"]
+			self.assertNotIn("language", fields)
+			self.assertNotIn("photo", fields)
+			self.assertIn("telegram", fields)
+			out = api.submit(changes={"language": "am"}, reason="test")
+			self.assertEqual(out["status"], "error", out)
+			self.assertIn("does not hold", out["message"])
+		self.assertEqual(frappe.db.count("DA Profile Change Request"), 0)
+
+	def test_a_change_waiting_for_the_registry_blocks_the_next_one_in_that_section(self):
+		r = self._submit()["data"]
+		frappe.set_user(SUP)
+		api.decide(r["name"], decision="Approve")
+		frappe.db.commit()  # nosemgrep
+		with patch.object(MockDARegistryClient, "change_request_status", return_value="Pending"):
+			frappe.set_user(DA1)
+			d = api.my_profile()["data"]
+			self.assertEqual([p["name"] for p in d["pending_requests"]], [r["name"]])  # still waiting
+			out = api.submit(changes={"mobile": "+251911777666"}, reason="test")
+			self.assertEqual(out["status"], "error", out)
+			self.assertIn("waiting for the DA Registry", out["message"])
+			ok = api.submit(changes={"specialisation": "Livestock"}, reason="test")  # other section
+			self.assertEqual(ok["status"], "success", ok)
+		# The registry decides; the DA's next visit reads it back and the section is free again.
+		frappe.set_user(DA1)
+		d = api.my_profile()["data"]
+		self.assertEqual([p["name"] for p in d["pending_requests"]], [ok["data"]["name"]])
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Approved"
+		)
+		self.assertEqual(api.submit(changes={"mobile": "+251911777666"}, reason="test")["status"], "success")
+
+	def test_the_da_reads_the_registry_decision_back_with_their_own_token(self):
+		saved = frappe.conf.get("da_registry_auth")
+		frappe.conf.da_registry_auth = "user"  # no scheduled read-back in this mode
+		self.addCleanup(frappe.conf.__setitem__, "da_registry_auth", saved)
+		r = self._submit()["data"]
+		frappe.set_user(SUP)
+		api.decide(r["name"], decision="Approve")
+		self.assertEqual(svc.sync_registry_approvals(), 0)
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Pending"
+		)
+		frappe.set_user(DA1)
+		api.my_profile()
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Approved"
+		)
+		self.assertEqual(
+			frappe.db.count("DA Notification", {"user": DA1, "event": "profile_change_registry_decided"}), 1
+		)
+
+	def test_the_scheduled_read_back_works_from_a_fresh_process(self):
+		saved = frappe.conf.get("da_registry_auth")
+		frappe.conf.da_registry_auth = "service"
+		self.addCleanup(frappe.conf.__setitem__, "da_registry_auth", saved)
+		r = self._submit()["data"]
+		frappe.set_user(SUP)
+		api.decide(r["name"], decision="Approve")
+		MockDARegistryClient.reset()  # the scheduler worker's mock never saw the push
+		frappe.set_user("Administrator")
+		self.assertEqual(svc.sync_registry_approvals(), 1)
+		self.assertEqual(
+			frappe.db.get_value("DA Profile Change Request", r["name"], "registry_approval"), "Approved"
+		)
+
 	def test_rows_cannot_be_deleted_or_edited_through_desk(self):
 		r = (
 			svc.submit_change_request(changes={"language": "am"}, ctx=get_scope_context(DA1))
@@ -216,3 +339,11 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.ValidationError):
 			frappe.delete_doc("DA Profile Change Request", r["name"], ignore_permissions=True)
+
+
+class TestRegistryReadBackWithUserTokens(IntegrationTestCase):
+	def test_the_scheduled_read_back_is_skipped_without_a_service_identity(self):
+		saved = frappe.conf.get("da_registry_auth")
+		frappe.conf.da_registry_auth = "user"
+		self.addCleanup(frappe.conf.__setitem__, "da_registry_auth", saved)
+		self.assertEqual(svc.sync_registry_approvals(), 0)

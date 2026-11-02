@@ -4,16 +4,20 @@ DA Services never owns DA master data and never reads another system's database.
 talks to the DA Registry through this interface only. Two implementations exist:
 
 - ``MockDARegistryClient`` (mock.py): in-memory fixtures for local development and tests.
-- ``HttpDARegistryClient``: the real adapter. Its target is still an open decision with
-  the team (OpenG2P Gen 2 directly, or the Part 1 FastAPI services, see README), so it
-  raises ``DARegistryContractPending`` until the contract is agreed. Service code is
-  written against the interface, so switching is a configuration change.
+- ``HttpDARegistryClient`` (http.py): the DA Registry staff API (OpenG2P), called server
+  to server. Whose token it sends is set per site: the signed-in user's own staff IAM
+  token (``"user"``, a wrapper around the registry) or the ``da-services-backend``
+  Keycloak service account (``"service"``). Service code is written against the
+  interface, so switching is a configuration change.
 
-Select the backend per site in ``site_config.json``::
+Select the backend per site in ``site_config.json`` (full example in
+``config.example.json``)::
 
     "da_registry_backend": "mock" | "http",
-    "da_registry_base_url": "https://...",
-    "da_registry_timeout_seconds": 10
+    "da_registry_auth": "user" | "service",
+    "da_registry_base_url": "https://staff-da-registry...",
+    "da_registry_timeout_seconds": 10,
+    "da_registry_keycloak": {"token_url": "...", "client_id": "...", "client_secret": "..."}
 """
 
 from __future__ import annotations
@@ -41,8 +45,25 @@ class DARegistryContractPending(DARegistryError):
 	"""The HTTP adapter cannot be used until the API contract is confirmed."""
 
 
+class DARegistryAuthError(DARegistryError):
+	"""The registry refused the caller's own token: 401 (missing, expired or not a staff
+	IAM token: sign in again) or 403 (the user lacks the registry role for the call).
+
+	Carries ``http_status_code`` so an API that does not catch it answers with that
+	status instead of 500, and the frontend can send the user back to sign-in.
+	"""
+
+	def __init__(self, message: str, http_status_code: int = 401):
+		super().__init__(message)
+		self.http_status_code = http_status_code
+
+
 class DARegistryClient(ABC):
 	"""What Part 2 needs from the registry, and nothing more."""
+
+	# ProfileUpdate.changes keys this backend can apply (the registry names in
+	# services/profile.py EDITABLE). None: every portal field.
+	editable_profile_fields: frozenset[str] | None = None
 
 	@abstractmethod
 	def get_da(self, da_id: str) -> DAReference:
@@ -78,31 +99,26 @@ class DARegistryClient(ABC):
 		the original result instead of applying the change twice.
 		"""
 
+	@abstractmethod
+	def import_agents_file(self, filename: str, content: bytes) -> IntegrationResult:
+		"""Hand a bulk-import file (the registry's DA import template) to the registry.
 
-class HttpDARegistryClient(DARegistryClient):
-	def __init__(self, base_url: str, timeout: int = 10):
-		self.base_url = base_url.rstrip("/")
-		self.timeout = timeout
+		The registry validates each row in the background: a valid row becomes a
+		submission on its two-stage approval, a failed row lands in the exceptions list.
+		``external_reference`` is the registry's import file id.
+		"""
 
-	def get_da(self, da_id: str) -> DAReference:
-		raise DARegistryContractPending(
-			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
-		)
+	@abstractmethod
+	def list_import_exceptions(self, *, page: int = 1, page_size: int = 50) -> dict:
+		"""Import rows the registry could not take, newest first: {"items": [...], "total": n}."""
 
-	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
-		raise DARegistryContractPending(
-			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
-		)
+	@abstractmethod
+	def change_request_status(self, reference: str) -> str:
+		"""The registry's approval of a pushed profile change: Pending, Approved or Rejected.
 
-	def push_profile_update(self, update: ProfileUpdate) -> IntegrationResult:
-		raise DARegistryContractPending(
-			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
-		)
-
-	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
-		raise DARegistryContractPending(
-			"DA Registry HTTP contract is not confirmed yet (OpenG2P Gen 2 vs Part 1 service APIs)."
-		)
+		``reference`` is the IntegrationResult.external_reference push_profile_update
+		returned. Raises DANotFound when the registry has no such change request.
+		"""
 
 
 def get_client() -> DARegistryClient:
@@ -113,8 +129,7 @@ def get_client() -> DARegistryClient:
 
 		return MockDARegistryClient.shared()
 	if backend == "http":
-		base_url = frappe.conf.get("da_registry_base_url")
-		if not base_url:
-			raise DARegistryError("da_registry_base_url is not set in site_config.json")
-		return HttpDARegistryClient(base_url, int(frappe.conf.get("da_registry_timeout_seconds") or 10))
+		from .http import HttpDARegistryClient
+
+		return HttpDARegistryClient.from_conf()
 	raise DARegistryError(f"Unknown da_registry_backend: {backend!r}")
