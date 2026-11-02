@@ -74,6 +74,29 @@ class FarmerRegistryClient(ABC):
 		pass
 
 	@abstractmethod
+	def search_farmers(
+		self,
+		*,
+		search_text: str = "",
+		filter_by: dict | None = None,
+		page: int = 1,
+		page_size: int = 50,
+	) -> dict:
+		"""Search the Farmer register live (DA-272).
+
+		Args:
+		    search_text: Free text the registry matches on name / ids
+		    filter_by: {woreda, kebele, state} as DA codes; translated to the
+		        registry's *_name filters by the implementation
+		    page: 1-based page number (registry current_page)
+		    page_size: Rows per page
+
+		Returns:
+		    {"items": [FarmerListItem], "page", "page_size", "total", "number_of_pages"}
+		"""
+		pass
+
+	@abstractmethod
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
 		"""Get land plots for a farmer.
 
@@ -82,6 +105,30 @@ class FarmerRegistryClient(ABC):
 
 		Returns:
 		    List of Plot objects
+		"""
+		pass
+
+	def get_farmer_photo(self, farmer_id: str) -> dict | None:
+		"""The farmer's record photo as {"url", "document_id"}, or None when there is none.
+
+		The url is a short-lived signed link, so it is read fresh and never cached.
+		"""
+		return None
+
+	@abstractmethod
+	def get_change_requests(
+		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
+	) -> list[dict]:
+		"""Change requests raised against a farmer (DA-272).
+
+		Calls ``/change-requests/get_change_requests`` per register tab and
+		returns the raw rows, newest first.
+
+		Args:
+		    farmer_id: Farmer Registry internal_record_id
+		    tab: One tab key (farmer, location, household, land, crop, livestock);
+		        all tabs when omitted
+		    status: Keep only this approval_status (PENDING, APPROVED, REJECTED)
 		"""
 		pass
 
@@ -155,6 +202,80 @@ class FarmerRegistryClient(ABC):
 		Raises:
 		    FarmerRegistryError: Registry unavailable or error
 		"""
+		pass
+
+	# -- Intake form registration ------------------------------------------
+	# Section-by-section registration, the path the staff portal uses:
+	# upload the identity document, save each form section into one draft
+	# submission, then finalize it for approval. See intake.py.
+
+	@abstractmethod
+	def render_intake_form(self) -> dict:
+		"""Return the configured intake form: {form_id, register_id, tabs: [{sections: [...]}]}."""
+		pass
+
+	@abstractmethod
+	def get_registers(self) -> list[dict]:
+		"""Return every register as [{register_id, register_mnemonic, ...}]."""
+		pass
+
+	@abstractmethod
+	def get_intake_forms(self) -> list[dict]:
+		"""Return the intake forms of the Farmer register: [{form_id, form_mnemonic, register_id, ...}]."""
+		pass
+
+	@abstractmethod
+	def get_attribute_values(self, attribute_id: str) -> list[dict]:
+		"""Return a Master Data code list: [{value_id, value_code, value_display, ...}]."""
+		pass
+
+	@abstractmethod
+	def get_geo_levels(self) -> list[dict]:
+		"""Return Master Data geo levels: [{level_id, level_mnemonic}] (region, zone, woreda, kebele)."""
+		pass
+
+	@abstractmethod
+	def get_geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
+		"""Return the places on one geo level, optionally under a parent place."""
+		pass
+
+	@abstractmethod
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""Upload a file to the registry document store and return its document_id."""
+		pass
+
+	@abstractmethod
+	def save_intake_section(self, section: dict) -> dict:
+		"""Save one section into a draft intake submission.
+
+		Args:
+		    section: {submission_id (None for the first section), form_id,
+		        register_id, section_id, section_register_id, section_payload,
+		        documents (optional)}.
+
+		Returns:
+		    {"success", "submission_id", "status", "error_code", "error_message"}
+		"""
+		pass
+
+	@abstractmethod
+	def finalize_intake_submission(self, submission_id: str) -> dict:
+		"""Finalize a draft submission so it goes for approval.
+
+		Returns:
+		    {"success", "submission_id", "draft_status", "approval_status",
+		     "status", "error_code", "error_message"}
+		"""
+		pass
+
+	@abstractmethod
+	def get_intake_submission(self, submission_id: str) -> dict | None:
+		"""Read a submission back (draft_status, approval_status, section_payloads)."""
+		pass
+
+	@abstractmethod
+	def delete_intake_submission(self, submission_id: str) -> bool:
+		"""Delete a draft submission the DA side gave up on. False when it no longer exists."""
 		pass
 
 

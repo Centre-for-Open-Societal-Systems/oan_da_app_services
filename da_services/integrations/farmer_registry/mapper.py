@@ -13,6 +13,32 @@ from .schemas import Farmer, FarmerListItem, Plot
 INGEST_SENDER_ID = "farmer-partner"
 INGEST_STAFF_SIGNATURE = "STAFF_AUTHENTICATED"
 
+# DA Farmer Reference.registration_state. The live staff register uses ACTIVE
+# for a current farmer; that value is not one of these options.
+_CACHE_REGISTRATION_STATES = frozenset({"DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED", "INACTIVE"})
+_REGISTRY_STATE_ALIASES = {"ACTIVE": "APPROVED"}
+
+
+def cache_registration_state(state: str | None) -> str:
+	"""Return a registration_state the DA Farmer Reference select will accept."""
+	value = (state or "").strip()
+	if value in _CACHE_REGISTRATION_STATES:
+		return value
+	upper = value.upper()
+	if upper in _CACHE_REGISTRATION_STATES:
+		return upper
+	return _REGISTRY_STATE_ALIASES.get(upper, "APPROVED")
+
+
+def registration_message_id(form: dict[str, Any]) -> str:
+	"""Our reference for one registration attempt.
+
+	A client-supplied idempotency key becomes the id, so a retried submission
+	is recognised instead of registering twice.
+	"""
+	op_id = form.get("client_op_id")
+	return f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
+
 
 def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	"""Build the Farmer Registry ingest envelope from a DA registration form.
@@ -112,18 +138,119 @@ def da_form_to_ingest_payload(form: dict[str, Any]) -> dict[str, Any]:
 	if form.get("farmer_reference_id"):
 		payload["farmer_reference_id"] = form["farmer_reference_id"]
 
-	# A client-supplied idempotency key becomes the message_id, so a retried
-	# submission reaches the registry with the same id instead of a new one.
-	op_id = form.get("client_op_id")
-	message_id = f"da-svc-{op_id}" if op_id else f"da-svc-{uuid.uuid4()}"
 	# The Staff API wraps this object as {"body": ...}, so these fields are $.body.header.*.
 	return {
 		"header": {
-			"message_id": message_id,
+			"message_id": registration_message_id(form),
 			"sender_id": INGEST_SENDER_ID,
 			"signature": INGEST_STAFF_SIGNATURE,
 		},
 		"message": {"payload": payload},
+	}
+
+
+def change_request_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+	"""Map one get_change_requests row -> the DA change-request view.
+
+	approval_status is what the Woreda officer has done with it: PENDING,
+	APPROVED or REJECTED.
+	"""
+	return {
+		"change_request_id": row.get("change_request_id"),
+		"status": row.get("approval_status"),
+		"tab_id": row.get("tab_id"),
+		"section_id": row.get("section_id"),
+		"source": row.get("source_partner_id"),
+		"created_by": row.get("created_by"),
+		"created_at": row.get("created_at"),
+		"approved_by": row.get("approved_by"),
+		"approved_at": row.get("approved_at"),
+		"verifications_required": row.get("no_of_verifications_required"),
+		"verifications_done": row.get("no_of_verifications_done"),
+	}
+
+
+# Registry bookkeeping on every intake record row; not useful to a DA screen.
+_RECORD_NOISE = frozenset(
+	{
+		"search_text",
+		"record_status_reason",
+		"application_reference",
+		"created_by",
+		"created_at",
+		"last_approved_at",
+		"last_approved_by",
+		"record_image_document_id",
+		"link_foundational_id",
+	}
+)
+
+
+def registration_status(submission: dict[str, Any]) -> str:
+	"""DRAFT | PENDING_APPROVAL | APPROVED | REJECTED from the registry's two status fields."""
+	approval = str(submission.get("approval_status") or "").upper()
+	if approval in ("APPROVED", "REJECTED"):
+		return approval
+	if str(submission.get("draft_status") or "").upper() == "FINAL":
+		return "PENDING_APPROVAL"
+	return "DRAFT"
+
+
+def registration_to_dict(submission: dict[str, Any]) -> dict[str, Any]:
+	"""Map get_intake_form_submission -> the DA registration view (DA-272).
+
+	Keeps the submission header, and every saved section with its rows minus
+	the registry's bookkeeping columns.
+	"""
+	sections = []
+	for section in submission.get("section_payloads") or []:
+		if not isinstance(section, dict):
+			continue
+		sections.append(
+			{
+				"section_id": section.get("section_id"),
+				"section_register_id": section.get("section_register_id"),
+				"is_list": bool(section.get("is_list")),
+				"records": [
+					{k: v for k, v in rec.items() if k not in _RECORD_NOISE}
+					for rec in (section.get("records") or [])
+					if isinstance(rec, dict)
+				],
+				"documents": list(section.get("documents") or []),
+			}
+		)
+	return {
+		"submission_id": submission.get("submission_id"),
+		"application_reference": submission.get("application_reference"),
+		"record_name": submission.get("record_name"),
+		"status": registration_status(submission),
+		"draft_status": submission.get("draft_status"),
+		"approval_status": submission.get("approval_status"),
+		"form_id": submission.get("form_id"),
+		"register_id": submission.get("register_id"),
+		"created_by": submission.get("created_by"),
+		"finalized_at": submission.get("finalized_at"),
+		"approved_by": submission.get("approved_by"),
+		"approved_at": submission.get("approved_at"),
+		"sections": sections,
+	}
+
+
+def list_item_to_dict(item: FarmerListItem) -> dict[str, Any]:
+	"""Map a FarmerListItem -> the same keys the cached /farmers rows carry."""
+	return {
+		"farmer_id": item.farmer_id,
+		"reg_id": item.reg_id,
+		"farmer_name": item.name,
+		"phone": item.phone,
+		"kebele": item.kebele,
+		"woreda": item.woreda,
+		"region": item.region,
+		"total_land_hectares": item.total_land_area,
+		"total_plots": item.total_plots,
+		"photo_url": item.photo_url,
+		"registration_state": cache_registration_state(item.state),
+		"registered_at": item.registration_date,
 	}
 
 
@@ -154,7 +281,7 @@ def farmer_to_reference_dict(farmer: Farmer) -> dict[str, Any]:
 		"household_size": farmer.household_size,
 		"total_land_hectares": farmer.total_land_area,
 		"land_ownership_type": farmer.land_ownership,
-		"registration_state": farmer.state,
+		"registration_state": cache_registration_state(farmer.state),
 		"registered_at": farmer.registration_date,
 		"source_of_income": farmer.source_of_income,
 		"is_psnp_beneficiary": farmer.is_psnp_user,
@@ -346,6 +473,19 @@ def registry_record_to_farmer(record: dict[str, Any], farmer_id: str) -> Farmer:
 	)
 
 
+def record_summary(record: dict[str, Any]) -> dict[str, Any]:
+	"""Phone and total land area from a get_subject_record row (search rows leave both out).
+
+	phone_numbers is [{type, number, is_primary}]; the primary one wins.
+	"""
+	phones = [p for p in (record.get("phone_numbers") or []) if isinstance(p, dict) and p.get("number")]
+	primary = next((p for p in phones if _truthy(p.get("is_primary"))), phones[0] if phones else {})
+	return {
+		"phone": primary.get("number") or record.get("phone_number"),
+		"total_land_area": _to_float(record.get("total_land_area")),
+	}
+
+
 def search_row_to_list_item(row: dict[str, Any]) -> FarmerListItem:
 	"""Map one search_in_a_register row (SearchResultData) -> FarmerListItem.
 
@@ -371,6 +511,8 @@ def search_row_to_list_item(row: dict[str, Any]) -> FarmerListItem:
 		woreda=display.get("woreda_name"),
 		region=display.get("region_name"),
 		total_land_area=_to_float(display.get("total_land_area")),
+		# Signed per response, so it is passed on as is and never cached.
+		photo_url=row.get("record_image_url") or None,
 		state=display.get("state") or row.get("state") or "UNKNOWN",
 		registration_date=_to_datetime(row.get("last_approved_at") or row.get("created_at")),
 	)

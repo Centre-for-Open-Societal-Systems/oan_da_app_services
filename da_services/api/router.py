@@ -71,6 +71,7 @@ def _register() -> None:
 		agent_import,
 		agents,
 		assignments,
+		crop_sown,
 		da,
 		dashboard,
 		experts,
@@ -82,6 +83,7 @@ def _register() -> None:
 		notifications,
 		profile_self,
 		rbac,
+		registries,
 		visits,
 	)
 

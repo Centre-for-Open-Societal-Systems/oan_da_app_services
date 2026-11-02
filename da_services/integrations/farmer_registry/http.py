@@ -16,23 +16,27 @@ Staff API endpoints used:
     change-requests/create_change_request   -> update_farmer (one change request per section)
     input-mechanism-data/ingest-data        -> register_farmer
     ingestion-data/search_in_ingestion_data -> get_ingest_status
+
+Intake form registration (farmer_registry_register_mode = "intake"):
+    intake-form-metadata/render_intake_form             -> render_intake_form
+    register-metadata/get_all_registers                 -> get_registers
+    documents/upload_documents                          -> upload_document (multipart)
+    intake-form-data/save_intake_form_submission        -> save_intake_section
+    intake-form-data/finalize_intake_form_submission    -> finalize_intake_submission
+    intake-form-data/get_intake_form_submission         -> get_intake_submission
+    Master Data attributes/get_attribute_values         -> get_attribute_values
+    Master Data geo/get_all_geo_levels, get_geo_level_values
 """
 
-import base64
-import hashlib
-import json
-import re
-import secrets
-import threading
-import time
-import uuid
 from dataclasses import dataclass, field
 from typing import ClassVar
-from urllib.parse import urljoin
 
 import frappe
 import requests
 from frappe import _
+
+from da_services.integrations.staff_api.auth import auth_and_csrf_headers
+from da_services.integrations.staff_api.transport import http_failure, staff_envelope
 
 from .client import (
 	FarmerRegistryClient,
@@ -43,6 +47,7 @@ from .client import (
 from .mapper import (
 	land_record_to_plot,
 	merge_tab_records,
+	record_summary,
 	registry_record_to_farmer,
 	search_row_to_list_item,
 	updates_to_change_requests,
@@ -62,52 +67,19 @@ DEFAULT_TABS: dict[str, str] = {
 # Registry messages that mean "no such record" rather than a failure
 _NOT_FOUND_MARKERS = ("not found", "does not exist", "no record")
 
-# A new client is built per call, so tokens live on the worker, not the instance.
-_STAFF_TOKEN_CACHE: dict[tuple[str, str], dict] = {}
-_STAFF_TOKEN_LOCK = threading.Lock()
-_CC_TOKEN_CACHE: dict[tuple[str, str], dict] = {}
-_CC_TOKEN_LOCK = threading.Lock()
-_TOKEN_SKEW_SECONDS = 30
-_CALLBACK_COOKIE_MAX_AGE = 2100
-
-_LOGIN_FORM_RE = re.compile(r'<form\b[^>]*\bid=["\']kc-form-login["\'][^>]*>', re.IGNORECASE)
-_FORM_ACTION_RE = re.compile(r'\baction=["\']([^"\']+)["\']', re.IGNORECASE)
-_MAX_AGE_RE = re.compile(r"Max-Age=(\d+)", re.IGNORECASE)
+# Discovered register / intake form ids; see HTTPFarmerRegistryClient.register_id
+ID_CACHE_PREFIX = "da_services:farmer_registry:ids"
+ID_CACHE_TTL = 60 * 60
+# Phone and land area of a farmer, read from the record to complete search rows.
+SUMMARY_CACHE_PREFIX = "da_services:farmer_registry:summary"
+SUMMARY_CACHE_TTL = 10 * 60
+# The Farmer intake form on dev is "farmer_ingestion_intake"; matched ignoring spaces, _ and -.
+DEFAULT_INTAKE_FORM_CONTAINS = "Farmer Ingestion"
 
 
-def _set_cookie_chunks(response: requests.Response) -> list[str]:
-	raw_headers = getattr(getattr(response, "raw", None), "headers", None)
-	if raw_headers is not None and hasattr(raw_headers, "getlist"):
-		return [chunk for chunk in raw_headers.getlist("Set-Cookie") if chunk]
-	single = response.headers.get("Set-Cookie")
-	return [single] if single else []
-
-
-def _cookie_value(response: requests.Response, name: str) -> str | None:
-	"""Last Set-Cookie value for name. Also checks the parsed cookie jar."""
-	pattern = re.compile(rf"^{re.escape(name)}=([^;]*)", re.IGNORECASE)
-	found = []
-	for chunk in _set_cookie_chunks(response):
-		match = pattern.match(chunk)
-		if match:
-			found.append(match.group(1).strip().strip('"'))
-	if found and found[-1]:
-		return found[-1]
-	cookie = response.cookies.get(name)
-	if cookie:
-		value = str(cookie).strip().strip('"')
-		return value or None
-	return None
-
-
-def _cookie_max_age(response: requests.Response, name: str) -> int | None:
-	pattern = re.compile(rf"^{re.escape(name)}=", re.IGNORECASE)
-	for chunk in _set_cookie_chunks(response):
-		if pattern.match(chunk):
-			match = _MAX_AGE_RE.search(chunk)
-			if match:
-				return int(match.group(1))
-	return None
+def _squash(value: object) -> str:
+	"""Lower-case alphanumerics only, the way the registry collection matches form names."""
+	return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
 
 def _positive_timeout(value: object, default: float = 30) -> float:
@@ -118,38 +90,6 @@ def _positive_timeout(value: object, default: float = 30) -> float:
 	except ValueError:
 		return default
 	return timeout if timeout > 0 else default
-
-
-def _token_still_valid(entry: dict, *, require_csrf: bool = False) -> bool:
-	if not entry.get("token") or entry.get("expires_at", 0) <= time.time() + _TOKEN_SKEW_SECONDS:
-		return False
-	if require_csrf and not entry.get("csrf"):
-		return False
-	return True
-
-
-def _jwt_expires_at(token: str) -> float | None:
-	"""Read exp. The Staff API checks the signature."""
-	try:
-		payload = token.split(".")[1]
-		payload += "=" * (-len(payload) % 4)
-		claims = json.loads(base64.urlsafe_b64decode(payload))
-		return float(claims["exp"])
-	except IndexError, KeyError, ValueError, json.JSONDecodeError:
-		return None
-
-
-def _keycloak_login_action(html: str, realm_url: str) -> str:
-	"""Pull the credential form action out of the Keycloak login page."""
-	form = _LOGIN_FORM_RE.search(html or "")
-	if not form:
-		raise FarmerRegistryClientError("Keycloak did not return the staff login form")
-	action = _FORM_ACTION_RE.search(form.group(0))
-	url = action.group(1).replace("&amp;", "&") if action else ""
-	expected = realm_url.rstrip("/") + "/login-actions/"
-	if not url.startswith(expected):
-		raise FarmerRegistryClientError("Keycloak login form does not post to the configured staff realm")
-	return url
 
 
 @dataclass
@@ -168,8 +108,8 @@ class StaffResponse:
 
 	@property
 	def not_found(self) -> bool:
-		msg = (self.error_message or "").lower()
-		return (not self.ok) and any(m in msg for m in _NOT_FOUND_MARKERS)
+		text = f"{self.error_message or ''} {self.error_code or ''}".lower().replace("_", " ")
+		return (not self.ok) and any(marker in text for marker in _NOT_FOUND_MARKERS)
 
 
 class HTTPFarmerRegistryClient(FarmerRegistryClient):
@@ -179,6 +119,8 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 	def __init__(self):
 		self.base_url = str(frappe.conf.get("farmer_registry_url", "") or "").rstrip("/")
+		# Code lists and places for the intake form; same staff token and envelope.
+		self.master_data_url = str(frappe.conf.get("farmer_registry_master_data_url", "") or "").rstrip("/")
 		self.api_key = frappe.conf.get("farmer_registry_api_key")
 		self.timeout = _positive_timeout(frappe.conf.get("farmer_registry_timeout"))
 
@@ -187,16 +129,21 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if self.api_key:
 			self.headers["Authorization"] = f"Bearer {self.api_key}"
 
-		# Register / intake / tab identifiers for the Farmer register.
+		# Register / intake / tab identifiers for the Farmer register. The ids are
+		# optional: when absent they are discovered from the registry
+		# (get_all_registers / get_all_intake_forms) and cached for an hour, so a
+		# redeployed registry does not need a site_config change.
 		ingest = frappe.conf.get("farmer_registry_ingest", {}) or {}
 		self.ingest_data_model = ingest.get("data_model", "FARMER_ODK_MODEL")
-		self.ingest_register_id = ingest.get("register_id")
-		self.ingest_intake_form_id = ingest.get("intake_form_id")
-		self.register_id = ingest.get("register_id")
+		self._configured_register_id = ingest.get("register_id") or None
+		self._configured_intake_form_id = ingest.get("intake_form_id") or None
+		self.intake_form_contains = str(
+			frappe.conf.get("farmer_registry_intake_form_contains") or DEFAULT_INTAKE_FORM_CONTAINS
+		)
 		self.tabs = {**DEFAULT_TABS, **(ingest.get("tabs") or {})}
 
 		# Staff IAM login and/or Keycloak client-credentials. Tokens are cached
-		# on the worker; see _STAFF_TOKEN_CACHE and _CC_TOKEN_CACHE.
+		# on the worker by the shared staff auth helper.
 		self.keycloak = frappe.conf.get("farmer_registry_keycloak", {}) or {}
 
 		# Fail fast: a missing or partial config should surface when the client
@@ -235,8 +182,6 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 				"set farmer_registry_keycloak (staff login or service account) or farmer_registry_api_key"
 			)
 
-		if not self.register_id:
-			problems.append("farmer_registry_ingest.register_id (Farmer register id) is required")
 		if not self.ingest_data_model:
 			problems.append("farmer_registry_ingest.data_model is required")
 
@@ -245,248 +190,20 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 	# ------------------------------------------------------------------ auth
 
-	def _staff_session(self) -> tuple[str | None, str | None]:
-		"""Return (access token, csrf) from the IAM callback, cached per worker.
-
-		Returns (None, None) when staff login is not configured. The caller then
-		uses client-credentials or ``farmer_registry_api_key`` and a generated CSRF pair.
-		"""
-		kc = self.keycloak or {}
-		iam = str(kc.get("iam_base_url") or "").rstrip("/")
-		realm = str(kc.get("kc_realm_url") or "").rstrip("/")
-		username = kc.get("username")
-		password = kc.get("password")
-		if not (iam and realm and username and password):
-			return None, None
-
-		cache_key = (iam, str(username))
-
-		cached = _STAFF_TOKEN_CACHE.get(cache_key) or {}
-		if _token_still_valid(cached, require_csrf=True):
-			return cached["token"], cached["csrf"]
-
-		with _STAFF_TOKEN_LOCK:
-			cached = _STAFF_TOKEN_CACHE.get(cache_key) or {}
-			if _token_still_valid(cached, require_csrf=True):
-				return cached["token"], cached["csrf"]
-
-			token, csrf, expires_at = self._login_via_iam(
-				iam,
-				realm,
-				str(username),
-				str(password),
-				str(kc.get("login_provider_id") or "1"),
-			)
-			_STAFF_TOKEN_CACHE[cache_key] = {"token": token, "csrf": csrf, "expires_at": expires_at}
-			return token, csrf
-
-	def _login_via_iam(
-		self, iam: str, realm: str, username: str, password: str, provider_id: str
-	) -> tuple[str, str, float]:
-		"""Run the staff login and return (X-Access-Token, X-CSRF-Token, expires_at).
-
-		01 POST {iam}/auth/start_authentication_transaction -> authorization URL
-		02 GET  that URL -> Keycloak login form action
-		03 POST the form (no redirect) -> location is the IAM callback URL
-		04 GET  the callback (no redirect) -> Set-Cookie X-Access-Token and X-CSRF-Token
-
-		The authorization code in the callback URL is not logged.
-		"""
-		session = requests.Session()
-		timeout = self.timeout
-		try:
-			return self._exchange_staff_login(session, iam, realm, username, password, provider_id, timeout)
-		finally:
-			session.close()
-
-	def _exchange_staff_login(
-		self,
-		session: requests.Session,
-		iam: str,
-		realm: str,
-		username: str,
-		password: str,
-		provider_id: str,
-		timeout: float,
-	) -> tuple[str, str, float]:
-		try:
-			started = session.post(
-				f"{iam}/auth/start_authentication_transaction",
-				params={"id": provider_id, "redirect_uri": "/en"},
-				timeout=timeout,
-			)
-		except requests.RequestException as e:
-			frappe.log_error(title="Farmer Registry Auth Error", message=f"IAM login start failed: {e!s}")
-			raise FarmerRegistryServerError("Could not reach IAM to start staff login") from e
-
-		if started.status_code != 200:
-			raise FarmerRegistryClientError(
-				f"IAM did not start staff login (HTTP {started.status_code})",
-				status_code=started.status_code,
-			)
-		try:
-			body = started.json()
-		except ValueError as e:
-			raise FarmerRegistryServerError("IAM login response was not JSON") from e
-		redirect_url = body.get("redirectUrl") if isinstance(body, dict) else ""
-
-		if not str(redirect_url).startswith(realm + "/protocol/openid-connect/auth?"):
-			raise FarmerRegistryClientError("IAM authorization URL is not on the configured staff realm")
-
-		try:
-			form_page = session.get(redirect_url + "&prompt=login", timeout=timeout)
-		except requests.RequestException as e:
-			frappe.log_error(title="Farmer Registry Auth Error", message=f"Keycloak login page failed: {e!s}")
-			raise FarmerRegistryServerError("Could not open the Keycloak staff login page") from e
-
-		if form_page.status_code != 200:
-			raise FarmerRegistryClientError(
-				f"Keycloak login page failed (HTTP {form_page.status_code})",
-				status_code=form_page.status_code,
-			)
-
-		try:
-			signed_in = session.post(
-				_keycloak_login_action(form_page.text, realm),
-				data={"username": username, "password": password, "credentialId": ""},
-				timeout=timeout,
-				allow_redirects=False,
-			)
-		except requests.RequestException as e:
-			frappe.log_error(title="Farmer Registry Auth Error", message=f"Keycloak sign-in failed: {e!s}")
-			raise FarmerRegistryServerError("Could not submit the staff username and password") from e
-
-		if signed_in.status_code not in (302, 303):
-			raise FarmerRegistryClientError(
-				f"Keycloak did not accept the staff user (HTTP {signed_in.status_code})",
-				status_code=signed_in.status_code,
-			)
-
-		callback = urljoin(signed_in.url, signed_in.headers.get("Location") or "")
-		if not callback.startswith(iam + "/auth/callback?"):
-			raise FarmerRegistryClientError("Keycloak did not redirect back to the IAM callback")
-
-		try:
-			exchanged = session.get(callback, timeout=timeout, allow_redirects=False)
-		except requests.RequestException as e:
-			frappe.log_error(title="Farmer Registry Auth Error", message=f"IAM callback failed: {e!s}")
-			raise FarmerRegistryServerError("Could not complete the IAM callback") from e
-
-		if exchanged.status_code not in (302, 303, 307):
-			raise FarmerRegistryClientError(
-				f"IAM callback did not complete (HTTP {exchanged.status_code})",
-				status_code=exchanged.status_code,
-			)
-
-		token = _cookie_value(exchanged, "X-Access-Token")
-		csrf = _cookie_value(exchanged, "X-CSRF-Token")
-		if not token:
-			raise FarmerRegistryServerError("IAM callback did not set an X-Access-Token cookie")
-		if not csrf:
-			raise FarmerRegistryServerError("IAM callback did not set an X-CSRF-Token cookie")
-
-		expires_at = _jwt_expires_at(token)
-		if expires_at is None:
-			max_age = _cookie_max_age(exchanged, "X-Access-Token") or _cookie_max_age(
-				exchanged, "X-CSRF-Token"
-			)
-			expires_at = time.time() + (max_age if max_age is not None else _CALLBACK_COOKIE_MAX_AGE)
-		return token, csrf, expires_at
-
-	def _get_access_token(self) -> str | None:
-		"""Return a bearer token for the Staff API.
-
-		Used when staff IAM login is not configured. The token is cached on the
-		worker until near expiry, including across new client instances. A
-		static ``farmer_registry_api_key`` stays on self.headers when this
-		returns None.
-		"""
-		kc = self.keycloak
-		token_url = kc.get("token_url")
-		client_id = kc.get("client_id")
-		client_secret = kc.get("client_secret")
-		if not (token_url and client_id and client_secret):
-			return None
-
-		cache_key = (str(token_url), str(client_id))
-		secret_mark = hashlib.sha256(str(client_secret).encode()).hexdigest()
-		cached = _CC_TOKEN_CACHE.get(cache_key) or {}
-		if cached.get("secret_mark") == secret_mark and _token_still_valid(cached):
-			return cached["token"]
-
-		with _CC_TOKEN_LOCK:
-			cached = _CC_TOKEN_CACHE.get(cache_key) or {}
-			if cached.get("secret_mark") == secret_mark and _token_still_valid(cached):
-				return cached["token"]
-
-			try:
-				resp = requests.post(
-					token_url,
-					data={
-						"grant_type": "client_credentials",
-						"client_id": client_id,
-						"client_secret": client_secret,
-					},
-					timeout=self.timeout,
-				)
-			except requests.RequestException as e:
-				frappe.log_error(
-					title="Farmer Registry Auth Error",
-					message=f"Keycloak unreachable at {token_url}: {e!s}",
-				)
-				raise FarmerRegistryServerError("Could not reach Keycloak for a registry token") from e
-
-			if resp.status_code >= 400:
-				# Do not log the body: a token endpoint can echo the client or the token.
-				frappe.log_error(
-					title="Farmer Registry Auth Error",
-					message=f"Keycloak token request failed: HTTP {resp.status_code} {token_url}",
-				)
-				exc = FarmerRegistryClientError if resp.status_code < 500 else FarmerRegistryServerError
-				raise exc(
-					f"Keycloak refused the token request (HTTP {resp.status_code})",
-					status_code=resp.status_code,
-				)
-
-			try:
-				data = resp.json()
-			except ValueError as e:
-				raise FarmerRegistryServerError("Keycloak token response was not JSON") from e
-			token = data.get("access_token") if isinstance(data, dict) else None
-			if not token:
-				raise FarmerRegistryServerError("Keycloak response had no access_token")
-
-			try:
-				expires_in = int(data.get("expires_in", 300))
-			except TypeError, ValueError:
-				expires_in = 300
-			_CC_TOKEN_CACHE[cache_key] = {
-				"token": token,
-				"secret_mark": secret_mark,
-				"expires_at": time.time() + max(expires_in, 0),
-			}
-			return token
-
 	def _auth_and_csrf_headers(self) -> tuple[dict, dict]:
-		"""Headers + cookies for a state-changing (POST) staff call.
-
-		Staff-user IAM login supplies the callback token and CSRF cookie.
-		Otherwise a client-credentials token is used with a generated CSRF pair.
-		A static API key already on self.headers is the last fallback.
-		"""
-		headers = dict(self.headers)
-		token, csrf = self._staff_session()
-		if not token:
-			token = self._get_access_token()
-			csrf = None
-		if token:
-			headers["Authorization"] = f"Bearer {token}"
-
-		if not csrf:
-			csrf = secrets.token_urlsafe(24)
-		headers["X-CSRF-Token"] = csrf
-		cookies = {"X-CSRF-Token": csrf}
-		return headers, cookies
+		"""Headers + cookies for a staff POST. Same pair the Staff API requires."""
+		# return auth_and_csrf_headers(
+		# 	keycloak=self.keycloak,
+		# 	timeout=self.timeout,
+		# 	headers=self.headers,
+		# 	client_error=FarmerRegistryClientError,
+		# 	server_error=FarmerRegistryServerError,
+		# 	log_title="Farmer Registry Auth Error",
+		# )
+		token = frappe.get_request_header("Authorization")
+		csrf = frappe.get_request_header("X-CSRF-Token")
+		test = ({'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': token, 'X-CSRF-Token': csrf}, {'X-CSRF-Token': csrf})
+		return test
 
 	# ------------------------------------------------------------------ transport
 
@@ -497,18 +214,12 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		4xx: the request is wrong (auth, roles, validation) — retrying the same
 		call cannot succeed. 5xx: the registry is unhealthy — safe to retry.
 		"""
-		code = response.status_code
-		if code < 400:
+		failure = http_failure(response)
+		if failure is None:
 			return
+		kind, code, snippet = failure
 
-		detail = ""
-		try:
-			detail = response.json().get("response_header", {}).get("response_error_message") or ""
-		except ValueError:
-			pass
-		snippet = detail or (response.text or "")[:300]
-
-		if code < 500:
+		if kind == "client":
 			frappe.log_error(
 				title="Farmer Registry rejected request",
 				message=f"{action}: HTTP {code} {response.url}\n{snippet}",
@@ -538,34 +249,31 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		sort_by: str = "",
 	) -> dict:
 		"""Wrap a payload in the OpenG2P staff request envelope."""
-		return {
-			"request_header": {
-				"sender_app_mnemonic": "DA_SERVICES",
-				"sender_app_url": "",
-				"request_id": str(uuid.uuid4()),
-				"request_timestamp": frappe.utils.now(),
-				"instance_id": "",
-			},
-			"request_body": {
-				"request_payload": request_payload,
-				"pagination_request": {
-					"current_page": page,
-					"page_size": page_size,
-					"sort_by": sort_by,
-					"filter_by": filter_by or "",
-					"search_text": search_text,
-				},
-			},
-		}
+		return staff_envelope(
+			request_payload,
+			sender_app="DA_SERVICES",
+			timestamp=frappe.utils.now(),
+			page=page,
+			page_size=page_size,
+			filter_by=filter_by,
+			search_text=search_text,
+			sort_by=sort_by,
+			include_instance_id=True,
+			include_sort_by=True,
+			empty_filter="",
+		)
 
-	def _staff_post(self, path: str, request_payload: dict, *, action: str, **pagination) -> StaffResponse:
+	def _staff_post(
+		self, path: str, request_payload: dict, *, action: str, base_url: str | None = None, **pagination
+	) -> StaffResponse:
 		"""POST an enveloped request to the Staff API and parse the envelope back.
 
 		Raises FarmerRegistryServerError on network failure, and the 4xx/5xx
 		mapping from _raise_for_status. A 200 with response_status ERROR is
 		returned as a StaffResponse so callers can treat "not found" specially.
+		base_url points the same call at another OpenG2P service (Master Data).
 		"""
-		url = f"{self.base_url}{path}"
+		url = f"{base_url or self.base_url}{path}"
 		headers, cookies = self._auth_and_csrf_headers()
 		try:
 			response = requests.post(
@@ -624,6 +332,64 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			name = None
 		return name or code_or_name
 
+	# ------------------------------------------------------------------ registry ids
+
+	def _cached_id(self, kind: str, discover) -> str:
+		"""An id discovered from the registry, cached per staff host for an hour."""
+		key = f"{ID_CACHE_PREFIX}:{kind}:{self.base_url}"
+		value = frappe.cache.get_value(key)
+		if not value:
+			value = discover()
+			frappe.cache.set_value(key, value, expires_in_sec=ID_CACHE_TTL)
+		return str(value)
+
+	@property
+	def register_id(self) -> str:
+		"""The Farmer register id: configured, else the register named "Farmer"."""
+		if self._configured_register_id:
+			return self._configured_register_id
+
+		def discover() -> str:
+			wanted = self.REGISTER_MNEMONIC.lower()
+			for row in self.get_registers():
+				if str(row.get("register_mnemonic") or "").lower() == wanted and row.get("register_id"):
+					return str(row["register_id"])
+			raise FarmerRegistryError(f"Farmer Registry has no register named {self.REGISTER_MNEMONIC}")
+
+		return self._cached_id("register_id", discover)
+
+	@property
+	def intake_form_id(self) -> str:
+		"""The Farmer intake form id: configured, else the one form whose mnemonic
+		contains farmer_registry_intake_form_contains (spaces, _ and - ignored)."""
+		if self._configured_intake_form_id:
+			return self._configured_intake_form_id
+
+		def discover() -> str:
+			wanted = _squash(self.intake_form_contains)
+			forms = [
+				f
+				for f in self.get_intake_forms()
+				if str(f.get("register_id") or "") == self.register_id
+				and f.get("form_id")
+				and (not wanted or wanted in _squash(f.get("form_mnemonic")))
+			]
+			if len(forms) != 1:
+				names = ", ".join(str(f.get("form_mnemonic")) for f in forms) or "none"
+				raise FarmerRegistryError(
+					"Farmer Registry intake form could not be chosen: "
+					f"{len(forms)} form(s) match {self.intake_form_contains!r} ({names}); "
+					"set farmer_registry_intake_form_contains or farmer_registry_ingest.intake_form_id"
+				)
+			return str(forms[0]["form_id"])
+
+		return self._cached_id("intake_form_id", discover)
+
+	@staticmethod
+	def clear_id_cache() -> None:
+		"""Forget discovered register / form ids (after a registry redeploy)."""
+		frappe.cache.delete_keys(ID_CACHE_PREFIX)
+
 	def _tab_records(self, farmer_id: str, tab_key: str, *, action: str) -> list:
 		"""Rows of one register tab for a farmer (list of RegisterTabRecordData dicts)."""
 		tab_id = self.tabs.get(tab_key)
@@ -641,6 +407,44 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		return list(res.payload or [])
 
 	# ------------------------------------------------------------------ reads
+
+	def find_internal_id(self, reference: str) -> str | None:
+		"""Resolve a Farmer-ID such as FR-… to the register's internal record id.
+
+		get_subject_record only accepts the internal id. Search matches
+		functional_record_id, which is the number shown to people.
+		"""
+		if not reference:
+			return None
+		res = self._staff_post(
+			"/register-data/search_in_a_register",
+			{"register_id": self.register_id},
+			action="find farmer",
+			page_size=20,
+			search_text=reference,
+			filter_by={"functional_record_id": reference},
+		)
+		if not res.ok:
+			if res.not_found:
+				return None
+			res = self._staff_post(
+				"/register-data/search_in_a_register",
+				{"register_id": self.register_id},
+				action="find farmer",
+				page_size=20,
+				search_text=reference,
+			)
+			if not res.ok:
+				if res.not_found:
+					return None
+				self._reject(res, "find farmer")
+		for row in res.payload or []:
+			if not isinstance(row, dict):
+				continue
+			if reference in (row.get("functional_record_id"), row.get("internal_record_id")):
+				internal = row.get("internal_record_id")
+				return str(internal) if internal else None
+		return None
 
 	def get_farmer(self, farmer_id: str) -> Farmer | None:
 		"""Farmer identity row plus the farmer / location / household tabs.
@@ -728,11 +532,186 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		total = res.pagination.get("number_of_items")
 		return items, int(total) if total is not None else len(items)
 
+	def search_farmers(
+		self,
+		*,
+		search_text: str = "",
+		filter_by: dict | None = None,
+		page: int = 1,
+		page_size: int = 50,
+	) -> dict:
+		"""One page of search_in_a_register with the registry's page metadata.
+
+		filter_by takes DA codes for woreda / kebele and passes any other key
+		through as a registry filter. Kebele is narrowed here as in list_farmers.
+		"""
+		page = max(1, int(page or 1))
+		page_size = max(1, min(int(page_size or 50), 500))
+
+		filters: dict = {}
+		for key, value in (filter_by or {}).items():
+			if value in (None, ""):
+				continue
+			if key in ("woreda", "kebele"):
+				name = self._area_name(value)
+				if name:
+					filters[f"{key}_name"] = name
+			else:
+				filters[key] = value
+
+		res = self._staff_post(
+			"/register-data/search_in_a_register",
+			{"register_id": self.register_id},
+			action="search farmers",
+			page=page,
+			page_size=page_size,
+			filter_by=filters or None,
+			search_text=search_text or "",
+		)
+		rows: list = []
+		if res.ok:
+			rows = [r for r in (res.payload or []) if isinstance(r, dict)]
+		elif not res.not_found:
+			self._reject(res, "search farmers")
+
+		items = [self._with_record_summary(search_row_to_list_item(row)) for row in rows]
+		# The dev registry (29 Oct 2026) returns the same rows whatever filter_by
+		# says, and kebele_name is not whitelisted anyway. Area filters are the
+		# caller's scope, so they are re-applied here and fail closed: a row that
+		# names another area, or no area at all, is dropped.
+		narrowed = False
+		for key, attr in (("woreda_name", "woreda"), ("kebele_name", "kebele")):
+			wanted = filters.get(key)
+			if not wanted:
+				continue
+			kept = [i for i in items if getattr(i, attr) == wanted]
+			narrowed = narrowed or len(kept) != len(items)
+			items = kept
+
+		total = res.pagination.get("number_of_items")
+		pages = res.pagination.get("number_of_pages")
+		total = int(total) if total is not None else len(items)
+		pages = int(pages) if pages else (1 if items else 0)
+		# A single registry page is the whole result, so what is left of it is
+		# the true count; across several pages only the registry's figure exists.
+		if narrowed and pages <= 1:
+			total, pages = len(items), (1 if items else 0)
+		return {
+			"items": items,
+			"page": page,
+			"page_size": page_size,
+			"total": total,
+			"number_of_pages": pages,
+			# True when rows were dropped here; with several registry pages
+			# total / number_of_pages are then the registry's unfiltered figures.
+			"filtered_client_side": narrowed,
+		}
+
+	def get_change_requests(
+		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
+	) -> list[dict]:
+		"""Change requests on a farmer, one get_change_requests call per tab.
+
+		The registry keys change requests by tab, so all configured tabs are
+		read unless one tab key is given. A tab with none returns an empty list.
+		"""
+		if tab:
+			tab_id = self.tabs.get(tab)
+			if not tab_id:
+				raise FarmerRegistryClientError(f"Unknown farmer tab {tab!r}", status_code=400)
+			tab_ids = [tab_id]
+		else:
+			tab_ids = list(dict.fromkeys(self.tabs.values()))
+
+		rows: list[dict] = []
+		for tab_id in tab_ids:
+			res = self._staff_post(
+				"/change-requests/get_change_requests",
+				{"subject_register_id": self.register_id, "subject_record_id": farmer_id, "tab_id": tab_id},
+				action="get change requests",
+				page_size=100,
+			)
+			if not res.ok:
+				if res.not_found:
+					continue
+				self._reject(res, "get change requests")
+			rows.extend(r for r in (res.payload or []) if isinstance(r, dict))
+
+		if status:
+			wanted = status.strip().upper()
+			rows = [r for r in rows if str(r.get("approval_status") or "").upper() == wanted]
+		rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+		return rows
+
+	def _with_record_summary(self, item: FarmerListItem) -> FarmerListItem:
+		"""Fill phone, total land area and plot count, which search rows leave out.
+
+		search_in_a_register only carries the list-view columns the registry is
+		configured with (dev, 31 Oct 2026: names, gender, birth, education,
+		location). Phone and land area come from get_subject_record, the plot
+		count from the Lands tab (as /plots counts it). The summary is cached per
+		farmer for a few minutes so a list does not re-read every record.
+		"""
+		if not item.farmer_id:
+			return item
+		key = f"{SUMMARY_CACHE_PREFIX}:{self.base_url}:{item.farmer_id}"
+		summary = frappe.cache.get_value(key)
+		if not isinstance(summary, dict) or "total_plots" not in summary:
+			summary = {"total_plots": None}
+			try:
+				res = self._staff_post(
+					"/register-data/get_subject_record",
+					{"subject_register_id": self.register_id, "subject_record_id": item.farmer_id},
+					action="get farmer summary",
+				)
+				summary.update(
+					record_summary(res.payload if res.ok and isinstance(res.payload, dict) else {})
+				)
+				summary["total_plots"] = len(self.get_farmer_plots(item.farmer_id))
+			except FarmerRegistryError:
+				# A list row without these figures beats a failed list.
+				frappe.logger("da_services").warning("Could not read the record of farmer %s", item.farmer_id)
+			frappe.cache.set_value(key, summary, expires_in_sec=SUMMARY_CACHE_TTL)
+		return item.copy(
+			update={
+				"phone": item.phone or summary.get("phone"),
+				"total_land_area": item.total_land_area
+				if item.total_land_area is not None
+				else summary.get("total_land_area"),
+				"total_plots": summary.get("total_plots"),
+			}
+		)
+
+	def get_farmer_photo(self, farmer_id: str) -> dict | None:
+		"""Record photo from get_subject_record: a signed MinIO link (about an hour) and its document id."""
+		res = self._staff_post(
+			"/register-data/get_subject_record",
+			{"subject_register_id": self.register_id, "subject_record_id": farmer_id},
+			action="get farmer photo",
+		)
+		if not res.ok:
+			if res.not_found:
+				return None
+			self._reject(res, "get farmer photo")
+		record = res.payload if isinstance(res.payload, dict) else {}
+		url = record.get("record_image_url")
+		if not url:
+			return None
+		return {"url": url, "document_id": record.get("record_image_document_id")}
+
 	def get_farmer_plots(self, farmer_id: str) -> list[Plot]:
-		"""Land Details rows for a farmer (Lands tab)."""
+		"""Land Details rows for a farmer (Lands tab).
+
+		The Lands tab also carries a Farmer-register section (the farmer's land
+		summary), whose row is the farmer itself; only Land-register rows are plots.
+		"""
 		plots: list[Plot] = []
 		for section in self._tab_records(farmer_id, "land", action="get farmer plots"):
+			if str(section.get("section_register_id") or "") == self.register_id:
+				continue
 			for rec in section.get("records") or []:
+				if str(rec.get("internal_record_id") or "") == str(farmer_id):
+					continue
 				plots.append(land_record_to_plot(rec))
 		return plots
 
@@ -797,11 +776,11 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			raise FarmerRegistryError("Invalid ingest payload: missing 'message'")
 
 		url = f"{self.base_url}/input-mechanism-data/ingest-data"
-		params = {"data_model": self.ingest_data_model}
-		if self.ingest_register_id:
-			params["register_id"] = self.ingest_register_id
-		if self.ingest_intake_form_id:
-			params["intake_form_id"] = self.ingest_intake_form_id
+		params = {
+			"data_model": self.ingest_data_model,
+			"register_id": self.register_id,
+			"intake_form_id": self.intake_form_id,
+		}
 
 		headers, cookies = self._auth_and_csrf_headers()
 
@@ -854,3 +833,159 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		if isinstance(payload, list):
 			return payload
 		return [payload] if payload else []
+
+	# ------------------------------------------------------------------ intake form
+
+	def _master_data_post(self, path: str, request_payload: dict, *, action: str) -> list:
+		if not self.master_data_url.startswith(("http://", "https://")):
+			raise FarmerRegistryError(
+				"Farmer Registry HTTP client misconfigured: farmer_registry_master_data_url must be an http(s) URL"
+			)
+		res = self._staff_post(
+			path, request_payload, action=action, base_url=self.master_data_url, page_size=1000
+		)
+		if not res.ok:
+			self._reject(res, action)
+		return res.payload or []
+
+	def render_intake_form(self) -> dict:
+		res = self._staff_post(
+			"/intake-form-metadata/render_intake_form",
+			{"form_id": self.intake_form_id},
+			action="render intake form",
+		)
+		if not res.ok:
+			self._reject(res, "render intake form")
+		return dict(res.payload or {})
+
+	def get_registers(self) -> list[dict]:
+		res = self._staff_post(
+			"/register-metadata/get_all_registers", {}, action="list registers", page_size=100
+		)
+		if not res.ok:
+			self._reject(res, "list registers")
+		return [r for r in (res.payload or []) if isinstance(r, dict)]
+
+	def get_intake_forms(self) -> list[dict]:
+		res = self._staff_post(
+			"/intake-form-metadata/get_all_intake_forms",
+			{"register_id": self.register_id},
+			action="list intake forms",
+			page_size=100,
+		)
+		if not res.ok:
+			if res.not_found:
+				return []
+			self._reject(res, "list intake forms")
+		return [f for f in (res.payload or []) if isinstance(f, dict)]
+
+	def get_attribute_values(self, attribute_id: str) -> list[dict]:
+		payload = self._master_data_post(
+			"/attributes/get_attribute_values",
+			{"attribute_id": attribute_id},
+			action=f"read code list {attribute_id}",
+		)
+		if isinstance(payload, dict):
+			payload = payload.get("attribute_values") or []
+		return list(payload)
+
+	def get_geo_levels(self) -> list[dict]:
+		return list(self._master_data_post("/geo/get_all_geo_levels", {}, action="read geo levels"))
+
+	def get_geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
+		request = {"level_id": level_id}
+		if parent_level_value_id:
+			request["parent_level_value_id"] = parent_level_value_id
+		return list(
+			self._master_data_post("/geo/get_geo_level_values", request, action=f"read places {level_id}")
+		)
+
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""POST /documents/upload_documents as multipart (field "documents")."""
+		url = f"{self.base_url}/documents/upload_documents"
+		headers, cookies = self._auth_and_csrf_headers()
+		headers.pop("Content-Type", None)  # requests sets the multipart boundary
+		try:
+			response = requests.post(
+				url,
+				headers=headers,
+				cookies=cookies,
+				files={"documents": (filename, content, content_type)},
+				timeout=self.timeout,
+			)
+		except requests.RequestException as e:
+			frappe.log_error(
+				title="Farmer Registry HTTP Error", message=f"Could not reach {url} (upload): {e!s}"
+			)
+			raise FarmerRegistryServerError(f"Farmer Registry unreachable: {e!s}") from e
+
+		self._raise_for_status(response, "upload document")
+		try:
+			data = response.json()
+		except ValueError as e:
+			raise FarmerRegistryServerError("Farmer Registry returned non-JSON for upload document") from e
+		header = data.get("response_header") or {}
+		if header.get("response_status") != "SUCCESS":
+			raise FarmerRegistryClientError(
+				f"Farmer Registry rejected upload document: {header.get('response_error_message') or header.get('response_error_code') or 'unknown error'}",
+				status_code=200,
+				body=header.get("response_error_code"),
+			)
+		payload = (data.get("response_body") or {}).get("response_payload")
+		docs = payload if isinstance(payload, list) else (payload or {}).get("documents") or []
+		document_id = (docs[0] or {}).get("document_id") if docs else None
+		if not document_id:
+			raise FarmerRegistryServerError("Farmer Registry upload returned no document_id")
+		return str(document_id)
+
+	@staticmethod
+	def _intake_result(res: StaffResponse) -> dict:
+		payload = res.payload if isinstance(res.payload, dict) else {}
+		return {
+			"success": res.ok,
+			"submission_id": payload.get("submission_id"),
+			"draft_status": payload.get("draft_status"),
+			"approval_status": payload.get("approval_status"),
+			"status": res.status,
+			"error_code": res.error_code,
+			"error_message": res.error_message,
+		}
+
+	def save_intake_section(self, section: dict) -> dict:
+		res = self._staff_post(
+			"/intake-form-data/save_intake_form_submission", section, action="save intake section"
+		)
+		return self._intake_result(res)
+
+	def finalize_intake_submission(self, submission_id: str) -> dict:
+		res = self._staff_post(
+			"/intake-form-data/finalize_intake_form_submission",
+			{"submission_id": submission_id},
+			action="finalize intake submission",
+		)
+		return self._intake_result(res)
+
+	def get_intake_submission(self, submission_id: str) -> dict | None:
+		res = self._staff_post(
+			"/intake-form-data/get_intake_form_submission",
+			{"submission_id": submission_id},
+			action="read intake submission",
+		)
+		if not res.ok:
+			if res.not_found:
+				return None
+			self._reject(res, "read intake submission")
+		return dict(res.payload or {})
+
+	def delete_intake_submission(self, submission_id: str) -> bool:
+		"""POST /intake-form-data/delete_intake_form_submission; False when already gone."""
+		res = self._staff_post(
+			"/intake-form-data/delete_intake_form_submission",
+			{"submission_id": submission_id},
+			action="delete intake submission",
+		)
+		if not res.ok:
+			if res.not_found:
+				return False
+			self._reject(res, "delete intake submission")
+		return True
