@@ -136,7 +136,15 @@ class HTTPCropRegistryClient(CropRegistryClient):
 		# )
 		token = frappe.get_request_header("Authorization")
 		csrf = frappe.get_request_header("X-CSRF-Token")
-		test = ({'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': token, 'X-CSRF-Token': csrf}, {'X-CSRF-Token': csrf})
+		test = (
+			{
+				"Content-Type": "application/json",
+				"Accept": "application/json",
+				"Authorization": token,
+				"X-CSRF-Token": csrf,
+			},
+			{"X-CSRF-Token": csrf},
+		)
 		return test
 
 	def _envelope(
