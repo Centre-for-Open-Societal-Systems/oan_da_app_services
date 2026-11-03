@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "creation": "2026-11-03 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "parameter_id",
+  "sort_order",
+  "prompt",
+  "response_type",
+  "required",
+  "options_json",
+  "helper",
+  "prefill",
+  "condition_parameter_id",
+  "condition_equals"
+ ],
+ "fields": [
+  {
+   "fieldname": "parameter_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Parameter ID",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sort_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Order",
+   "reqd": 1
+  },
+  {
+   "fieldname": "prompt",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Prompt",
+   "reqd": 1
+  },
+  {
+   "fieldname": "response_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Response Type",
+   "options": "consent\nauto\nlookup\nrating\nsingle\nmulti\ntext",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "required",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Required"
+  },
+  {
+   "fieldname": "options_json",
+   "fieldtype": "Long Text",
+   "label": "Options JSON"
+  },
+  {
+   "fieldname": "helper",
+   "fieldtype": "Small Text",
+   "label": "Helper"
+  },
+  {
+   "fieldname": "prefill",
+   "fieldtype": "Data",
+   "label": "Prefill"
+  },
+  {
+   "fieldname": "condition_parameter_id",
+   "fieldtype": "Data",
+   "label": "Condition Parameter ID"
+  },
+  {
+   "fieldname": "condition_equals",
+   "fieldtype": "Data",
+   "label": "Condition Equals"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-03 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Survey Parameter",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

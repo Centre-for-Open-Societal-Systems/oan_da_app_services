@@ -363,6 +363,8 @@ xlsx/csv with `TEMPLATE_HEADERS`.
 
 ### 2.16 Surveys (`/surveys`, `/surveys/{id}`)
 
+Backend contract: [surveys-integration.md](surveys-integration.md). Frontend wire-up: [surveys-frontend.md](surveys-frontend.md). Postman: `postman/Surveys/`.
+
 `SurveyTask {id, name, templateVersion, type (Satisfaction | Service quality | Needs assessment), window {open,
 close}, languages[], targetFarmers, collected, queued, status (Open | Closing soon | Closed), estMinutes,
 parameters[], answered[] farmer ids}`; `Parameter {id, order, prompt, type (consent | auto | lookup | rating |
@@ -375,8 +377,12 @@ options, required}}`.
 | Element | API | Source |
 |---|---|---|
 | Assigned surveys | `GET /surveys?status&type&language&q` → tasks with my `collected`, `queued`, `answered[]` | ours: DA Survey Template + DA Survey Response (data-model §7) |
-| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, consent: granted/declined, answers {param_id: value}, started_at, completed_at, client_op_id}` → 409 on duplicate farmer | ours |
-| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open task to every DA in scope | ours |
+| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}` → 409 on duplicate farmer; drafts use `sync_state: Draft` | ours |
+| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey to every DA in the creator's Woreda | ours |
+| Template list / detail | `GET /surveys/templates?status&type&q`, `GET /surveys/templates/{id}` (Supervisor/Admin/Executive) | ours |
+| Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed; questions only when `collected == 0` (bumps version) else 409 | ours |
+| Responses list | `GET /surveys/{id}/responses` — DA own; Supervisor/Executive/Admin in scope | ours |
+| Results | `GET /surveys/{id}/results` — counts, rating averages, choice histograms (basic; Part 2 analytics later) | ours |
 
 ### 2.17 Sync queue (`/sync`)
 
@@ -491,7 +497,7 @@ two types.
 | 16 | `GET /issues`, `POST /issues`, `/assign`, `/request-info`, `/resolve`, `/reopen`, `GET /issues/assignees` | feedback | Pushkar (candidate) |
 | 17 | Knowledge articles/videos, `POST /broadcasts`, `GET /broadcasts`, signals | knowledge, broadcast | Pushkar (candidate, after grievance) |
 | 18 | `GET /performance/me`, goals, `GET /performance/agents`, tiers, KPI records + import | performance | Nikky |
-| 19 | `GET /surveys`, `GET /surveys/{id}`, `POST /surveys/{id}/responses`, `POST /surveys/templates` | surveys | Nikky |
+| 19 | `GET /surveys`, `GET /surveys/{id}`, `POST /surveys/{id}/responses`, `GET /surveys/{id}/responses`, `GET /surveys/{id}/results`, `POST/GET/PATCH /surveys/templates` | surveys | Nikky |
 | 20 | `POST /sync/operations`, `/attachments`, `GET /sync/status`, `/operations`, `/conflicts/{id}`, `POST /conflicts/{id}/resolve`, `POST /operations/{id}/retry` | sync | Pushkar |
 | 21 | `GET /profile/me`, change-requests, dependents, certificates, leave, leave-requests | profile | Nikky |
 | 22 | `GET /approvals`, `POST /approvals/{id}/decide` | supervisor approvals | Nikky |

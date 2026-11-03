@@ -1,0 +1,208 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DA-SRR-{YYYY}-{#######}",
+ "creation": "2026-11-03 12:00:00.000000",
+ "description": "One farmer response to a published survey (FR-09d). Duplicate guard is survey + farmer for completed non-declined rows.",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "survey",
+  "da_id",
+  "farmer_id",
+  "consent",
+  "sync_state",
+  "col_head",
+  "started_at",
+  "completed_at",
+  "sec_answers",
+  "answers_json",
+  "sec_scope",
+  "region",
+  "zone",
+  "col_scope",
+  "woreda",
+  "kebele",
+  "sec_device",
+  "client_op_id",
+  "duplicate_guard_key"
+ ],
+ "fields": [
+  {
+   "fieldname": "survey",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Survey",
+   "options": "DA Survey Template",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Collector DA-ID.",
+   "fieldname": "da_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Collector DA-ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "farmer_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Farmer ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "consent",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Consent",
+   "options": "\ngranted\ndeclined"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "sync_state",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Sync State",
+   "options": "Draft\nQueued\nSynced\nRejected\nConflict\nDeclined",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At"
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  },
+  {
+   "fieldname": "sec_answers",
+   "fieldtype": "Section Break",
+   "label": "Answers"
+  },
+  {
+   "fieldname": "answers_json",
+   "fieldtype": "Long Text",
+   "label": "Answers JSON"
+  },
+  {
+   "fieldname": "sec_scope",
+   "fieldtype": "Section Break",
+   "label": "Scope"
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Data",
+   "label": "Region",
+   "read_only": 1
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Data",
+   "label": "Zone",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_scope",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Data",
+   "label": "Woreda",
+   "read_only": 1
+  },
+  {
+   "fieldname": "kebele",
+   "fieldtype": "Data",
+   "label": "Kebele",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_device",
+   "fieldtype": "Section Break",
+   "label": "Device"
+  },
+  {
+   "fieldname": "client_op_id",
+   "fieldtype": "Data",
+   "label": "Client Op ID",
+   "unique": 1
+  },
+  {
+   "description": "survey|farmer_id for completed non-declined responses.",
+   "fieldname": "duplicate_guard_key",
+   "fieldtype": "Data",
+   "label": "Duplicate Guard Key",
+   "unique": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-03 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Survey Response",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor"
+  },
+  {
+   "read": 1,
+   "role": "Development Agent"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

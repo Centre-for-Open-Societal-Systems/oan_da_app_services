@@ -236,3 +236,39 @@ def has_da_farmer_reference_permission(doc, ptype: str = "read", user: str | Non
 	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
 		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
 	return False
+
+
+def da_survey_template_query_conditions(user: str | None = None) -> str:
+	"""Survey templates are scoped by region/zone/woreda (no da_id on the row)."""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Survey Template`"
+	if ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return _officer_scope_clause(t, ctx)
+	return DENY
+
+
+def has_da_survey_template_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""Writes go through services/surveys.py; Desk/REST stays read-only in scope."""
+	user = user or frappe.session.user
+	if ptype != "read" and not _is_unrestricted(user):
+		return False
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	if ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
+	return False
+
+
+def da_survey_response_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Survey Response", user)
+
+
+def has_da_survey_response_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""Writes go through services/surveys.py; Desk/REST stays read-only in scope."""
+	if ptype != "read" and not _is_unrestricted(user or frappe.session.user):
+		return False
+	return has_da_scoped_permission(doc, ptype, user)
