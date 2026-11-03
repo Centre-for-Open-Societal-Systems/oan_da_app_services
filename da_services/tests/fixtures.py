@@ -2,6 +2,27 @@
 
 import frappe
 
+# DocTypes whose JSON can be ahead of a site that has not been migrated yet.
+# Integration tests reload them so the DB columns and Select options match the app.
+_SCHEMA_DOCTYPES = (
+	("da_profile_change_request", "DA Profile Change Request"),
+	("da_integration_event", "DA Integration Event"),
+)
+
+
+def ensure_doctype_schema(*doctypes: str) -> None:
+	"""Reload DocType JSON into the site so missing columns and Select options exist.
+
+	Does not change application logic. Call from setUp when a test hits a field
+	that the current site's table may not have yet.
+	"""
+	wanted = set(doctypes) if doctypes else {name for _file, name in _SCHEMA_DOCTYPES}
+	for file_name, name in _SCHEMA_DOCTYPES:
+		if name not in wanted:
+			continue
+		frappe.reload_doc("DA Services", "doctype", file_name, force=True)
+
+
 # Administrative area hierarchy for tests
 ADMINISTRATIVE_AREAS = [
 	("ET04", "Region", None, "Oromia"),

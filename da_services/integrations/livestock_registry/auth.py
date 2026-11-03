@@ -1,32 +1,16 @@
-"""Livestock bearer and CSRF headers.
+"""Livestock bearer and CSRF headers from the shared staff IAM login.
 
-Uses the shared staff IAM login. This module does not call the Livestock host.
+The HTTP client forwards the caller's SSO headers instead (see http.py). This
+login is for callers without a request, such as scripts.
 """
 
 from __future__ import annotations
 
-
-class LivestockRegistryError(Exception):
-	"""Base exception for Livestock staff authentication."""
-
-	def __init__(self, message: str, status_code: int | None = None):
-		super().__init__(message)
-		self.status_code = status_code
-
-
-class LivestockRegistryClientError(LivestockRegistryError):
-	"""IAM or Keycloak rejected the Livestock login."""
-
-
-class LivestockRegistryServerError(LivestockRegistryError):
-	"""IAM or Keycloak could not be reached."""
+from .client import LivestockRegistryClientError, LivestockRegistryServerError
 
 
 def livestock_auth_headers() -> tuple[dict, dict]:
-	"""Return (headers, cookies) for a future Livestock staff call.
-
-	No request is sent to the Livestock staff host.
-	"""
+	"""Return (headers, cookies) for a Livestock staff call. Nothing is sent to the Livestock host."""
 	import frappe
 
 	from da_services.integrations.staff_api.auth import auth_and_csrf_headers, keycloak_from_conf
