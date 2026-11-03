@@ -276,12 +276,24 @@ def plan_visit(
 	return serialize(doc)
 
 
+def _da_can_read_peer_kebele(doc, ctx: ScopeContext) -> bool:
+	"""True when a DA may read another DA's visit in a shared Effective Kebele (Phase 6)."""
+	if not doc.kebele or not ctx.da_ids:
+		return False
+	from da_services.services.farmers import _get_da_assigned_kebeles
+
+	return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
+
+
 def _load_in_scope(name: str, ctx: ScopeContext, write: bool = False):
 	doc = frappe.get_doc("DA Visit", name)
 	if ctx.unrestricted:
 		return doc
 	if ctx.has_any_role(C.ROLE_DA):
 		if ctx.owns_da(doc.da_id):
+			return doc
+		# Peer Kebele visits are read-only; start/submit/cancel stay on own DA-ID.
+		if not write and _da_can_read_peer_kebele(doc, ctx):
 			return doc
 	elif ctx.has_any_role(C.ROLE_SUPERVISOR) and ctx.covers(doc.region, doc.woreda, doc.zone):
 		return doc
@@ -571,12 +583,15 @@ def list_visits(
 ) -> tuple[list[dict], int]:
 	"""Visits the caller may see (DA-211 Phase 6: Kebele-scoped for DAs).
 
-	DAs see all visits in their assigned Kebele (departmental data), not just own visits.
+	DAs see their own scheduled visits, and (when listing without ``da_id``) other visits
+	in their assigned Kebele. ``da_id`` filters to that DA's visits and does not also
+	require a Kebele match, so a Planned visit with blank geography still appears.
 	Supervisors/Executives see their Woreda/Region scope.
-	`status` may be a physical_status or a UI chip (Planned / Confirmed / Completed / Missed).
+	``status`` may be a physical_status or a UI chip (Planned / Confirmed / Completed / Missed).
 	"""
 	ctx = ctx or require_roles(*READ_ROLES)
 	filters: dict = {}
+	or_filters: list[list] = []
 	if date:
 		d = getdate(date)
 		filters["scheduled_at"] = ("between", [f"{d} 00:00:00", f"{d} 23:59:59"])
@@ -588,28 +603,39 @@ def list_visits(
 	if farmer_id:
 		filters["farmer_id"] = farmer_id
 
+	# Scope already validated for officers when da_id is named (registry), so query by
+	# da_id with get_all and skip the woreda/zone permission clause that hides visits
+	# whose geography was never filled from the registry.
+	officer_da_filter = False
+
 	# DA-211 Phase 6: Kebele-based visit visibility for DAs
 	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
-		# DAs see visits in their assigned Kebele (not just own visits)
 		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-		if da_ids_list:
-			# Get DA's assigned Kebeles
-			from da_services.services.farmers import _get_da_assigned_kebeles
-
-			assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
-			if assigned_kebeles:
-				filters["kebele"] = ("in", assigned_kebeles)
-			else:
-				# DA has no Kebele assignment - empty list
-				return [], 0
-
-			# Allow DA to filter to their own visits (mobile app use case)
-			if da_id and da_id in ctx.da_ids:
-				filters["da_id"] = da_id
-		else:
+		if not da_ids_list:
 			return [], 0
+
+		from da_services.services.farmers import _get_da_assigned_kebeles
+
+		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
+		if da_id:
+			if da_id not in ctx.da_ids:
+				frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
+			# Explicit own-DA filter: that DA's scheduled visits (date/status/farmer still apply)
+			filters["da_id"] = da_id
+		elif assigned_kebeles:
+			# Departmental list: own visits (incl. blank kebele) OR peers in assigned Kebeles
+			or_filters = [
+				["da_id", "in", da_ids_list],
+				["kebele", "in", assigned_kebeles],
+			]
+		else:
+			# No Effective Kebele assignment — still return this DA's own visits
+			filters["da_id"] = ("in", da_ids_list)
 	elif da_id:
-		# Explicit DA filter (for Supervisors/Executives filtering by DA)
+		# Explicit DA filter (Supervisors/Executives/Admin). Officers must be in scope for that DA.
+		if not ctx.unrestricted and ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+			get_da_reference(da_id, ctx)
+			officer_da_filter = True
 		filters["da_id"] = da_id
 
 	if status == "Completed":
@@ -621,15 +647,24 @@ def list_visits(
 
 	limit = max(1, min(int(limit), 500))
 	start = max(0, int(start))
-	rows = frappe.get_list(
-		"DA Visit",
-		filters=filters,
-		fields=[*FIELDS, "farmer_confirmation"],
-		order_by="scheduled_at asc",
-		limit_page_length=limit,
-		limit_start=start,
-	)
-	total = len(frappe.get_list("DA Visit", filters=filters, pluck="name", limit_page_length=0))
+	list_args = {
+		"filters": filters,
+		"fields": [*FIELDS, "farmer_confirmation"],
+		"order_by": "scheduled_at asc",
+		"limit_page_length": limit,
+		"limit_start": start,
+	}
+	count_args = {"filters": filters, "pluck": "name", "limit_page_length": 0}
+	if or_filters:
+		list_args["or_filters"] = or_filters
+		count_args["or_filters"] = or_filters
+	# get_all skips permission_query_conditions; used only after get_da_reference for officers.
+	fetcher = frappe.get_all if officer_da_filter else frappe.get_list
+	rows = fetcher("DA Visit", **list_args)
+	if officer_da_filter:
+		total = frappe.db.count("DA Visit", filters)
+	else:
+		total = len(fetcher("DA Visit", **count_args))
 	return [serialize(frappe._dict(r)) for r in rows], total
 
 
