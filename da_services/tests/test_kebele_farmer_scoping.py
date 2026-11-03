@@ -158,6 +158,71 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 		self.assertFalse(can_edit)
 
+	def test_kebele_name_from_the_registry_matches_the_assigned_code(self):
+		"""The registry gives the Kebele's name; the assignment holds its code."""
+		self._create_farmer("FARMER-A-NAME", "Dambi Gobu")  # name of ET04-W01-K03
+
+		self.assertTrue(svc._is_farmer_in_da_kebele("FARMER-A-NAME", [self.da_id]))
+		self.assertFalse(svc._is_farmer_in_da_kebele("FARMER-A-NAME", [self.da_id_other]))
+
+	def test_da_reads_the_profile_of_an_unlinked_farmer_in_their_kebele(self):
+		"""List, profile and edit agree: no manual link is needed in the assigned Kebele."""
+		ref = svc._require_farmer_in_scope(self.farmer_kebele_a_1, self.ctx_da)
+
+		self.assertEqual(ref["farmer_id"], self.farmer_kebele_a_1)
+		self.assertTrue(svc._can_edit_farmer(self.farmer_kebele_a_1, self.ctx_da))
+
+	def test_da_cannot_read_the_profile_of_a_farmer_in_another_kebele(self):
+		with self.assertRaises(frappe.PermissionError):
+			svc._require_farmer_in_scope(self.farmer_kebele_b_1, self.ctx_da)
+
+	def test_da_can_update_an_unlinked_farmer_in_their_kebele(self):
+		from unittest.mock import patch
+
+		from da_services.services import farmer_updates
+
+		class PassedPermissionCheck(Exception):
+			"""Raised by the field validation that follows the permission check."""
+
+		client = type("Client", (), {"get_farmer": lambda self, farmer_id: object()})()
+		with (
+			patch.object(farmer_updates, "get_farmer_registry_client", return_value=client),
+			patch.object(farmer_updates, "_validate_update_fields", side_effect=PassedPermissionCheck),
+		):
+			with self.assertRaises(PassedPermissionCheck):
+				farmer_updates.queue_farmer_update(self.farmer_kebele_a_1, {"phone": "911"}, self.ctx_da)
+			with self.assertRaises(frappe.PermissionError):
+				farmer_updates.queue_farmer_update(self.farmer_kebele_b_1, {"phone": "911"}, self.ctx_da)
+
+	def test_search_for_a_da_with_several_kebeles_keeps_the_client_count(self):
+		"""The client counts the DA's Kebeles across every registry page; the service passes it on."""
+		from unittest.mock import Mock, patch
+
+		# One DA account acting for both DA ids: Kebele A and Kebele B.
+		ctx = ScopeContext(
+			user="da@test.com",
+			roles={"Development Agent"},
+			da_ids={self.da_id, self.da_id_other},
+			unrestricted=False,
+		)
+		client = Mock()
+		client.search_farmers.return_value = {
+			"items": [],
+			"page": 2,
+			"page_size": 10,
+			"total": 6,
+			"number_of_pages": 1,
+			"filtered_client_side": True,
+		}
+		with patch.object(svc, "get_farmer_registry_client", return_value=client):
+			out = svc.search_farmers(ctx, search_text="a", page=2, page_size=10)
+
+		sent = client.search_farmers.call_args.kwargs["filter_by"]
+		self.assertEqual(sorted(sent["kebeles"]), sorted([self.kebele_a, self.kebele_b]))
+		self.assertNotIn("kebele", sent)
+		self.assertEqual((out["total"], out["number_of_pages"], out["page"]), (6, 1, 2))
+		self.assertTrue(out["filtered_client_side"])
+
 	def test_kebele_filter_narrows_within_assignment(self):
 		"""Test Kebele filter can only narrow within assigned Kebele."""
 		# DA with assignment to Kebele A

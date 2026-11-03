@@ -110,7 +110,7 @@ Each call sends `Authorization: Bearer` and the matching `X-CSRF-Token` header a
 | DA | farmers in the DA's assigned kebeles (DA Kebele Assignment); none without an assignment |
 | Supervisor | farmers in the supervisor's woreda |
 
-**The dev registry ignores `filter_by`.** `search_in_a_register` returns the same rows for any filter (checked 29 Oct and 1 Nov 2026: `woreda_name=Nowhere` still returns all 25). DA Services sends the filter anyway and then keeps only the rows whose woreda / kebele name matches; `filtered_client_side` reports it, and `total` counts what is left.
+**The dev registry ignores `filter_by`.** `search_in_a_register` returns the same rows for any filter (checked 29 Oct and 1 Nov 2026: `woreda_name=Nowhere` still returns all 25). DA Services sends the filter anyway. With a woreda / kebele filter (any scoped caller) it reads every registry page of the search (500 rows a page, at most 20 pages), keeps only the rows whose woreda / kebele matches, and counts `total` and `number_of_pages` from what is left; `filtered_client_side` is then true. Without an area filter the registry's page and figures are returned.
 
 **Search rows are incomplete.** They carry only the registry's list-view columns (names, gender, birth, education, location, photo). Phone and land area come from `get_subject_record`, the plot count from the Lands tab. These are cached per farmer for 10 minutes, so the first full list takes about 20 s for 25 farmers and later calls under 1 s.
 
@@ -177,7 +177,7 @@ Verified on dev (31 Oct – 1 Nov 2026): 25 approved farmers listed with phone, 
 
 | Item | Impact | Owner / next step |
 |---|---|---|
-| Registry ignores `filter_by` | Filtering after the page: a page can come back short and `total` is the registry's figure beyond one page | Registry team (Asmit) |
+| Registry ignores `filter_by` | A scoped search reads the whole result to count it: one registry call per 500 farmers, and farmers past 10,000 are not counted | Registry team (Asmit) |
 | Search rows lack phone / land / plots | Two extra calls per farmer, ~20 s first list | Registry list-view config (Asmit) |
 | DA profile scope uses the manual farmer link, list uses kebeles | An Automatic-mode DA sees a farmer in the list but gets 403 on the profile | DA Services fix |
 | DA edit check compares a kebele name with a kebele code | `can_edit` false for DAs | DA Services fix |

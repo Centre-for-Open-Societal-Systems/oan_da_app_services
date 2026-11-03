@@ -314,6 +314,8 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 			farmers = [f for f in farmers if f.woreda_name == filters["woreda"]]
 		if filters.get("kebele"):
 			farmers = [f for f in farmers if f.kebele_name == filters["kebele"]]
+		if filters.get("kebeles"):
+			farmers = [f for f in farmers if f.kebele_name in set(filters["kebeles"])]
 		if filters.get("state"):
 			farmers = [f for f in farmers if f.state == filters["state"]]
 		needle = (search_text or "").strip().lower()
