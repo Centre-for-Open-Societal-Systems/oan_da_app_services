@@ -1,0 +1,510 @@
+{
+  "info": {
+    "_postman_id": "oan-da-surveys",
+    "name": "OAN DA Surveys",
+    "description": "Survey templates, assigned tasks, responses, and basic results (FR-09d).\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. Login as Supervisor (or Admin with woreda set)\n2. Create template → stores survey_id\n3. List templates / Get template\n4. Login as DA in the same Woreda (or keep Supervisor)\n5. List surveys / Get survey\n6. Submit response → stores response_id\n7. List responses / Results\n8. (Optional) Patch close\n\n## Auth\nNative DocTypes. Bearer {{access_token}} only. No staff CSRF.\n\n## Docs\n- docs/surveys-integration.md\n- docs/surveys-frontend.md\n- docs/api-da-screens.md §2.16\n\nCreating a template and submitting a response write real rows. Use a disposable site.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8200" },
+    { "key": "usr", "value": "" },
+    { "key": "pwd", "value": "" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "survey_id", "value": "" },
+    { "key": "response_id", "value": "" },
+    { "key": "farmer_id", "value": "FR-427495614351" },
+    { "key": "da_id", "value": "" },
+    { "key": "woreda", "value": "ET04-W01" },
+    { "key": "client_op_id", "value": "" },
+    { "key": "window_open", "value": "2026-11-03" },
+    { "key": "window_close", "value": "2026-11-30" }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"refresh_token\", data.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Public login. Set usr/pwd in the environment (Supervisor for create; DA for capture)."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) {",
+                  "  pm.collectionVariables.set(\"access_token\", data.access_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"access_token\", data.access_token);",
+                  "}",
+                  "if (data.refresh_token) {",
+                  "  pm.collectionVariables.set(\"refresh_token\", data.refresh_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"refresh_token\", data.refresh_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/refresh"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Templates (Supervisor / Admin)",
+      "item": [
+        {
+          "name": "Create template",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = \"srv-\" + Date.now();",
+                  "pm.collectionVariables.set(\"client_op_id\", id);",
+                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Create template returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Open SurveyTask with parameters\", function () {",
+                  "  pm.expect(data.status).to.eql(\"Open\");",
+                  "  pm.expect(data.parameters).to.be.an(\"array\").that.is.not.empty;",
+                  "  pm.expect(data.parameters[0].type).to.eql(\"consent\");",
+                  "});",
+                  "if (data.id) {",
+                  "  pm.collectionVariables.set(\"survey_id\", data.id);",
+                  "  if (pm.environment.name) pm.environment.set(\"survey_id\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Meher season farmer satisfaction\",\n  \"type\": \"Satisfaction\",\n  \"open\": \"{{window_open}}\",\n  \"close\": \"{{window_close}}\",\n  \"languages\": [\"English\", \"Amharic\"],\n  \"targetFarmers\": 20,\n  \"questions\": [\n    {\n      \"prompt\": \"How useful was the advice you received this season?\",\n      \"type\": \"rating\",\n      \"options\": \"\",\n      \"required\": true\n    },\n    {\n      \"prompt\": \"Did you apply the advice on your farm?\",\n      \"type\": \"single\",\n      \"options\": \"Yes, fully, Partly, No\",\n      \"required\": true\n    }\n  ],\n  \"woreda\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/templates",
+            "description": "POST /surveys/templates — Supervisor/Admin.\n\nAdmin must send woreda. Supervisor woreda is stamped from RBAC; sending woreda is still fine.\nConsent, Farmer ID and Kebele parameters are prepended server-side.\nWrites a real DA Survey Template row."
+          },
+          "response": []
+        },
+        {
+          "name": "List templates",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List templates returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"data is an array\", function () { pm.expect(body.data).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/surveys/templates?type=Satisfaction&limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "surveys", "templates"],
+              "query": [
+                { "key": "status", "value": "Open", "disabled": true },
+                { "key": "type", "value": "Satisfaction" },
+                { "key": "q", "value": "Meher", "disabled": true },
+                { "key": "limit", "value": "50" },
+                { "key": "start", "value": "0" }
+              ]
+            },
+            "description": "GET /surveys/templates — Supervisor, Admin, Executive."
+          },
+          "response": []
+        },
+        {
+          "name": "Get template",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get template returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"has parameters\", function () { pm.expect(data.parameters).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
+            "description": "GET /surveys/templates/{id}"
+          },
+          "response": []
+        },
+        {
+          "name": "Patch template (extend close)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Patch template returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"close\": \"{{window_close}}\",\n  \"targetFarmers\": 25\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
+            "description": "PATCH /surveys/templates/{id} — metadata. Question edits only when collected == 0."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Assigned surveys",
+      "item": [
+        {
+          "name": "List surveys",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List surveys returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"data is an array\", function () { pm.expect(body.data).to.be.an(\"array\"); });",
+                  "const rows = body.data || [];",
+                  "if (rows.length && !pm.collectionVariables.get(\"survey_id\")) {",
+                  "  pm.collectionVariables.set(\"survey_id\", rows[0].id);",
+                  "  if (pm.environment.name) pm.environment.set(\"survey_id\", rows[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/surveys?limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "surveys"],
+              "query": [
+                { "key": "status", "value": "Open", "disabled": true },
+                { "key": "type", "value": "Satisfaction", "disabled": true },
+                { "key": "language", "value": "English", "disabled": true },
+                { "key": "q", "value": "", "disabled": true },
+                { "key": "limit", "value": "50" },
+                { "key": "start", "value": "0" }
+              ]
+            },
+            "description": "GET /surveys — Assigned surveys for the caller (DA sees own Woreda)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get survey",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get survey returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"SurveyTask shape\", function () {",
+                  "  pm.expect(data).to.include.keys(\"id\", \"name\", \"templateVersion\", \"parameters\", \"answered\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}",
+            "description": "GET /surveys/{id} — parameters for capture."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Responses",
+      "item": [
+        {
+          "name": "Submit response (Synced)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = \"resp-\" + Date.now();",
+                  "pm.collectionVariables.set(\"client_op_id\", id);",
+                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Submit response returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Synced response\", function () {",
+                  "  pm.expect(data.sync_state).to.eql(\"Synced\");",
+                  "  pm.expect(data.farmer_id).to.be.ok;",
+                  "});",
+                  "if (data.id) {",
+                  "  pm.collectionVariables.set(\"response_id\", data.id);",
+                  "  if (pm.environment.name) pm.environment.set(\"response_id\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": {\n    \"p4\": \"4\",\n    \"p5\": \"Yes, fully\"\n  },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "POST /surveys/{id}/responses — DA (or Supervisor with da_id).\n\np4/p5 match the create-template questions after standard p1–p3.\nDuplicate completed farmer → 409.\nWrites a real DA Survey Response row."
+          },
+          "response": []
+        },
+        {
+          "name": "Save draft response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Draft returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Draft state\", function () { pm.expect(data.sync_state).to.eql(\"Draft\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}-draft\",\n  \"answers\": {\n    \"p4\": \"3\"\n  },\n  \"sync_state\": \"Draft\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Draft skips required-answer checks and does not set the duplicate guard."
+          },
+          "response": []
+        },
+        {
+          "name": "List responses",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List responses returns 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"data is an array\", function () {",
+                  "  pm.expect((pm.response.json() || {}).data).to.be.an(\"array\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses?limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "surveys", "{{survey_id}}", "responses"],
+              "query": [
+                { "key": "farmer_id", "value": "{{farmer_id}}", "disabled": true },
+                { "key": "limit", "value": "50" },
+                { "key": "start", "value": "0" }
+              ]
+            },
+            "description": "GET /surveys/{id}/responses"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Results",
+      "item": [
+        {
+          "name": "Get results",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Results returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"aggregates present\", function () {",
+                  "  pm.expect(data).to.include.keys(\"collected\", \"by_status\", \"parameters\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/results",
+            "description": "GET /surveys/{id}/results — Supervisor / Admin / Executive. Basic counts and rating averages."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Close (optional)",
+      "item": [
+        {
+          "name": "Patch close",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Close returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"status Closed\", function () { pm.expect(data.status).to.eql(\"Closed\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Closed\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
+            "description": "Closes the survey. New responses are refused afterward."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

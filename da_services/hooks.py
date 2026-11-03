@@ -151,6 +151,8 @@ permission_query_conditions = {
 	"DA Leave Request": "da_services.permissions.da_leave_request_query_conditions",
 	"DA Farmer Link": "da_services.permissions.da_farmer_link_query_conditions",
 	"DA Farmer Reference": "da_services.permissions.da_farmer_reference_query_conditions",
+	"DA Survey Template": "da_services.permissions.da_survey_template_query_conditions",
+	"DA Survey Response": "da_services.permissions.da_survey_response_query_conditions",
 }
 
 has_permission = {
@@ -163,6 +165,8 @@ has_permission = {
 	"DA Leave Request": "da_services.permissions.has_da_leave_request_permission",
 	"DA Farmer Link": "da_services.permissions.has_da_farmer_link_permission",
 	"DA Farmer Reference": "da_services.permissions.has_da_farmer_reference_permission",
+	"DA Survey Template": "da_services.permissions.has_da_survey_template_permission",
+	"DA Survey Response": "da_services.permissions.has_da_survey_response_permission",
 }
 
 # Document Events
