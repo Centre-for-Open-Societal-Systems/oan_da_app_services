@@ -1,0 +1,523 @@
+{
+  "info": {
+    "_postman_id": "oan-da-visits",
+    "name": "OAN DA Visits",
+    "description": "Plan / list / reschedule / cancel / start / submit farm visits with a farmer.\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. Login\n2. (Optional) GET farmer profile — confirms farmer exists in DA Farmer Reference / registry cache\n3. (Optional, Manual kebele mode only) Create farmer link — Supervisor\n4. Plan a visit → stores visit_id\n5. Get visit / List visits\n6. Start visit → Submit outcome → (optional) Attachments\n7. Activity report\n\n## Auth\nVisits are DA Services native DocTypes. Use Bearer {{access_token}} from Login. No staff CSRF pair is required for these routes (unlike Crop / Livestock / Grievance registry intake).\n\n## Farmer registry before link / schedule\n- **Manual farmer link** (`POST /farmer-links`): farmer must already exist in **DA Farmer Reference** (synced from Farmer Registry), `registration_state=APPROVED`, same Kebele as the DA's Effective Manual assignment. It does **not** call the live Farmer Registry API at link time.\n- **Plan visit** (`POST /visits`): currently only requires a non-empty `farmer_id` + `scheduled_at` (or date+time). It does **not** verify the farmer against Farmer Registry or require an active DA Farmer Link. Specialization conflict on open visits for the same farmer is checked.\n\nDatetimes are site-local (Africa/Addis_Ababa in prod), ISO without offset.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8200" },
+    { "key": "usr", "value": "" },
+    { "key": "pwd", "value": "" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "farmer_id", "value": "FR-427495614351" },
+    { "key": "da_id", "value": "" },
+    { "key": "visit_id", "value": "" },
+    { "key": "client_op_id", "value": "" },
+    { "key": "week", "value": "2026-W44" },
+    { "key": "visit_date", "value": "2026-11-10" },
+    { "key": "visit_time", "value": "09:00" },
+    { "key": "scheduled_at", "value": "2026-11-10 09:00:00" }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Public login. Stores access_token and refresh_token. Set usr/pwd in the environment."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"refresh_token\", data.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/refresh",
+            "description": "Refresh access_token using refresh_token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) {",
+                  "  pm.collectionVariables.set(\"access_token\", data.access_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"access_token\", data.access_token);",
+                  "}",
+                  "if (data.refresh_token) {",
+                  "  pm.collectionVariables.set(\"refresh_token\", data.refresh_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"refresh_token\", data.refresh_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Farmer check (optional before plan / link)",
+      "description": "Recommended before scheduling: confirm the farmer is visible to the caller. Profile resolves FR-… to the registry internal id and enforces scope (DA must be linked / in assigned kebele; Supervisor/Executive by geography).",
+      "item": [
+        {
+          "name": "Get farmer profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/profile",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "farmers", "{{farmer_id}}", "profile"]
+            },
+            "description": "Path: farmer_id (FR-… or registry internal id).\n\nUses Farmer Registry via DA Farmer Reference cache. Returns profile + is_linked + last visit.\n\nDependency: farmer must be syncable into DA Farmer Reference; caller must have scope."
+          },
+          "response": []
+        },
+        {
+          "name": "Get farmer permissions",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/permissions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "farmers", "{{farmer_id}}", "permissions"]
+            },
+            "description": "Returns can_edit, is_linked, link_type for this farmer."
+          },
+          "response": []
+        },
+        {
+          "name": "Get farmer visit history",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/visits?limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "farmers", "{{farmer_id}}", "visits"],
+              "query": [
+                { "key": "limit", "value": "50", "description": "Page size (default 50)" },
+                { "key": "start", "value": "0", "description": "Offset (default 0)" }
+              ]
+            },
+            "description": "Visit history for one farmer. First loads farmer profile for scope check (registry/cache)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Farmer links (Manual kebele mode)",
+      "description": "Only when DA Kebele Assignment mode=Manual. Supervisor/Admin. Farmer must be in DA Farmer Reference, APPROVED, same Kebele as the DA.",
+      "item": [
+        {
+          "name": "Create farmer link",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/farmer-links",
+            "description": "Body:\n- da_id (required) — DA with Effective Manual kebele assignment\n- farmer_id (required) — must exist in DA Farmer Reference\n- client_op_id (optional) — idempotency key\n\nRoles: Supervisor, Admin.\n\nDoes not call live Farmer Registry; validates against DA Farmer Reference + Kebele assignment."
+          },
+          "response": []
+        },
+        {
+          "name": "List farmer links",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmer-links?da_id={{da_id}}&farmer_id={{farmer_id}}&link_type=Manual&is_active=true",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "farmer-links"],
+              "query": [
+                { "key": "da_id", "value": "{{da_id}}", "description": "Filter by DA" },
+                { "key": "farmer_id", "value": "{{farmer_id}}", "description": "Filter by farmer" },
+                { "key": "link_type", "value": "Manual", "description": "Automatic | Manual" },
+                { "key": "is_active", "value": "true", "description": "default true when omitted in service" }
+              ]
+            },
+            "description": "Roles: Supervisor, Admin, DA."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Plan and manage visits",
+      "item": [
+        {
+          "name": "Plan a visit (scheduled_at)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get(\"client_op_id\")) {",
+                  "  const id = \"visit-\" + Date.now();",
+                  "  pm.collectionVariables.set(\"client_op_id\", id);",
+                  "  if (pm.environment.name) pm.environment.set(\"client_op_id\", id);",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Plan returns 201 or 200\", function () {",
+                  "  pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "const visitId = data.name || data.id;",
+                  "if (visitId) {",
+                  "  pm.collectionVariables.set(\"visit_id\", visitId);",
+                  "  if (pm.environment.name) pm.environment.set(\"visit_id\", visitId);",
+                  "}",
+                  "if (data.da_id) {",
+                  "  pm.collectionVariables.set(\"da_id\", data.da_id);",
+                  "  if (pm.environment.name) pm.environment.set(\"da_id\", data.da_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"scheduled_at\": \"{{scheduled_at}}\",\n  \"visit_type\": \"Crop Survey\",\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"duration_min\": 45,\n  \"priority\": \"Medium\",\n  \"priority_reason\": \"Routine seasonal follow-up\",\n  \"plot_ref\": \"BT-0472\",\n  \"location\": {\n    \"lat\": 9.0320,\n    \"lng\": 38.7469\n  },\n  \"notify_farmer_sms\": false,\n  \"da_id\": \"{{da_id}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits",
+            "description": "POST /visits — plan a visit (201).\n\n### Body fields\n| Field | Required | Notes |\n| --- | --- | --- |\n| farmer_id | yes | FR-… or registry id; **not** verified against Farmer Registry today |\n| scheduled_at | yes* | Site-local datetime; *or* use date + time |\n| date, time | alt | Form style; time defaults to 09:00 |\n| visit_type | no | Crop Survey / Livestock Survey / Services / Advisory / Follow-up (default Crop Survey) |\n| purpose | no | |\n| duration_min | no | default 45 |\n| priority | no | Low / Medium / High (default Medium) |\n| priority_reason | no | |\n| plot_ref | no | |\n| location | no | { lat, lng } |\n| notify_farmer_sms | no | recorded; SMS gateway not yet wired |\n| advisory_qa | no | Advisory visits only: [{ question, answer }] |\n| da_id | Supervisor | required when Supervisor plans for a DA; DA self-plans omit or own id |\n| client_op_id | no | idempotency — same key returns existing visit |\n\nRoles: DA, Supervisor, Admin.\n\nStores visit_id from response `data.name`."
+          },
+          "response": []
+        },
+        {
+          "name": "Plan a visit (date + time)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = \"visit-date-\" + Date.now();",
+                  "pm.collectionVariables.set(\"client_op_id\", id);",
+                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "const visitId = data.name || data.id;",
+                  "if (visitId) {",
+                  "  pm.collectionVariables.set(\"visit_id\", visitId);",
+                  "  if (pm.environment.name) pm.environment.set(\"visit_id\", visitId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"date\": \"{{visit_date}}\",\n  \"time\": \"{{visit_time}}\",\n  \"visit_type\": \"Advisory\",\n  \"purpose\": \"Advisory Q&A on fertilizer timing\",\n  \"duration_min\": 30,\n  \"priority\": \"High\",\n  \"priority_reason\": \"Overdue advisory\",\n  \"notify_farmer_sms\": true,\n  \"advisory_qa\": [\n    {\n      \"question\": \"When should top-dressing be applied?\",\n      \"answer\": \"At tillering, if moisture is adequate.\"\n    }\n  ],\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits",
+            "description": "Same as Plan a visit, using separate date + time instead of scheduled_at. Includes Advisory advisory_qa sample."
+          },
+          "response": []
+        },
+        {
+          "name": "List visits",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/visits?date=&from={{visit_date}}&to={{visit_date}}&status=&farmer_id={{farmer_id}}&da_id={{da_id}}&limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "visits"],
+              "query": [
+                { "key": "date", "value": "", "description": "Single calendar day (alternative to from/to). Use today for today's plan.", "disabled": true },
+                { "key": "from", "value": "{{visit_date}}", "description": "Range start date" },
+                { "key": "to", "value": "{{visit_date}}", "description": "Range end date" },
+                { "key": "status", "value": "", "description": "physical_status filter e.g. Planned, In progress, Physical Visit Complete", "disabled": true },
+                { "key": "farmer_id", "value": "{{farmer_id}}", "description": "Filter by farmer" },
+                { "key": "da_id", "value": "{{da_id}}", "description": "Filter by DA (Supervisor/Executive)" },
+                { "key": "limit", "value": "50", "description": "Page size (default 50)" },
+                { "key": "start", "value": "0", "description": "Offset (default 0)" }
+              ]
+            },
+            "description": "GET /visits — visits the caller may see. Meta: { total, limit, start }.\n\nRoles: DA, Supervisor, Executive, Admin."
+          },
+          "response": []
+        },
+        {
+          "name": "Get visit",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "visits", "{{visit_id}}"]
+            },
+            "description": "One visit + derived ui_status / planner_status + timeline[] built from visit timestamps."
+          },
+          "response": []
+        },
+        {
+          "name": "Reschedule visit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scheduled_at\": \"2026-11-12 10:30:00\",\n  \"reason\": \"Farmer unavailable\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/reschedule",
+            "description": "Body: scheduled_at **or** date+time, plus reason.\n\nReason options (doctype): Farmer unavailable / Weather or road access / Agent schedule conflict / Inputs not yet delivered / Other.\n\nCreates a new Planned visit linked via rescheduled_from; old visit becomes Rescheduled.\n\nDependency: visit_id from Plan."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "const visitId = data.name || data.id;",
+                  "if (visitId) {",
+                  "  pm.collectionVariables.set(\"visit_id\", visitId);",
+                  "  if (pm.environment.name) pm.environment.set(\"visit_id\", visitId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Cancel visit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Farmer declined the visit\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/cancel",
+            "description": "Body: { reason }. Dependency: visit_id. Do not run on the same visit you still need for start/submit."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Start, outcome, evidence",
+      "description": "Order: Plan → Start → (optional Attachments) → Submit. Use a Planned visit_id that was not cancelled.",
+      "item": [
+        {
+          "name": "Start visit (check-in)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"arrived_at\": \"2026-11-10 09:05:00\",\n  \"gps\": {\n    \"lat\": 9.0321,\n    \"lng\": 38.7470,\n    \"accuracy_m\": 12.5\n  },\n  \"farmer_present\": true,\n  \"client_op_id\": \"start-{{visit_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/start",
+            "description": "Check-in. Sets physical_status = In progress.\n\nBody:\n- arrived_at (optional)\n- gps { lat, lng, accuracy_m } (optional)\n- farmer_present (default true)\n- client_op_id (optional; replay-safe if already In progress)"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload attachment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image/document file (required)"
+                },
+                {
+                  "key": "kind",
+                  "value": "Crop",
+                  "type": "text",
+                  "description": "Crop / Land / Animal / Document"
+                },
+                { "key": "lat", "value": "9.0321", "type": "text" },
+                { "key": "lng", "value": "38.7470", "type": "text" },
+                { "key": "captured_at", "value": "2026-11-10 09:10:00", "type": "text" },
+                {
+                  "key": "content_hash",
+                  "value": "",
+                  "type": "text",
+                  "description": "Optional client hash for dedupe"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/attachments",
+            "description": "multipart/form-data. Rate limit: 60/min per user. Select a local file for `file` before sending."
+          },
+          "response": []
+        },
+        {
+          "name": "Submit visit outcome",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"farmer_response\": \"Agreed to top-dress next week if rain holds\",\n  \"observed\": \"Stand looks even; mild leaf spotting on plot edge.\",\n  \"advice_given\": \"Monitor spotting; apply recommended fungicide if it spreads.\",\n  \"inputs_actions\": \"Logged pending fertilizer voucher\",\n  \"next_action\": {\n    \"type\": \"Follow-up visit\",\n    \"note\": \"Re-check leaf spotting\",\n    \"date\": \"2026-11-24\"\n  },\n  \"advisory_qa\": [\n    {\n      \"question\": \"Any pest pressure this week?\",\n      \"answer\": \"None reported by farmer.\"\n    }\n  ],\n  \"client_op_id\": \"outcome-{{visit_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/submit",
+            "description": "Submit outcome → physical_status = Physical Visit Complete.\n\nnext_action.type: None | Follow-up visit | Task.\nFollow-up visit creates a Planned DA Visit; Task creates a DA Task.\n\nDependency: visit must be started (In progress) per doctype rules."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Reports",
+      "item": [
+        {
+          "name": "Weekly activity report",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/reports/activity?week={{week}}&da_id={{da_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "reports", "activity"],
+              "query": [
+                { "key": "week", "value": "{{week}}", "description": "ISO week e.g. 2026-W44" },
+                { "key": "da_id", "value": "{{da_id}}", "description": "Optional; Supervisor filter" }
+              ]
+            },
+            "description": "GET /reports/activity. Rate limit 120/min."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

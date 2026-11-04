@@ -196,19 +196,92 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		self.assertIn(visit1.name, visit2_ids)
 		self.assertIn(visit2.name, visit2_ids)
 
-	def test_da_no_kebele_assignment_sees_nothing(self):
-		"""Test DA with no Kebele assignment sees empty list."""
+	def test_da_no_kebele_assignment_sees_own_visits(self):
+		"""Without an Effective Kebele assignment, a DA still sees their own visits."""
+		da_id = "DA-NO-ASSIGN"
 		ctx_no_assignment = ScopeContext(
 			user="da-no-assign@test.com",
 			roles={"Development Agent"},
-			da_ids={"DA-NO-ASSIGN"},
+			da_ids={da_id},
 			unrestricted=False,
 		)
+		own = frappe.get_doc(
+			{
+				"doctype": "DA Visit",
+				"da_id": da_id,
+				"farmer_id": self.farmer_kebele_a,
+				"visit_type": "Crop Survey",
+				"physical_status": "Planned",
+				"scheduled_at": datetime.now() + timedelta(days=1),
+			}
+		)
+		spec_svc.set_visit_specializations(own, ["Crop Production"])
+		own.insert(ignore_permissions=True, ignore_links=True)
 
-		visits, total = svc.list_visits(ctx=ctx_no_assignment)
+		visits, total = svc.list_visits(ctx=ctx_no_assignment, da_id=da_id)
+		self.assertIn(own.name, [v["name"] for v in visits])
+		self.assertGreaterEqual(total, 1)
 
-		self.assertEqual(len(visits), 0)
-		self.assertEqual(total, 0)
+		# Unrelated DA visits stay hidden when filtering by this DA-ID
+		other = frappe.get_doc(
+			{
+				"doctype": "DA Visit",
+				"da_id": self.da1,
+				"farmer_id": self.farmer_kebele_a,
+				"visit_type": "Crop Survey",
+				"physical_status": "Planned",
+				"scheduled_at": datetime.now() + timedelta(days=2),
+				"kebele": self.kebele_a,
+			}
+		)
+		spec_svc.set_visit_specializations(other, ["Crop Production"])
+		other.insert(ignore_permissions=True, ignore_links=True)
+		visits, _ = svc.list_visits(ctx=ctx_no_assignment, da_id=da_id)
+		self.assertNotIn(other.name, [v["name"] for v in visits])
+
+	def test_da_id_filter_returns_own_visit_without_kebele(self):
+		"""``da_id`` lists that DA's scheduled visits even when Kebele was never filled."""
+		visit = frappe.get_doc(
+			{
+				"doctype": "DA Visit",
+				"da_id": self.da1,
+				"farmer_id": self.farmer_kebele_a,
+				"visit_type": "Crop Survey",
+				"physical_status": "Planned",
+				"scheduled_at": datetime.now() + timedelta(days=1),
+				# kebele intentionally omitted — registry fill may leave geography blank
+			}
+		)
+		spec_svc.set_visit_specializations(visit, ["Crop Production"])
+		visit.insert(ignore_permissions=True, ignore_links=True)
+
+		visits, total = svc.list_visits(ctx=self.ctx_da1, da_id=self.da1)
+		self.assertIn(visit.name, [v["name"] for v in visits])
+		self.assertGreaterEqual(total, 1)
+
+	def test_peer_visit_is_readable_but_not_writable(self):
+		"""Same-Kebele peer visits are readable; start/cancel stay on own DA-ID."""
+		visit = frappe.get_doc(
+			{
+				"doctype": "DA Visit",
+				"da_id": self.da1,
+				"farmer_id": self.farmer_kebele_a,
+				"visit_type": "Crop Survey",
+				"physical_status": "Planned",
+				"scheduled_at": datetime.now() + timedelta(days=1),
+				"kebele": self.kebele_a,
+			}
+		)
+		spec_svc.set_visit_specializations(visit, ["Crop Production"])
+		visit.insert(ignore_permissions=True, ignore_links=True)
+
+		# DA2 (same Kebele) can read
+		out = svc.get_visit(visit.name, ctx=self.ctx_da2)
+		self.assertEqual(out["name"], visit.name)
+
+		# DA2 cannot start DA1's visit
+		with self.assertRaises(frappe.PermissionError):
+			svc.start_visit(visit.name, ctx=self.ctx_da2)
 
 	def test_supervisor_sees_all_woreda_visits(self):
 		"""Test Supervisor sees all visits in their Woreda."""
