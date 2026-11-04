@@ -87,12 +87,15 @@ class FarmerRegistryClient(ABC):
 		Args:
 		    search_text: Free text the registry matches on name / ids
 		    filter_by: {woreda, kebele, state} as DA codes; translated to the
-		        registry's *_name filters by the implementation
+		        registry's *_name filters by the implementation. kebeles is a
+		        list of DA codes, any of which matches.
 		    page: 1-based page number (registry current_page)
 		    page_size: Rows per page
 
 		Returns:
-		    {"items": [FarmerListItem], "page", "page_size", "total", "number_of_pages"}
+		    {"items": [FarmerListItem], "page", "page_size", "total", "number_of_pages",
+		     "filtered_client_side"}; with an area filter total counts the
+		    farmers in that area, not the registry's figure.
 		"""
 		pass
 

@@ -82,9 +82,13 @@ def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
 	# Check scope: Different rules for DA vs Supervisor/Executive
 	if not ctx.unrestricted:
 		if ctx.has_any_role(C.ROLE_DA):
-			# DAs can ONLY access linked farmers
+			# A DA reads farmers linked to them or in their assigned Kebeles: the same
+			# farmers their list shows (FR-05, DA-211).
 			da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-			if not _is_farmer_linked_to_da(farmer_id, da_ids_list):
+			if not (
+				_is_farmer_linked_to_da(farmer_id, da_ids_list)
+				or _is_farmer_in_da_kebele(farmer_id, da_ids_list, kebele=ref.get("kebele"))
+			):
 				frappe.throw(_("Farmer is not linked or assigned to you."), frappe.PermissionError)
 		else:
 			# Supervisors/Executives check region/woreda scope
@@ -161,7 +165,6 @@ def search_farmers(
 	- Admin: whatever filters were asked for
 	"""
 	filter_by: dict = {}
-	keep_kebeles: set[str] | None = None
 
 	if ctx.unrestricted:
 		filter_by.update({"woreda": woreda, "kebele": kebele})
@@ -180,7 +183,7 @@ def search_farmers(
 		if len(assigned) == 1:
 			filter_by["kebele"] = assigned[0]
 		else:
-			keep_kebeles = set(assigned) | set(_area_names(assigned))
+			filter_by["kebeles"] = assigned
 	else:
 		if woreda:
 			_require_woreda_in_scope(ctx, woreda)
@@ -198,25 +201,13 @@ def search_farmers(
 	result = get_farmer_registry_client().search_farmers(
 		search_text=search_text, filter_by=filter_by, page=page, page_size=page_size
 	)
-	items = result.get("items") or []
-	total = int(result.get("total") or 0)
-	pages = int(result.get("number_of_pages") or 0)
-	narrowed = bool(result.get("filtered_client_side"))
-	if keep_kebeles is not None and any(i.kebele for i in items):
-		kept = [i for i in items if not i.kebele or i.kebele in keep_kebeles]
-		if len(kept) != len(items):
-			narrowed = True
-			# One page is the whole result, so its remainder is the true count.
-			if pages <= 1:
-				total, pages = len(kept), (1 if kept else 0)
-		items = kept
 	return {
-		"farmers": [list_item_to_dict(i) for i in items],
-		"total": total,
+		"farmers": [list_item_to_dict(i) for i in result.get("items") or []],
+		"total": int(result.get("total") or 0),
 		"page": int(result.get("page") or page),
 		"page_size": int(result.get("page_size") or page_size),
-		"number_of_pages": pages,
-		"filtered_client_side": narrowed,
+		"number_of_pages": int(result.get("number_of_pages") or 0),
+		"filtered_client_side": bool(result.get("filtered_client_side")),
 	}
 
 
@@ -743,12 +734,17 @@ def _is_farmer_linked_to_da(farmer_id: str, da_ids: list) -> bool:
 	)
 
 
-def _is_farmer_in_da_kebele(farmer_id: str, da_ids: list) -> bool:
+def _is_farmer_in_da_kebele(farmer_id: str, da_ids, kebele: str | None = None) -> bool:
 	"""Check if farmer is in any Kebele assigned to the given DA IDs (DA-211).
+
+	The farmer's Kebele is the registry's name ("Lekatit") or a code; an
+	assignment holds a code or a name. Both the codes and their English names
+	are matched, as the farmer list does, so list, profile and edit agree.
 
 	Args:
 		farmer_id: Farmer identifier
-		da_ids: List of DA identifiers
+		da_ids: DA identifiers
+		kebele: The farmer's Kebele when the caller already has it
 
 	Returns:
 		True if farmer's Kebele matches any DA's assigned Kebele
@@ -756,15 +752,12 @@ def _is_farmer_in_da_kebele(farmer_id: str, da_ids: list) -> bool:
 	if not da_ids:
 		return False
 
-	# Get farmer's Kebele
-	farmer_kebele = frappe.db.get_value("DA Farmer Reference", farmer_id, "kebele")
+	farmer_kebele = kebele or frappe.db.get_value("DA Farmer Reference", farmer_id, "kebele")
 	if not farmer_kebele:
 		return False
 
-	# Get DA's assigned Kebeles
 	assigned_kebeles = _get_da_assigned_kebeles(list(da_ids))
-
-	return farmer_kebele in assigned_kebeles
+	return farmer_kebele in set(assigned_kebeles) | set(_area_names(assigned_kebeles))
 
 
 def _ensure_registry_cache(*, kebeles: list) -> None:

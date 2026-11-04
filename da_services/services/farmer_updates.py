@@ -110,13 +110,18 @@ def queue_farmer_update(
 	if not farmer:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 
-	# Validate permissions (must be linked to DA)
-	from da_services.services.farmers import _is_farmer_linked_to_da
+	# Validate permissions: linked to the DA or in their assigned Kebele (DA-41, DA-211)
+	from da_services.services.farmers import _is_farmer_in_da_kebele, _is_farmer_linked_to_da
 
 	da_ids = list(ctx.da_ids) if ctx.da_ids else []
-	if not da_ids or not _is_farmer_linked_to_da(farmer_id, da_ids):
+	if not da_ids or not (
+		_is_farmer_linked_to_da(farmer_id, da_ids) or _is_farmer_in_da_kebele(farmer_id, da_ids)
+	):
 		frappe.throw(
-			_("You do not have permission to update this farmer. Farmer must be linked to you."),
+			_(
+				"You do not have permission to update this farmer. "
+				"Farmer must be linked to you or in your assigned Kebele."
+			),
 			frappe.PermissionError,
 		)
 

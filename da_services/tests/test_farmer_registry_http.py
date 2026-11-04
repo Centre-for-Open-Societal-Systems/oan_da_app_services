@@ -257,6 +257,49 @@ _route.register_calls = 0
 _route.change_request_tabs = []
 
 
+def _search_row(n: int, kebele: str | None, woreda: str | None = "Bako Tibe") -> dict:
+	fields = [{"field_name": "woreda_name", "value": woreda, "order": 1}] if woreda else []
+	if kebele:
+		fields.append({"field_name": "kebele_name", "value": kebele, "order": 2})
+	return {
+		"internal_record_id": f"frm-p{n}",
+		"functional_record_id": f"FR-9{n:05d}",
+		"display_fields": fields,
+	}
+
+
+# Nine farmers over three registry pages of three; five are in Bako 01. One
+# Bako 01 row names no Woreda and one row names no Kebele.
+PAGED_ROWS = [
+	_search_row(0, "Bako 01"),
+	_search_row(1, "Bako 02"),
+	_search_row(2, "Bako 01"),
+	_search_row(3, None),
+	_search_row(4, "Bako 01"),
+	_search_row(5, "Bako 01"),
+	_search_row(6, "Bako 03"),
+	_search_row(7, "Bako 01", woreda=None),
+	_search_row(8, "Bako 01"),
+]
+
+
+def _paged_route(rows: list[dict]):
+	"""_route, except that search pages through rows and ignores filter_by, as the dev registry does."""
+
+	def route(url, json=None, **kwargs):
+		if not url.endswith("/register-data/search_in_a_register"):
+			return _route(url, json=json, **kwargs)
+		pag = json["request_body"]["pagination_request"]
+		route.pages_read.append(pag["current_page"])
+		size = pag["page_size"]
+		body = _envelope(rows[(pag["current_page"] - 1) * size : pag["current_page"] * size], total=len(rows))
+		body["response_body"]["pagination_response"]["number_of_pages"] = -(-len(rows) // size)
+		return _Resp(body)
+
+	route.pages_read = []
+	return route
+
+
 class TestHttpReadPath(IntegrationTestCase):
 	def setUp(self):
 		self._saved = {k: frappe.conf.get(k) for k in CONF_KEYS}
@@ -495,6 +538,64 @@ class TestHttpReadPath(IntegrationTestCase):
 			[i.farmer_id for i in self.client.search_farmers(filter_by={"kebele": "Bako 02"})["items"]],
 			["frm-2"],
 		)
+
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_PAGE_SIZE", 3)
+	def test_search_farmers_counts_an_area_across_every_registry_page(self):
+		"""The registry ignores filter_by over 3 pages: total and pages count only the Kebele's farmers."""
+		route = _paged_route(PAGED_ROWS)
+		with patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=route):
+			first = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=1, page_size=2)
+			self.assertEqual(route.pages_read, [1, 2, 3])
+			second = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=2, page_size=2)
+			last = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=3, page_size=2)
+			beyond = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=4, page_size=2)
+
+		ids = lambda page: [i.farmer_id for i in page["items"]]  # noqa: E731
+		# frm-p7 names Bako 01 but no Woreda; it still matches a Kebele-only filter.
+		self.assertEqual(ids(first), ["frm-p0", "frm-p2"])
+		self.assertEqual(ids(second), ["frm-p4", "frm-p5"])
+		self.assertEqual(ids(last), ["frm-p7", "frm-p8"])
+		for page in (first, second, last):
+			self.assertEqual((page["total"], page["number_of_pages"]), (6, 3))
+			self.assertTrue(page["filtered_client_side"])
+		self.assertEqual(ids(beyond), [])
+
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_PAGE_SIZE", 3)
+	def test_search_farmers_area_scan_fails_closed(self):
+		"""Woreda and Kebele together: a row naming no Woreda or no Kebele is dropped."""
+		with patch(
+			"da_services.integrations.farmer_registry.http.requests.post",
+			side_effect=_paged_route(PAGED_ROWS),
+		):
+			page = self.client.search_farmers(
+				filter_by={"woreda": "Bako Tibe", "kebele": "Bako 01"}, page_size=10
+			)
+			several = self.client.search_farmers(filter_by={"kebeles": ["Bako 02", "Bako 03"]}, page_size=10)
+		self.assertEqual(
+			[i.farmer_id for i in page["items"]], ["frm-p0", "frm-p2", "frm-p4", "frm-p5", "frm-p8"]
+		)
+		self.assertEqual((page["total"], page["number_of_pages"]), (5, 1))
+		self.assertEqual([i.farmer_id for i in several["items"]], ["frm-p1", "frm-p6"])
+		self.assertEqual(several["total"], 2)
+
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_PAGE_SIZE", 3)
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_MAX_PAGES", 2)
+	def test_search_farmers_area_scan_stops_at_the_page_bound(self):
+		route = _paged_route(PAGED_ROWS)
+		with patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=route):
+			page = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page_size=10)
+		self.assertEqual(route.pages_read, [1, 2])
+		self.assertEqual(page["total"], 4)
+
+	def test_search_farmers_without_area_filter_reads_one_registry_page(self):
+		"""An unscoped caller gets the registry's page and its figures, as before."""
+		route = _paged_route(PAGED_ROWS)
+		with patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=route):
+			page = self.client.search_farmers(filter_by={"state": "APPROVED"}, page=2, page_size=3)
+		self.assertEqual(route.pages_read, [2])
+		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-p3", "frm-p4", "frm-p5"])
+		self.assertEqual((page["total"], page["number_of_pages"]), (9, 3))
+		self.assertFalse(page["filtered_client_side"])
 
 	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
 	def test_search_farmers_clamps_page_size(self, _post):

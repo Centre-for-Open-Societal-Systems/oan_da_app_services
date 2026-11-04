@@ -28,6 +28,7 @@ Intake form registration (farmer_registry_register_mode = "intake"):
     Master Data geo/get_all_geo_levels, get_geo_level_values
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -73,6 +74,10 @@ ID_CACHE_TTL = 60 * 60
 # Phone and land area of a farmer, read from the record to complete search rows.
 SUMMARY_CACHE_PREFIX = "da_services:farmer_registry:summary"
 SUMMARY_CACHE_TTL = 10 * 60
+
+# An area-scoped search reads the whole result to count it (see search_farmers).
+SEARCH_SCAN_PAGE_SIZE = 500
+SEARCH_SCAN_MAX_PAGES = 20
 # The Farmer intake form on dev is "farmer_ingestion_intake"; matched ignoring spaces, _ and -.
 DEFAULT_INTAKE_FORM_CONTAINS = "Farmer Ingestion"
 
@@ -548,25 +553,68 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		page: int = 1,
 		page_size: int = 50,
 	) -> dict:
-		"""One page of search_in_a_register with the registry's page metadata.
+		"""One page of search_in_a_register with page metadata.
 
-		filter_by takes DA codes for woreda / kebele and passes any other key
-		through as a registry filter. Kebele is narrowed here as in list_farmers.
+		filter_by takes DA codes for woreda / kebele, a list of DA codes under
+		kebeles (a DA posted to several Kebeles), and passes any other key
+		through as a registry filter.
+
+		The dev registry (29 Oct 2026) returns the same rows whatever filter_by
+		says, so its paging counts farmers from every area. With an area filter
+		the whole result is read, the filter re-applied, and total / pages are
+		counted from what is left. Without one the registry's page is returned.
 		"""
 		page = max(1, int(page or 1))
 		page_size = max(1, min(int(page_size or 50), 500))
 
 		filters: dict = {}
+		keep_kebeles: set[str] = set()
 		for key, value in (filter_by or {}).items():
-			if value in (None, ""):
+			if value in (None, "", [], ()):
 				continue
 			if key in ("woreda", "kebele"):
 				name = self._area_name(value)
 				if name:
 					filters[f"{key}_name"] = name
+			elif key == "kebeles":
+				for code in value:
+					keep_kebeles.update(filter(None, (code, self._area_name(code))))
 			else:
 				filters[key] = value
 
+		if not (filters.get("woreda_name") or filters.get("kebele_name") or keep_kebeles):
+			res = self._search_page(filters, search_text, page, page_size)
+			items = [self._with_record_summary(search_row_to_list_item(r)) for r in self._rows(res)]
+			total = res.pagination.get("number_of_items")
+			pages = res.pagination.get("number_of_pages")
+			total = int(total) if total is not None else len(items)
+			pages = int(pages) if pages else (1 if items else 0)
+			return {
+				"items": items,
+				"page": page,
+				"page_size": page_size,
+				"total": total,
+				"number_of_pages": pages,
+				"filtered_client_side": False,
+			}
+
+		# Area filters are the caller's scope and fail closed: a row that names
+		# another area, or no area at all, is dropped.
+		items = [
+			i for i in self._scan_search(filters, search_text) if self._in_area(i, filters, keep_kebeles)
+		]
+		total = len(items)
+		start = (page - 1) * page_size
+		return {
+			"items": [self._with_record_summary(i) for i in items[start : start + page_size]],
+			"page": page,
+			"page_size": page_size,
+			"total": total,
+			"number_of_pages": math.ceil(total / page_size),
+			"filtered_client_side": True,
+		}
+
+	def _search_page(self, filters: dict, search_text: str, page: int, page_size: int) -> StaffResponse:
 		res = self._staff_post(
 			"/register-data/search_in_a_register",
 			{"register_id": self.register_id},
@@ -576,44 +624,38 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 			filter_by=filters or None,
 			search_text=search_text or "",
 		)
-		rows: list = []
-		if res.ok:
-			rows = [r for r in (res.payload or []) if isinstance(r, dict)]
-		elif not res.not_found:
+		if not res.ok and not res.not_found:
 			self._reject(res, "search farmers")
+		return res
 
-		items = [self._with_record_summary(search_row_to_list_item(row)) for row in rows]
-		# The dev registry (29 Oct 2026) returns the same rows whatever filter_by
-		# says, and kebele_name is not whitelisted anyway. Area filters are the
-		# caller's scope, so they are re-applied here and fail closed: a row that
-		# names another area, or no area at all, is dropped.
-		narrowed = False
-		for key, attr in (("woreda_name", "woreda"), ("kebele_name", "kebele")):
-			wanted = filters.get(key)
-			if not wanted:
-				continue
-			kept = [i for i in items if getattr(i, attr) == wanted]
-			narrowed = narrowed or len(kept) != len(items)
-			items = kept
+	@staticmethod
+	def _rows(res: StaffResponse) -> list[dict]:
+		return [r for r in (res.payload or []) if isinstance(r, dict)] if res.ok else []
 
-		total = res.pagination.get("number_of_items")
-		pages = res.pagination.get("number_of_pages")
-		total = int(total) if total is not None else len(items)
-		pages = int(pages) if pages else (1 if items else 0)
-		# A single registry page is the whole result, so what is left of it is
-		# the true count; across several pages only the registry's figure exists.
-		if narrowed and pages <= 1:
-			total, pages = len(items), (1 if items else 0)
-		return {
-			"items": items,
-			"page": page,
-			"page_size": page_size,
-			"total": total,
-			"number_of_pages": pages,
-			# True when rows were dropped here; with several registry pages
-			# total / number_of_pages are then the registry's unfiltered figures.
-			"filtered_client_side": narrowed,
-		}
+	def _scan_search(self, filters: dict, search_text: str) -> list[FarmerListItem]:
+		"""Every row of a search, page by page, up to SEARCH_SCAN_MAX_PAGES."""
+		items: list[FarmerListItem] = []
+		for current in range(1, SEARCH_SCAN_MAX_PAGES + 1):
+			res = self._search_page(filters, search_text, current, SEARCH_SCAN_PAGE_SIZE)
+			rows = self._rows(res)
+			items.extend(search_row_to_list_item(r) for r in rows)
+			pages = res.pagination.get("number_of_pages")
+			if len(rows) < SEARCH_SCAN_PAGE_SIZE or (pages and current >= int(pages)):
+				return items
+		frappe.logger("da_services").warning(
+			"Farmer search stopped after %s registry pages of %s; later farmers are not counted",
+			SEARCH_SCAN_MAX_PAGES,
+			SEARCH_SCAN_PAGE_SIZE,
+		)
+		return items
+
+	@staticmethod
+	def _in_area(item: FarmerListItem, filters: dict, keep_kebeles: set[str]) -> bool:
+		if filters.get("woreda_name") and item.woreda != filters["woreda_name"]:
+			return False
+		if filters.get("kebele_name") and item.kebele != filters["kebele_name"]:
+			return False
+		return not keep_kebeles or item.kebele in keep_kebeles
 
 	def get_change_requests(
 		self, farmer_id: str, *, tab: str | None = None, status: str | None = None
