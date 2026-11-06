@@ -119,6 +119,7 @@ class TestAudit(IntegrationTestCase):
 
 		old = getattr(frappe.local, "request", None)
 		frappe.local.request = Request(EnvironBuilder(path="/api/v1/da-services/me").get_environ())
+		frappe.local.da_audit_pending = []  # denials queued by earlier tests in this process are not ours
 		try:
 			frappe.set_user(SUP)
 			with self.assertRaises(frappe.PermissionError):
