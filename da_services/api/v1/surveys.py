@@ -8,6 +8,7 @@ GET  /api/v1/da-services/surveys
 GET  /api/v1/da-services/surveys/<id>
 POST /api/v1/da-services/surveys/<id>/responses
 GET  /api/v1/da-services/surveys/<id>/responses
+GET  /api/v1/da-services/surveys/<id>/responses/export
 GET  /api/v1/da-services/surveys/<id>/results
 """
 
@@ -165,6 +166,27 @@ def list_responses(survey_id: str, **kwargs):
 	start = int(q.get("start") or 0)
 	rows, total = svc.list_responses(survey_id, ctx, farmer_id=q.get("farmer_id"), limit=limit, start=start)
 	return success_response(data=rows, meta={"total": total, "limit": limit, "start": start})
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@route(
+	"/surveys/<survey_id>/responses/export",
+	methods=("GET",),
+	summary="Supervisor/Executive/Admin: download responses as XLSX",
+)
+@frappe.whitelist()
+@handle_api_errors
+def export_responses(survey_id: str):
+	"""XLSX download. Uses ``type=download`` so ``handle_api_errors`` leaves it raw."""
+	ctx = require_roles(*svc.RESULTS_ROLES)
+	filename, content = svc.export_responses(survey_id, ctx)
+	frappe.response["type"] = "download"
+	frappe.response["filename"] = filename
+	frappe.response["filecontent"] = content
+	frappe.response["content_type"] = XLSX_MIME
+	return None
 
 
 @route("/surveys/<survey_id>/results", methods=("GET",), summary="Basic survey result aggregates")

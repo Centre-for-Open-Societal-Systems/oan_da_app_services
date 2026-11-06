@@ -30,7 +30,7 @@ Frontend sources (mock until wired):
 - `src/features/surveys/store.ts` — session-only created surveys (remove once API lands)
 - `src/app/(dashboard)/surveys/...`
 
-Nav: DA and Supervisor already; backend `GET /me` menu now also exposes `/surveys` for Admin so it matches `canCreateTemplate`.
+Nav: the backend `GET /me` menu exposes `/surveys` for **DA, Supervisor, Executive and Admin**. Communications Officer must not receive it.
 
 ## What to stop using
 
@@ -40,7 +40,7 @@ Nav: DA and Supervisor already; backend `GET /me` menu now also exposes `/survey
 | `getSurveyTask(id)` / Zustand `created` | `GET /surveys/{id}` |
 | `surveyFromTemplate` + `useSurveyTemplatesStore.add` | `POST /surveys/templates` → use returned `SurveyTask` |
 | Local `answered` Set on submit | Server `answered[]` on the task; 409 on duplicate |
-| Hardcoded kebele `"Bako 01"` for auto prefill | Prefill from DA assignment / farmer profile when those APIs are available; still send answers for custom questions |
+| Hardcoded kebele `"Bako 01"` for auto prefill | Prefill from the selected farmer (`GET /farmers`), not a constant |
 
 Results analysis copy on the page (“Part 2 preview”) stays a UI note. Basic aggregates are available at `GET /surveys/{id}/results` when you wire a supervisor results view.
 
@@ -82,11 +82,34 @@ The list and detail payloads use the same camelCase names the UI already types:
 
 Filters on the list: `status`, `type`, `language`, `q` — same axes as `SurveyTasks` advanced filters.
 
+## Farmer picker and prefill
+
+Use the existing farmer list; do **not** add a survey-specific farmer endpoint:
+
+```http
+GET /api/v1/da-services/farmers?limit=50&start=0
+```
+
+For a DA the backend already returns only farmers in the DA's assigned Kebeles, so the
+picker cannot offer an out-of-scope farmer. Use the row's `farmer_id` (canonical internal
+id) as the capture value, and show `reg_id` / name for the user.
+
+On selection, prefill the standard questions locally:
+
+| Parameter | Prefill |
+| --- | --- |
+| `p2` Farmer ID | selected farmer's `reg_id` (`FR-…`) |
+| `p3` Kebele | selected farmer's `kebele` |
+
+The server overwrites `p2` / `p3` with the resolved farmer's values, so a stale prefill
+cannot corrupt the response. If the farmer list returns no Kebele for a row, do not offer
+that farmer: capture requires a Kebele.
+
 ## Field map — Capture → API
 
 | Capture UI | `POST /surveys/{id}/responses` |
 | --- | --- |
-| Selected farmer | `farmer_id` |
+| Selected farmer | `farmer_id` (internal id or `FR-…`) |
 | Consent granted / declined | `consent`: `granted` \| `declined` |
 | Answers by parameter id | `answers`: `{ [parameterId]: string \| string[] }` |
 | Save draft | `sync_state`: `Draft` (required answers not enforced) |
@@ -96,9 +119,51 @@ Filters on the list: `status`, `type`, `language`, `q` — same axes as `SurveyT
 
 Rating values are strings `"1"` … `"5"`. Free text ≤ 500 characters. Multi-select is a JSON array of option strings.
 
-On **409**, show the existing duplicate message (“one response per farmer”). Declined consent does not lock the farmer; allow another attempt.
+### Status codes to handle
 
-Supervisor collecting on behalf of a DA must send `da_id`.
+| Status | Meaning | UI |
+| --- | --- | --- |
+| 201 | Response stored | Show success / next farmer |
+| 400 | Invalid answers, unknown parameter id, closed survey, missing farmer Kebele | Show the validation message |
+| 403 | Farmer outside the DA's Kebele / Woreda or outside the survey Woreda | “This farmer is not in your assigned Kebele for this survey.” |
+| 404 | Farmer not found | Ask the user to search again |
+| 409 | Duplicate farmer/template, or unsafe `client_op_id` replay | Show “A response for this farmer already exists for this survey.” Do **not** retry with a new id |
+
+The 409 duplicate rule is **across all DAs**. If another DA has already submitted this
+farmer for the same template, the second DA gets 409 as well. Refresh the task so
+`answered[]` and `collected` are up to date.
+
+Declined consent does not lock the farmer; allow another attempt. Drafts also do not lock
+the farmer (pending business decision).
+
+Supervisor collecting on behalf of a DA must send `da_id`; the target DA's Kebele and
+Woreda are enforced.
+
+## Excel export (Supervisor / Executive / Admin)
+
+```http
+GET /api/v1/da-services/surveys/{id}/responses/export
+Authorization: Bearer <access_token>
+```
+
+The response is a binary XLSX download (not the JSON envelope). Use `response.blob()`,
+read `Content-Disposition` for the filename, and trigger a browser download. Do **not**
+build the survey workbook in the browser.
+
+- 200 → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+- 403 → DA / Communications Officer, or a survey outside the caller's scope
+- 404 → unknown survey
+
+Columns are listed in [surveys-integration.md](surveys-integration.md#excel-export-get-surveysidresponsesexport).
+
+## Pending decisions (do not implement UI assumptions)
+
+1. Draft update/submit flow and whether a draft reserves the farmer.
+2. Separate publish step (today create = publish).
+3. Richer field-validation authoring and skip-logic.
+4. Whether declined responses count towards the one-response rule (today they do not).
+5. Export filtering, PII rules and async export for large surveys.
+6. Response correction after submission (today immutable).
 
 ## Sequence
 
@@ -133,17 +198,26 @@ sequenceDiagram
 
 ## Auth and roles
 
-| Role | List / capture | Create template | Results |
-| --- | --- | --- | --- |
-| DA | yes | no | no |
-| Supervisor | yes | yes | yes |
-| Admin | yes (nav + create) | yes (+ `woreda`) | yes |
-| Executive | list / detail / results read | no | yes |
+| Role | List / capture | Create template | Results | XLSX export |
+| --- | --- | --- | --- | --- |
+| DA | yes | no | no | no |
+| Supervisor | yes | yes | yes | yes |
+| Admin | yes (nav + create) | yes (+ `woreda`) | yes | yes |
+| Executive | list / detail / results read | no | yes | yes |
+| Communications Officer | no | no | no | no |
 
-## Open gaps
+## Frontend repository and files for the separate PR
 
-1. Wire `features/surveys` to these routes; remove Zustand persistence comment once live.
-2. Farmer picker should use linked farmers API, not `FARMERS` mock slugs.
-3. Auto Kebele / Farmer ID prefill should come from assignment and farmer profile, not hardcoding.
-4. Sync queue entity `"Survey response"` can later POST with `sync_state: Queued` then retry as `Synced`.
-5. Create modal cannot author `condition` or `lookup` questions; seed templates may still expose them on GET.
+This repository is backend-only. The UI changes belong in the separate Next.js portal
+repository (`src/features/surveys/*`, `src/app/(dashboard)/surveys/*`, `lib/rbac.ts`,
+`lib/export.ts`). Required follow-up there:
+
+1. Wire `features/surveys` to these routes; remove the `SURVEY_TASKS` seed data and Zustand store.
+2. Farmer picker calls `GET /farmers`; remove `FARMERS` mock slugs.
+3. Prefill `p2` / `p3` from the selected farmer, not a hardcoded Kebele.
+4. Handle 400 / 403 / 404 / 409 as described above.
+5. Add the server XLSX download button for Supervisor / Executive / Admin.
+6. Add `/surveys` to the Executive nav in `lib/rbac.ts` if it is hard-coded there; the backend
+   `GET /me` menu already includes it.
+7. Sync queue entity `"Survey response"` can later POST with `sync_state: Queued` then retry as `Synced`.
+8. Create modal cannot author `condition` or `lookup` questions; seed templates may still expose them on GET.

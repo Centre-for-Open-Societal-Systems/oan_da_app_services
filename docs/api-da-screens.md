@@ -44,7 +44,7 @@ Frontend nav (`NAV_GROUPS`), DA items in bold:
 | | **/feedback** | DA, Supervisor, Admin |
 | Communication | **/knowledge**, **/broadcast** | all / DA, Comms, Admin |
 | | /alerts | Comms, Admin, Supervisor |
-| Performance | **/performance**, **/surveys** | DA, Supervisor |
+| Performance | **/performance**, **/surveys** | DA, Supervisor, Executive (+ Admin on /surveys) |
 | Administration | /admin/users, /admin/reports, /admin/settings | Admin (reports: officers) |
 
 Routes without a nav item that the DA still uses: `/farmers/new`, `/farmers/{id}`, `/farmers/{id}/services`,
@@ -377,11 +377,12 @@ options, required}}`.
 | Element | API | Source |
 |---|---|---|
 | Assigned surveys | `GET /surveys?status&type&language&q` → tasks with my `collected`, `queued`, `answered[]` | ours: DA Survey Template + DA Survey Response (data-model §7) |
-| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}` → 409 on duplicate farmer; drafts use `sync_state: Draft` | ours |
+| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}`. Farmer must be in the collector DA's assigned Kebele and the survey Woreda: unknown → 404, out of scope → 403, duplicate farmer/template → 409 (across all DAs). Response stores the farmer's location, not the DA's. Drafts use `sync_state: Draft` | ours |
 | Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey to every DA in the creator's Woreda | ours |
 | Template list / detail | `GET /surveys/templates?status&type&q`, `GET /surveys/templates/{id}` (Supervisor/Admin/Executive) | ours |
 | Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed; questions only when `collected == 0` (bumps version) else 409 | ours |
 | Responses list | `GET /surveys/{id}/responses` — DA own; Supervisor/Executive/Admin in scope | ours |
+| Excel export | `GET /surveys/{id}/responses/export` → XLSX download (Supervisor/Executive/Admin, survey in scope) | ours |
 | Results | `GET /surveys/{id}/results` — counts, rating averages, choice histograms (basic; Part 2 analytics later) | ours |
 
 ### 2.17 Sync queue (`/sync`)
@@ -472,7 +473,7 @@ two types.
   enum (Low, Medium, High, Critical); status values mirror the Grievance Service list above.
 - **DA Beneficiary Classification**: statuses Enrolled / Pending verification / Removed map to
   `active` + `review_state` + `previously_removed`; no change, document the mapping.
-- **Surveys**: parameter `type` enum and `condition` (skip logic), `prefill`, one-response-per-farmer unique.
+- **Surveys**: parameter `type` enum and `condition` (skip logic), `prefill`; one-response-per-farmer is enforced by a unique canonical `duplicate_guard_key` (cross-DA, 409). Declined/draft reservation is still pending.
 - **KPI**: `DA KPI Record` fields per `ManualForm`; tier thresholds as a single settings doc.
 
 ## 4. Consolidated endpoint list (DA screens)

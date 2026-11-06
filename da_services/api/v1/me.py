@@ -62,7 +62,7 @@ NAV: tuple[tuple[str, tuple[str, ...]], ...] = (
 	("/broadcast", ("DA", "CommsOfficer", "Admin")),
 	("/alerts", ("CommsOfficer", "Admin", "Supervisor")),
 	("/performance", ("DA", "Supervisor")),
-	("/surveys", ("DA", "Supervisor", "Admin")),
+	("/surveys", ("DA", "Supervisor", "Executive", "Admin")),
 	("/admin/users", ("Admin",)),
 	("/admin/reports", _OFFICERS),
 	("/admin/settings", ("Admin",)),

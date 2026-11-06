@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-surveys",
     "name": "OAN DA Surveys",
-    "description": "Survey templates, assigned tasks, responses, and basic results (FR-09d).\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. Login as Supervisor (or Admin with woreda set)\n2. Create template → stores survey_id\n3. List templates / Get template\n4. Login as DA in the same Woreda (or keep Supervisor)\n5. List surveys / Get survey\n6. Submit response → stores response_id\n7. List responses / Results\n8. (Optional) Patch close\n\n## Auth\nNative DocTypes. Bearer {{access_token}} only. No staff CSRF.\n\n## Docs\n- docs/surveys-integration.md\n- docs/surveys-frontend.md\n- docs/api-da-screens.md §2.16\n\nCreating a template and submitting a response write real rows. Use a disposable site.",
+    "description": "Survey templates, assigned tasks, responses, validation, idempotency and XLSX export (FR-09d).\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. Login as Supervisor (or Admin with woreda set)\n2. Create template → stores survey_id\n3. List templates / Get template\n4. Login as DA in the same Woreda (or keep Supervisor)\n5. List surveys / Get survey\n6. Submit response → stores response_id\n7. List responses / Results / Export\n8. (Optional) Patch close\n9. Negative and security cases\n\n## Confirmed rules exercised here\n- DA capture is limited to farmers in the DA's Effective Kebele assignments.\n- One completed response per farmer per template, across all DAs (409).\n- Farmer location is stored from the farmer reference, not the collector DA.\n- `client_op_id` replay is scoped to survey + collector; mismatches are 409.\n- Excel export is Supervisor / Executive / Admin only.\n- Executive sees /surveys in GET /me.\n\n## Auth\nNative DocTypes. Bearer {{access_token}} only. No staff CSRF.\n\n## Docs\n- docs/surveys-integration.md\n- docs/surveys-frontend.md\n- docs/api-da-screens.md §2.16\n\nCreating a template and submitting a response write real rows. Use a disposable site.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -28,7 +28,22 @@
     { "key": "woreda", "value": "ET04-W01" },
     { "key": "client_op_id", "value": "" },
     { "key": "window_open", "value": "2026-11-03" },
-    { "key": "window_close", "value": "2026-11-30" }
+    { "key": "window_close", "value": "2026-11-30" },
+    { "key": "bad_farmer_id", "value": "FR-does-not-exist" },
+    { "key": "outside_kebele_farmer_id", "value": "" },
+    { "key": "other_da_usr", "value": "" },
+    { "key": "other_da_pwd", "value": "" },
+    { "key": "other_access_token", "value": "" },
+    { "key": "da_usr", "value": "" },
+    { "key": "da_pwd", "value": "" },
+    { "key": "da_access_token", "value": "" },
+    { "key": "exec_usr", "value": "" },
+    { "key": "exec_pwd", "value": "" },
+    { "key": "executive_access_token", "value": "" },
+    { "key": "replay_farmer_id", "value": "" },
+    { "key": "replay_client_op_id", "value": "" },
+    { "key": "replay_response_id", "value": "" },
+    { "key": "export_filename", "value": "" }
   ],
   "item": [
     {
@@ -106,6 +121,111 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": "{{base_url}}/api/v1/auth/refresh"
+          },
+          "response": []
+        },
+        {
+          "name": "Login (other DA — cross-DA duplicate)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Other DA login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) {",
+                  "  pm.collectionVariables.set(\"other_access_token\", data.access_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"other_access_token\", data.access_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{other_da_usr}}\",\n  \"pwd\": \"{{other_da_pwd}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Second DA user, in the same Woreda/Kebele as the first DA. Used to prove the duplicate rule is cross-DA."
+          },
+          "response": []
+        },
+        {
+          "name": "Login (DA — export must be forbidden)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) {",
+                  "  pm.collectionVariables.set(\"da_access_token\", data.access_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"da_access_token\", data.access_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{da_usr}}\",\n  \"pwd\": \"{{da_pwd}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Development Agent login; used to assert export returns 403."
+          },
+          "response": []
+        },
+        {
+          "name": "Login (Executive — menu + export)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Executive login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) {",
+                  "  pm.collectionVariables.set(\"executive_access_token\", data.access_token);",
+                  "  if (pm.environment.name) pm.environment.set(\"executive_access_token\", data.access_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{exec_usr}}\",\n  \"pwd\": \"{{exec_pwd}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Executive login; used for the /me menu and export checks."
           },
           "response": []
         }
@@ -501,6 +621,317 @@
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
             "description": "Closes the survey. New responses are refused afterward."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Negative and security cases",
+      "item": [
+        {
+          "name": "Get me (Executive menu includes /surveys)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Me returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Executive sees the Surveys menu\", function () {",
+                  "  pm.expect(data.menu || []).to.include(\"/surveys\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{executive_access_token}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/me",
+            "description": "Executive nav includes /surveys; Communications Officer must not."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid farmer (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unknown farmer is 404\", function () { pm.response.to.have.status(404); });",
+                  "pm.test(\"Error code is NOT_FOUND\", function () {",
+                  "  pm.expect((pm.response.json() || {}).code).to.eql(\"NOT_FOUND\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{bad_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Farmer is resolved against the Farmer Registry / DA Farmer Reference before insert. No row is written."
+          },
+          "response": []
+        },
+        {
+          "name": "Farmer outside assigned Kebele (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Out-of-Kebele farmer is 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Error code is PERMISSION_DENIED\", function () {",
+                  "  pm.expect((pm.response.json() || {}).code).to.eql(\"PERMISSION_DENIED\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{outside_kebele_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Set outside_kebele_farmer_id to a farmer in the same Woreda but a Kebele this DA is not assigned. No row is written."
+          },
+          "response": []
+        },
+        {
+          "name": "Duplicate submission from another DA (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Cross-DA duplicate is 409\", function () { pm.response.to.have.status(409); });",
+                  "pm.test(\"Error code is DUPLICATE_ENTRY\", function () {",
+                  "  pm.expect((pm.response.json() || {}).code).to.eql(\"DUPLICATE_ENTRY\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{other_access_token}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"5\", \"p5\": \"Partly\" },\n  \"sync_state\": \"Synced\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Same farmer + template already submitted by the first DA. The rule is cross-DA: the second DA gets 409 and no second row is stored."
+          },
+          "response": []
+        },
+        {
+          "name": "Idempotency seed (fixed client_op_id)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = \"replay-\" + Date.now();",
+                  "pm.collectionVariables.set(\"replay_client_op_id\", id);",
+                  "if (pm.environment.name) pm.environment.set(\"replay_client_op_id\", id);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Seed response returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.id) {",
+                  "  pm.collectionVariables.set(\"replay_response_id\", data.id);",
+                  "  if (pm.environment.name) pm.environment.set(\"replay_response_id\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Set replay_farmer_id to a farmer not used by the happy-path submit. Stores replay_client_op_id and replay_response_id."
+          },
+          "response": []
+        },
+        {
+          "name": "Idempotency replay (same payload → same row)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Replay returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Replay returns the original response id\", function () {",
+                  "  pm.expect(data.id).to.eql(pm.collectionVariables.get(\"replay_response_id\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Replay is scoped to the same survey + collector and compares the payload. No new row."
+          },
+          "response": []
+        },
+        {
+          "name": "Idempotency replay with different payload (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Mismatched replay is 409\", function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"1\", \"p5\": \"No\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
+            "description": "Same client_op_id, different farmer/payload. Returns 409 and never discloses the original response."
+          },
+          "response": []
+        },
+        {
+          "name": "Export responses as XLSX (Executive)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Export returns 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Export is an XLSX download\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"Content-Type\") || \"\").to.include(\"spreadsheetml\");",
+                  "  pm.expect(pm.response.headers.get(\"Content-Disposition\") || \"\").to.include(\"attachment\");",
+                  "});",
+                  "const disposition = pm.response.headers.get(\"Content-Disposition\") || \"\";",
+                  "const match = disposition.match(/filename=\"?([^\";]+)\"?/);",
+                  "if (match) {",
+                  "  pm.collectionVariables.set(\"export_filename\", match[1]);",
+                  "  if (pm.environment.name) pm.environment.set(\"export_filename\", match[1]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{executive_access_token}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses/export",
+            "description": "Supervisor / Executive / Admin. Returns raw workbook bytes, not the JSON envelope."
+          },
+          "response": []
+        },
+        {
+          "name": "Export as DA (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA cannot export survey responses\", function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{da_access_token}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses/export",
+            "description": "Export is restricted to Supervisor, Executive and Admin. Communications Officer is also denied."
           },
           "response": []
         }

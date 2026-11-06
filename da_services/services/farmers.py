@@ -24,6 +24,7 @@ from da_services.integrations.farmer_registry.mapper import (
 	registration_to_dict,
 )
 from da_services.services import constants as C
+from da_services.services.da_lookup import get_da_reference
 from da_services.services.pending_actions import derive_pending_actions_batch
 from da_services.utils.permissions import ScopeContext
 
@@ -122,6 +123,95 @@ def resolve_farmer_id(farmer_id: str) -> str:
 	finder = getattr(get_farmer_registry_client(), "find_internal_id", None)
 	found = finder(farmer_id) if finder else None
 	return found or farmer_id
+
+
+def resolve_farmer_for_capture(
+	farmer_id: str,
+	ctx: ScopeContext,
+	collector_da_id: str | None = None,
+	*,
+	survey_woreda: str | None = None,
+) -> dict:
+	"""Resolve a farmer and prove a collector may capture a survey response for them.
+
+	This is the shared entry point for survey capture (FR-09d). It does not duplicate
+	scope logic: ``_require_farmer_in_scope`` applies the normal 404 / 403 read rules,
+	and ``_is_farmer_in_da_kebele`` applies the DA-211 Kebele-assignment rule.
+
+	Args:
+	    farmer_id: Registry internal id or the Farmer-ID shown in the UI (``FR-…``).
+	    ctx: Caller's scope context.
+	    collector_da_id: DA whose Kebeles must contain the farmer. A Development
+	        Agent defaults to their own DA-ID.
+	    survey_woreda: Woreda stamped on the survey template, when it has one.
+
+	Returns:
+	    The cached farmer reference with ``farmer_id`` set to the canonical internal id.
+
+	Raises:
+	    DoesNotExistError: Farmer unknown (404).
+	    PermissionError: Farmer outside the collector's Kebele / Woreda, or outside
+	        the survey's Woreda (403).
+	    ValidationError: Farmer has no Kebele (or no Woreda needed to check scope).
+	"""
+	farmer_id = (farmer_id or "").strip()
+	if not farmer_id:
+		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
+
+	canonical_id = resolve_farmer_id(farmer_id)
+	ref = _require_farmer_in_scope(canonical_id, ctx)
+	ref = dict(ref)
+	ref["farmer_id"] = canonical_id
+
+	kebele = ref.get("kebele")
+	if not kebele:
+		frappe.throw(
+			_("Farmer {0} has no Kebele; a survey response cannot be recorded.").format(canonical_id),
+			frappe.ValidationError,
+		)
+
+	if collector_da_id is None and ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
+		collector_da_id = next(iter(sorted(ctx.da_ids)), None)
+	collector_da_id = (collector_da_id or "").strip() or None
+
+	if collector_da_id:
+		if not _is_farmer_in_da_kebele(canonical_id, [collector_da_id], kebele=kebele):
+			frappe.throw(
+				_("Farmer {0} is not in a Kebele assigned to DA {1}.").format(canonical_id, collector_da_id),
+				frappe.PermissionError,
+			)
+
+		# The collector's own Woreda must agree with the farmer's, so a response is
+		# never filed against a DA that does not cover the farmer's Woreda.
+		da_ref = get_da_reference(collector_da_id, ctx=ctx)
+		farmer_woreda = ref.get("woreda")
+		if farmer_woreda and da_ref.woreda and farmer_woreda != da_ref.woreda:
+			frappe.throw(
+				_("Farmer {0} is in Woreda {1}, outside DA {2}'s Woreda.").format(
+					canonical_id, farmer_woreda, collector_da_id
+				),
+				frappe.PermissionError,
+			)
+		if survey_woreda and da_ref.woreda and da_ref.woreda != survey_woreda:
+			frappe.throw(
+				_("DA {0} is outside the survey Woreda {1}.").format(collector_da_id, survey_woreda),
+				frappe.PermissionError,
+			)
+
+	if survey_woreda:
+		farmer_woreda = ref.get("woreda")
+		if not farmer_woreda:
+			frappe.throw(
+				_("Farmer {0} has no Woreda; the survey's Woreda cannot be verified.").format(canonical_id),
+				frappe.ValidationError,
+			)
+		if farmer_woreda != survey_woreda:
+			frappe.throw(
+				_("Farmer {0} is outside the survey Woreda {1}.").format(canonical_id, survey_woreda),
+				frappe.PermissionError,
+			)
+
+	return ref
 
 
 def get_farmer_change_requests(

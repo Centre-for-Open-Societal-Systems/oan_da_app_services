@@ -21,11 +21,18 @@ from da_services.da_services.doctype.da_survey_template.da_survey_template impor
 	SURVEY_TYPES,
 )
 from da_services.services import constants as C
-from da_services.services.da_lookup import get_da_reference
+from da_services.services import farmers as farmer_svc
 from da_services.utils.permissions import ScopeContext, require_roles
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
+
+
+class SurveyConflictError(frappe.ValidationError):
+	"""A duplicate or an unsafe idempotency replay. Mapped to HTTP 409."""
+
+	http_status_code = 409
+
 
 CREATE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 LIST_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
@@ -38,6 +45,26 @@ CHOICE_TYPES = frozenset({"single", "multi", "lookup"})
 CLOSING_SOON_DAYS = 7
 MAX_TEXT = 500
 RATING_VALUES = frozenset({"1", "2", "3", "4", "5"})
+
+# XLSX export columns that already exist on DA Survey Response / DA Survey Template.
+# Kept as data so the proposed contract is reviewable in docs/surveys-integration.md.
+EXPORT_SHEET = "Survey Responses"
+EXPORT_BASE_COLUMNS = (
+	"Response ID",
+	"Survey ID",
+	"Template Version",
+	"Farmer ID",
+	"Farmer Registry ID",
+	"Collector DA ID",
+	"Consent",
+	"Sync State",
+	"Started At",
+	"Completed At",
+	"Region",
+	"Zone",
+	"Woreda",
+	"Kebele",
+)
 
 STANDARD_PARAMS = (
 	{
@@ -408,9 +435,20 @@ def create_template(
 
 	client_op_id = (client_op_id or "").strip() or None
 	if client_op_id:
-		existing = frappe.db.get_value(TEMPLATE_DOCTYPE, {"client_op_id": client_op_id}, "name")
+		existing = frappe.db.get_value(
+			TEMPLATE_DOCTYPE,
+			{"client_op_id": client_op_id},
+			["name", "created_by_user"],
+			as_dict=True,
+		)
 		if existing:
-			return serialize_survey(frappe.get_doc(TEMPLATE_DOCTYPE, existing))
+			# A replay may only read back the row the same user created. Someone
+			# else's operation id is a conflict, never a template disclosure.
+			if existing.created_by_user != ctx.user:
+				raise SurveyConflictError(
+					_("client_op_id was already used by another user.")
+				)
+			return serialize_survey(frappe.get_doc(TEMPLATE_DOCTYPE, existing.name))
 
 	survey_type = survey_type or type
 	target = target_farmers if target_farmers is not None else targetFarmers
@@ -669,6 +707,13 @@ def _visible_params(parameters, answers: dict) -> list:
 
 
 def _validate_answers(parameters, answers: dict, consent: str | None, sync_state: str) -> None:
+	known = {p.parameter_id for p in parameters}
+	unknown = sorted(key for key in answers if key not in known)
+	if unknown:
+		frappe.throw(
+			_("Unknown answer parameter(s): {0}.").format(", ".join(unknown)),
+			frappe.ValidationError,
+		)
 	if sync_state == "Draft":
 		return
 	if consent == "declined":
@@ -724,15 +769,9 @@ def submit_response(
 	if ui_status == "Closed":
 		frappe.throw(_("This survey window is closed."), frappe.ValidationError)
 
-	farmer_id = (farmer_id or "").strip()
-	if not farmer_id:
+	farmer_input = (farmer_id or "").strip()
+	if not farmer_input:
 		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
-
-	client_op_id = (client_op_id or "").strip() or None
-	if client_op_id:
-		existing = frappe.db.get_value(RESPONSE_DOCTYPE, {"client_op_id": client_op_id}, "name")
-		if existing:
-			return serialize_response(frappe.get_doc(RESPONSE_DOCTYPE, existing))
 
 	# Collector DA: DA uses own id; Supervisor may collect on behalf of a DA in scope.
 	if (
@@ -748,7 +787,16 @@ def submit_response(
 	else:
 		frappe.throw(_("da_id is required when a Supervisor collects a response."), frappe.ValidationError)
 
-	ref = get_da_reference(collector, ctx=ctx)
+	# The caller-supplied ID is never trusted: resolve it, prove the farmer is in
+	# the collector's assigned Kebele and inside the survey's Woreda, then keep the
+	# canonical id and the farmer's own location for the response row.
+	ref = farmer_svc.resolve_farmer_for_capture(
+		farmer_input,
+		ctx,
+		collector_da_id=collector,
+		survey_woreda=doc_survey.woreda,
+	)
+	canonical_farmer_id = ref["farmer_id"]
 
 	consent = (consent or "").strip() or None
 	if consent and consent not in CONSENTS:
@@ -764,17 +812,46 @@ def submit_response(
 	elif state != "Draft" and consent != "granted":
 		frappe.throw(_("consent must be granted to submit a response."), frappe.ValidationError)
 
-	answers = answers if isinstance(answers, dict) else {}
+	answers = dict(answers) if isinstance(answers, dict) else {}
+	# The auto answers must agree with the resolved farmer, whatever the client sent.
+	answers["p2"] = ref.get("reg_id") or canonical_farmer_id
+	answers["p3"] = ref.get("kebele")
 	_validate_answers(doc_survey.parameters, answers, consent, state)
 
-	# Duplicate guard for completed non-declined responses.
+	# Idempotent replay is scoped to the same survey *and* collector. A client_op_id
+	# owned by another survey / DA is a conflict and never returns its row.
+	client_op_id = (client_op_id or "").strip() or None
+	if client_op_id:
+		existing = frappe.db.get_value(
+			RESPONSE_DOCTYPE,
+			{"client_op_id": client_op_id, "survey": survey_id, "da_id": collector},
+			["name", "farmer_id", "consent", "answers_json", "sync_state"],
+			as_dict=True,
+		)
+		if existing:
+			same_payload = (
+				existing.farmer_id == canonical_farmer_id
+				and (existing.consent or None) == consent
+				and (existing.sync_state or None) == state
+				and (_json_load(existing.answers_json, {}) or {}) == answers
+			)
+			if not same_payload:
+				raise SurveyConflictError(
+					_("client_op_id was already used with a different response.")
+				)
+			return serialize_response(frappe.get_doc(RESPONSE_DOCTYPE, existing.name))
+		if frappe.db.exists(RESPONSE_DOCTYPE, {"client_op_id": client_op_id}):
+			raise SurveyConflictError(
+				_("client_op_id was already used for another response.")
+			)
+
+	# Duplicate guard for completed non-declined responses. Drafts and declined
+	# responses keep the existing behaviour until the business decision is confirmed.
 	if state in ("Synced", "Queued") and consent != "declined":
-		guard = f"{survey_id}|{farmer_id}"
+		guard = f"{survey_id}|{canonical_farmer_id}"
 		if frappe.db.exists(RESPONSE_DOCTYPE, {"duplicate_guard_key": guard}):
-			frappe.response["http_status_code"] = 409
-			frappe.throw(
-				_("A response for this farmer already exists for this survey."),
-				frappe.ValidationError,
+			raise SurveyConflictError(
+				_("A response for this farmer already exists for this survey.")
 			)
 	else:
 		guard = None
@@ -787,7 +864,7 @@ def submit_response(
 			"doctype": RESPONSE_DOCTYPE,
 			"survey": survey_id,
 			"da_id": collector,
-			"farmer_id": farmer_id,
+			"farmer_id": canonical_farmer_id,
 			"consent": consent,
 			"answers_json": _json_dump(answers),
 			"sync_state": state,
@@ -795,20 +872,19 @@ def submit_response(
 			"completed_at": completed,
 			"client_op_id": client_op_id,
 			"duplicate_guard_key": guard,
-			"region": ref.region or doc_survey.region,
-			"zone": ref.zone or doc_survey.zone,
-			"woreda": ref.woreda or doc_survey.woreda,
-			"kebele": ref.kebele,
+			# Always the farmer's authoritative location, never the collector DA's.
+			"region": ref.get("region"),
+			"zone": ref.get("zone"),
+			"woreda": ref.get("woreda"),
+			"kebele": ref.get("kebele"),
 		}
 	)
 	try:
 		row.insert(ignore_permissions=True)
 	except frappe.UniqueValidationError, frappe.DuplicateEntryError:
-		frappe.response["http_status_code"] = 409
-		frappe.throw(
-			_("A response for this farmer already exists for this survey."),
-			frappe.ValidationError,
-		)
+		raise SurveyConflictError(
+			_("A response for this farmer already exists for this survey.")
+		) from None
 	return serialize_response(row)
 
 
@@ -906,3 +982,140 @@ def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 		"by_status": by_status,
 		"parameters": param_summaries,
 	}
+
+
+# -- Excel export (Supervisor / Executive / Admin) -----------------------------------
+
+
+def _cell_text(value) -> str:
+	"""One spreadsheet cell: lists become comma-separated, richer values JSON."""
+	if value is None:
+		return ""
+	if isinstance(value, (list, tuple)):
+		return ", ".join(_cell_text(v) for v in value)
+	if isinstance(value, dict):
+		return json.dumps(value, ensure_ascii=False)
+	return str(value)
+
+
+def _cell_datetime(value) -> str:
+	if not value:
+		return ""
+	if hasattr(value, "strftime"):
+		return value.strftime("%Y-%m-%d %H:%M:%S")
+	return str(value)
+
+
+def build_export_rows(parameters: list[dict], responses: list[dict]) -> list[list]:
+	"""Header + one row per response. Pure, so the workbook layout is unit-testable."""
+	headers = list(EXPORT_BASE_COLUMNS) + [
+		f"{p['id']}: {p['prompt']}" for p in parameters
+	]
+	rows: list[list] = [headers]
+	for response in responses:
+		answers = response.get("answers") or {}
+		row = [
+			response.get("name") or "",
+			response.get("survey") or "",
+			response.get("template_version") or "",
+			response.get("farmer_id") or "",
+			response.get("farmer_reg_id") or "",
+			response.get("da_id") or "",
+			response.get("consent") or "",
+			response.get("sync_state") or "",
+			_cell_datetime(response.get("started_at")),
+			_cell_datetime(response.get("completed_at")),
+			response.get("region") or "",
+			response.get("zone") or "",
+			response.get("woreda") or "",
+			response.get("kebele") or "",
+		]
+		row.extend(_cell_text(answers.get(p["id"])) for p in parameters)
+		rows.append(row)
+	return rows
+
+
+def build_export_xlsx(
+	parameters: list[dict],
+	responses: list[dict],
+	*,
+	sheet_name: str = EXPORT_SHEET,
+) -> bytes:
+	"""Build an XLSX workbook for the given parameters and response dicts."""
+	from frappe.utils.xlsxutils import make_xlsx
+
+	data = build_export_rows(parameters, responses)
+	workbook = make_xlsx(data, sheet_name)
+	return workbook.getvalue()
+
+
+def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[str, bytes]:
+	"""Return ``(filename, xlsx_bytes)`` for every response stored against a survey.
+
+	Result roles only. ``_load_template`` applies the same scope check as results.
+	All stored response rows are exported exactly as recorded; filtering declined or
+	draft rows is a pending business decision and is deliberately not applied.
+	"""
+	ctx = ctx or require_roles(*RESULTS_ROLES)
+	if not ctx.has_any_role(*RESULTS_ROLES):
+		frappe.throw(
+			_("Only a Supervisor, Executive or Administrator can export survey responses."),
+			frappe.PermissionError,
+		)
+	doc = _load_template(survey_id, ctx)
+
+	responses = frappe.get_all(
+		RESPONSE_DOCTYPE,
+		filters={"survey": survey_id},
+		fields=[
+			"name",
+			"survey",
+			"da_id",
+			"farmer_id",
+			"consent",
+			"sync_state",
+			"started_at",
+			"completed_at",
+			"answers_json",
+			"region",
+			"zone",
+			"woreda",
+			"kebele",
+		],
+		order_by="creation asc",
+		limit_page_length=0,
+	)
+
+	farmer_ids = sorted({row.farmer_id for row in responses if row.farmer_id})
+	reg_ids: dict[str, str | None] = {}
+	if farmer_ids:
+		for ref in frappe.get_all(
+			"DA Farmer Reference",
+			filters={"name": ("in", farmer_ids)},
+			fields=["name", "reg_id"],
+		):
+			reg_ids[ref.name] = ref.reg_id
+
+	parameters = [{"id": p.parameter_id, "prompt": p.prompt} for p in doc.parameters]
+	rows = [
+		{
+			"name": row.name,
+			"survey": row.survey,
+			"template_version": doc.template_version,
+			"farmer_id": row.farmer_id,
+			"farmer_reg_id": reg_ids.get(row.farmer_id),
+			"da_id": row.da_id,
+			"consent": row.consent,
+			"sync_state": row.sync_state,
+			"started_at": row.started_at,
+			"completed_at": row.completed_at,
+			"region": row.region,
+			"zone": row.zone,
+			"woreda": row.woreda,
+			"kebele": row.kebele,
+			"answers": _json_load(row.answers_json, {}) or {},
+		}
+		for row in responses
+	]
+
+	return f"survey-{doc.name}-responses.xlsx", build_export_xlsx(parameters, rows)
