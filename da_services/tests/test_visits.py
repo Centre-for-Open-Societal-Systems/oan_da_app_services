@@ -263,3 +263,25 @@ class TestDAVisit(IntegrationTestCase):
 		self.assertEqual(rows[0]["name"], self.v1["name"])
 		rows, total = visits.list_visits(_ctx(DA1), status="Completed")
 		self.assertEqual(total, 0)
+
+	def test_list_area_filters_enforce_scope(self):
+		frappe.set_user(SUP)
+		try:
+			rows, total = visits.list_visits(_ctx(SUP), woreda="ET04-W01")
+			self.assertEqual(total, 1)
+			self.assertEqual(rows[0]["name"], self.v1["name"])
+			rows, total = visits.list_visits(_ctx(SUP), kebele="ET04-W01-K03")
+			self.assertEqual(total, 1)
+			with self.assertRaises(frappe.PermissionError):
+				visits.list_visits(_ctx(SUP), woreda="ET03-W02")
+		finally:
+			frappe.set_user(ADMIN)
+
+		frappe.set_user(DA1)
+		try:
+			rows, total = visits.list_visits(_ctx(DA1), kebele="ET04-W01-K03")
+			self.assertEqual(total, 1)
+			with self.assertRaises(frappe.PermissionError):
+				visits.list_visits(_ctx(DA1), kebele="ET04-W01-K01")
+		finally:
+			frappe.set_user(ADMIN)

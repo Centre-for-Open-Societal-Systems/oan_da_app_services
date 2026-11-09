@@ -54,12 +54,15 @@ Results analysis copy on the page (“Part 2 preview”) stays a UI note. Basic 
 | Farmers per DA | `targetFarmers` |
 | Languages checkboxes | `languages: string[]` |
 | Question prompt / type / choices / required | `questions[{ prompt, type, options, required }]` — `options` may stay comma-separated string |
+| Translations (Amharic / Afaan Oromoo) | `questions[].translations` — e.g. `{ "Amharic": "...", "Afaan Oromoo": "..." }`; English stays in `prompt` |
+| Assignment mode | `assignmentMode`: `Woreda` (default, every DA in the Woreda) or `Selected` |
+| Selected DAs | `assignedDaIds: string[]` — required when `assignmentMode = Selected`; every DA must belong to the Woreda |
 
-Do not send consent / Farmer ID / Kebele questions. The API prepends them as `p1`–`p3`.
+Do not send consent / Farmer ID / Kebele questions. The API prepends them as `p1`–`p3`. Only custom question prompts accept `translations`; language keys are normalised to `Amharic` / `Afaan Oromoo` (aliases such as `am` / `om` are accepted). English is not duplicated in `translations`.
 
 Client validation in `templateErrors` matches the API. On success, drop Zustand; append or refetch `GET /surveys`.
 
-Admin publish must include `woreda` (and may send `region` / `zone`). Supervisor scope is stamped from RBAC.
+Supervisor publish resolves the target Woreda from `DA Administrative Area` and checks it against the Supervisor's **active** assignment. The Woreda may be omitted only when the Supervisor has exactly one active Woreda; otherwise send `woreda`. Region-only and Zone-only grants cover Woredas beneath them. Admin must include `woreda`; `region` / `zone` are optional consistency checks and are rejected if they do not match the hierarchy. Do not invent or cache geographic scope in the browser: the server response is authoritative.
 
 ## Field map — SurveyTask ← API
 
@@ -78,9 +81,11 @@ The list and detail payloads use the same camelCase names the UI already types:
 | `collected`, `queued`, `answered` | same |
 | `status` | `Open` \| `Closing soon` \| `Closed` |
 | `estMinutes` | `estMinutes` |
-| `parameters[]` | `id`, `order`, `prompt`, `type`, `required`, `options?`, `helper?`, `prefill?`, `condition?` |
+| `assignmentMode` | `Woreda` \| `Selected` |
+| `assignedDaIds` | Active DA-IDs; present on template list/detail and create/patch responses |
+| `parameters[]` | `id`, `order`, `prompt`, `type`, `required`, `options?`, `helper?`, `prefill?`, `translations?`, `condition?`. `translations` maps `Amharic` / `Afaan Oromoo` to text; `prompt` is English. |
 
-Filters on the list: `status`, `type`, `language`, `q` — same axes as `SurveyTasks` advanced filters.
+Filters on the list: `status`, `type`, `language`, `woreda`, `q`. A DA only receives `Selected` surveys where their DA-ID is actively assigned; an unassigned DA gets 403 on detail/capture.
 
 ## Farmer picker and prefill
 
@@ -112,32 +117,49 @@ that farmer: capture requires a Kebele.
 | Selected farmer | `farmer_id` (internal id or `FR-…`) |
 | Consent granted / declined | `consent`: `granted` \| `declined` |
 | Answers by parameter id | `answers`: `{ [parameterId]: string \| string[] }` |
-| Save draft | `sync_state`: `Draft` (required answers not enforced) |
 | Submit online | omit `sync_state` or send `Synced` |
 | Submit offline | `sync_state`: `Queued` |
+| Declined consent | send `consent: "declined"`; the server stores `Declined` regardless of `sync_state` |
 | Idempotency | `client_op_id` |
 
+Only `Queued` and `Synced` are client-settable. `Draft` is rejected with **400**: there is no
+saved-draft or draft-update flow. Do **not** send `Rejected`, `Conflict`, or `Declined` with
+granted consent: those are also **400**. A declined response must send
+`consent: "declined"`; the server forces `sync_state: Declined`. A survey can be captured
+only from its `window_open` date through `window_close` (both inclusive). Before opening or
+after closing the capture screen should be read-only; the API rejects it with 400 even if
+the UI allows the request.
+
 Rating values are strings `"1"` … `"5"`. Free text ≤ 500 characters. Multi-select is a JSON array of option strings.
+
+`started_at` / `completed_at` are optional site-local datetimes. If supplied, completion
+cannot precede start, both must be inside the window, and neither may be in the future; the
+API returns 400 otherwise (no clock-skew tolerance is applied).
 
 ### Status codes to handle
 
 | Status | Meaning | UI |
 | --- | --- | --- |
 | 201 | Response stored | Show success / next farmer |
-| 400 | Invalid answers, unknown parameter id, closed survey, missing farmer Kebele | Show the validation message |
-| 403 | Farmer outside the DA's Kebele / Woreda or outside the survey Woreda | “This farmer is not in your assigned Kebele for this survey.” |
+| 400 | Invalid answers, unknown parameter id, capture before `window_open` / after close, invalid timestamps, invalid `sync_state`, unknown/mismatched area codes | Show the validation message |
+| 403 | Farmer outside the DA's Kebele / Woreda, survey outside the caller's scope, or an expired/missing officer assignment | “This farmer is not in your assigned Kebele for this survey.” |
 | 404 | Farmer not found | Ask the user to search again |
-| 409 | Duplicate farmer/template, or unsafe `client_op_id` replay | Show “A response for this farmer already exists for this survey.” Do **not** retry with a new id |
+| 409 | Duplicate farmer/template, locked question edit, or unsafe `client_op_id` replay | Show “A response for this farmer already exists for this survey.” Do **not** retry with a new id |
 
 The 409 duplicate rule is **across all DAs**. If another DA has already submitted this
 farmer for the same template, the second DA gets 409 as well. Refresh the task so
 `answered[]` and `collected` are up to date.
 
-Declined consent does not lock the farmer; allow another attempt. Drafts also do not lock
-the farmer (pending business decision).
+A `client_op_id` retry must reuse the exact same survey, collector, farmer, consent, sync
+state and answers. The API returns the original response id for an identical retry; any
+changed field is 409. Do not generate a new operation id for a retry.
 
-Supervisor collecting on behalf of a DA must send `da_id`; the target DA's Kebele and
-Woreda are enforced.
+Declined consent does not lock the farmer; allow another attempt. Submitted responses are
+immutable, and there is no correction workflow. Historical `Draft` rows may still appear in
+response lists/exports but cannot be created through the API.
+
+Supervisor or Admin collecting on behalf of a DA must send `da_id`; the target DA's Kebele
+and Woreda are enforced.
 
 ## Excel export (Supervisor / Executive / Admin)
 
@@ -150,20 +172,33 @@ The response is a binary XLSX download (not the JSON envelope). Use `response.bl
 read `Content-Disposition` for the filename, and trigger a browser download. Do **not**
 build the survey workbook in the browser.
 
-- 200 → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
-- 403 → DA / Communications Officer, or a survey outside the caller's scope
+- 200 → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
+  filename `survey-{id}-responses.xlsx`
+- 403 → DA / Communications Officer, no live officer assignment, or a survey outside the
+  caller's scope
 - 404 → unknown survey
+
+The export is gated by a **live** Supervisor / Executive assignment, not merely the role
+string. A DA who also holds an expired officer role is treated as a DA and cannot export.
+The workbook contains farmer identifiers and location; keep it within the officer scope
+until the PII decision is confirmed.
 
 Columns are listed in [surveys-integration.md](surveys-integration.md#excel-export-get-surveysidresponsesexport).
 
-## Pending decisions (do not implement UI assumptions)
+## Confirmed behaviour (do not build removed flows)
 
-1. Draft update/submit flow and whether a draft reserves the farmer.
-2. Separate publish step (today create = publish).
-3. Richer field-validation authoring and skip-logic.
-4. Whether declined responses count towards the one-response rule (today they do not).
-5. Export filtering, PII rules and async export for large surveys.
-6. Response correction after submission (today immutable).
+1. Direct submission only: send `Queued` or `Synced`; `Draft` is 400. Historical drafts
+   remain read-only for display/export.
+2. Create equals publish; there is no Woreda approval or separate publish step.
+3. Surveys are Woreda-wide by default or individually assigned to selected DAs.
+4. Custom prompts support Amharic / Afaan Oromoo `translations`; no skip logic, lookup or
+   other advanced questionnaire authoring is being added.
+5. Declined responses do not count towards the one-response rule; submitted responses are
+   immutable and there is no correction workflow.
+6. Export is complete (all base columns + all parameters); no extra filtering/column picker.
+
+Remaining open items are engineering follow-ups only: richer field validation, clock-skew
+handling, and paged/async export for large surveys.
 
 ## Sequence
 
@@ -174,7 +209,7 @@ sequenceDiagram
   participant DA as DA Services
 
   User->>Page: Open /surveys
-  Page->>DA: GET /surveys?status&type&language&q
+  Page->>DA: GET /surveys?status&type&language&woreda&q
   DA-->>Page: SurveyTask[]
   User->>Page: Create template (Supervisor)
   Page->>DA: POST /surveys/templates
@@ -193,7 +228,8 @@ sequenceDiagram
 | --- | --- |
 | Edit window / close survey | `PATCH /surveys/templates/{id}` |
 | Change questions before any response | `PATCH` with `questions` (409 after `collected > 0`) |
-| Response list | `GET /surveys/{id}/responses` |
+| Change Woreda-wide / selected-DA assignment | `PATCH` with `assignmentMode` / `assignedDaIds` |
+| Response list | `GET /surveys/{id}/responses?farmer_id&da_id&region&zone&woreda&kebele` |
 | Basic results | `GET /surveys/{id}/results` |
 
 ## Auth and roles
@@ -205,6 +241,11 @@ sequenceDiagram
 | Admin | yes (nav + create) | yes (+ `woreda`) | yes | yes |
 | Executive | list / detail / results read | no | yes | yes |
 | Communications Officer | no | no | no | no |
+
+Dual role: a user with DA plus Supervisor/Executive is treated as the officer for response
+listing and export only while the officer assignment is active; otherwise they fall back to
+their own DA rows and cannot export. The UI must not infer officer visibility from the role
+string alone.
 
 ## Frontend repository and files for the separate PR
 

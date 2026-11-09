@@ -8,6 +8,7 @@
   "parameter_id",
   "sort_order",
   "prompt",
+  "prompts_json",
   "response_type",
   "required",
   "options_json",
@@ -37,6 +38,12 @@
    "in_list_view": 1,
    "label": "Prompt",
    "reqd": 1
+  },
+  {
+   "description": "Optional non-English prompt text keyed by language name or code.",
+   "fieldname": "prompts_json",
+   "fieldtype": "Long Text",
+   "label": "Localized Prompts JSON"
   },
   {
    "fieldname": "response_type",
@@ -82,7 +89,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-03 12:00:00.000000",
+ "modified": "2026-11-09 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Parameter",

@@ -320,6 +320,25 @@ def _area_names(codes: list) -> list[str]:
 	return [r.name_en for r in rows if r.name_en]
 
 
+def _kebele_filter_values(kebele: str):
+	"""Match a Kebele code or display name, because the registry stores display names."""
+	raw = (kebele or "").strip()
+	if not raw:
+		return raw
+	row = frappe.db.get_value(
+		"DA Administrative Area",
+		raw.upper(),
+		["name", "name_en"],
+		as_dict=True,
+	)
+	if not row:
+		return raw
+	values = [row.name]
+	if row.name_en and row.name_en not in values:
+		values.append(row.name_en)
+	return ("in", values) if len(values) > 1 else row.name
+
+
 def _require_woreda_in_scope(ctx: ScopeContext, woreda: str) -> None:
 	"""A Woreda a Supervisor / Zone / Region officer may search in; raises otherwise."""
 	if ctx.woreda_scopes:
@@ -404,7 +423,8 @@ def list_farmers(
 		if not ctx.unrestricted:
 			# Validate that requested woreda is within scope
 			if ctx.has_any_role(C.ROLE_DA):
-				# DA scope is linked farmers, woreda filter is additional narrowing
+				if woreda not in ctx.woreda_scopes:
+					frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
 				filters["woreda"] = woreda
 			elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
 				# Check if the woreda is in the user's scope
@@ -455,14 +475,14 @@ def list_farmers(
 		# A requested Kebele may only narrow the caller's scope.
 		# Replacing the DA's assigned-Kebele filter would let them read another Kebele.
 		assigned = filters.get("kebele")
-		if (
-			not ctx.unrestricted
-			and ctx.has_any_role(C.ROLE_DA)
-			and isinstance(assigned, tuple)
-			and kebele not in assigned[1]
-		):
-			return [], 0
-		filters["kebele"] = kebele
+		if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA) and isinstance(assigned, tuple):
+			assigned_values = set(assigned[1]) | set(_area_names(list(assigned[1])))
+			if kebele not in assigned_values and kebele.upper() not in assigned_values:
+				frappe.throw(
+					_("Kebele {0} is not in your assigned Kebeles.").format(kebele),
+					frappe.PermissionError,
+				)
+		filters["kebele"] = _kebele_filter_values(kebele)
 	if state:
 		filters["registration_state"] = state
 

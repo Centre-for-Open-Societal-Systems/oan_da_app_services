@@ -15,17 +15,30 @@ import frappe
 from frappe import _
 from frappe.utils import get_datetime, getdate, now_datetime, today
 
-from da_services.da_services.doctype.da_survey_response.da_survey_response import CONSENTS, SYNC_STATES
+from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
+from da_services.da_services.doctype.da_survey_response.da_survey_response import (
+	CONSENTS,
+)
 from da_services.da_services.doctype.da_survey_template.da_survey_template import (
 	CUSTOM_QUESTION_TYPES,
 	SURVEY_TYPES,
 )
+from da_services.services import area_scope
 from da_services.services import constants as C
 from da_services.services import farmers as farmer_svc
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.services import tasks as task_svc
+from da_services.utils.permissions import (
+	ScopeContext,
+	get_officer_scope_context,
+	require_roles,
+)
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
+AREA_DOCTYPE = "DA Administrative Area"
+# States a client may ask for. Declined is forced by the server when consent is
+# declined; Rejected and Conflict are server-only terminal states.
+CLIENT_SYNC_STATES = ("Queued", "Synced")
 
 
 class SurveyConflictError(frappe.ValidationError):
@@ -40,6 +53,17 @@ CAPTURE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 RESULTS_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 
 SURVEY_LANGUAGES = ("English", "Amharic", "Afaan Oromoo")
+LANGUAGE_ALIASES = {
+	"english": "English",
+	"en": "English",
+	"amharic": "Amharic",
+	"am": "Amharic",
+	"afaan oromoo": "Afaan Oromoo",
+	"afaan oromo": "Afaan Oromoo",
+	"oromo": "Afaan Oromoo",
+	"om": "Afaan Oromoo",
+}
+ASSIGNMENT_RULE_PREFIX = "survey.assignment:"
 TYPE_CODES = {"Satisfaction": "FSS", "Service quality": "SQ", "Needs assessment": "NA"}
 CHOICE_TYPES = frozenset({"single", "multi", "lookup"})
 CLOSING_SOON_DAYS = 7
@@ -131,6 +155,42 @@ def derive_ui_status(status: str, window_close) -> str:
 	return "Open"
 
 
+def _canonical_language(value: str | None) -> str | None:
+	key = (value or "").strip().lower()
+	return LANGUAGE_ALIASES.get(key)
+
+
+def _translations_of(raw) -> dict:
+	parsed = _json_load(raw, {})
+	if not isinstance(parsed, dict):
+		return {}
+	out = {}
+	for key, value in parsed.items():
+		language = _canonical_language(key)
+		text = str(value or "").strip()
+		if language and language != "English" and text:
+			out[language] = text
+	return out
+
+
+def _clean_translations(raw) -> dict:
+	if raw in (None, ""):
+		return {}
+	if not isinstance(raw, dict):
+		frappe.throw(_("Question translations must be an object."), frappe.ValidationError)
+	out = {}
+	for key, value in raw.items():
+		language = _canonical_language(key)
+		if not language:
+			frappe.throw(_("Unknown language: {0}.").format(key), frappe.ValidationError)
+		if language == "English":
+			continue
+		text = str(value or "").strip()
+		if text:
+			out[language] = text
+	return out
+
+
 def _options_of(raw) -> list[str]:
 	if isinstance(raw, list):
 		return [str(o).strip() for o in raw if str(o).strip()]
@@ -160,6 +220,9 @@ def serialize_parameter(row) -> dict:
 		out["helper"] = row.helper
 	if row.prefill:
 		out["prefill"] = row.prefill
+	translations = _translations_of(getattr(row, "prompts_json", None))
+	if translations:
+		out["translations"] = translations
 	if row.condition_parameter_id and row.condition_equals is not None:
 		out["condition"] = {
 			"parameterId": row.condition_parameter_id,
@@ -190,11 +253,122 @@ def _response_counts(survey_id: str, collector_da_id: str | None = None) -> dict
 	return {"collected": collected, "queued": queued, "answered": answered}
 
 
+def _assignment_rule(survey_id: str) -> str:
+	return f"{ASSIGNMENT_RULE_PREFIX}{survey_id}"
+
+
+def _assignment_markers(survey_id: str) -> list[dict]:
+	return frappe.get_all(
+		"DA Task",
+		filters={"generated_by_rule": _assignment_rule(survey_id)},
+		fields=["name", "da_id", "status", "client_op_id"],
+		order_by="creation asc",
+	)
+
+
+def _assigned_da_ids(survey_id: str) -> list[str]:
+	active = {row.da_id for row in _assignment_markers(survey_id) if row.status != "Cancelled" and row.da_id}
+	return sorted(active)
+
+
+def _survey_assignment_mode(survey_id: str) -> str:
+	return "Selected" if _assigned_da_ids(survey_id) else "Woreda"
+
+
+def _create_assignment_marker(doc, da_id: str, ctx: ScopeContext) -> None:
+	rule = _assignment_rule(doc.name)
+	existing = frappe.get_all(
+		"DA Task",
+		filters={"generated_by_rule": rule, "da_id": da_id},
+		fields=["name", "status"],
+	)
+	if any(row.status != "Cancelled" for row in existing):
+		return
+	client_op_id = f"{rule}:{da_id}"
+	if existing:
+		client_op_id = f"{client_op_id}:{frappe.generate_hash(length=8)}"
+	task_svc.create_task(
+		title=f"Complete survey: {doc.title}",
+		da_id=da_id,
+		task_type="Survey due",
+		description=f"Survey {doc.name} is assigned to you.",
+		due_at=get_datetime(f"{getdate(doc.window_close)} 23:59:59"),
+		generated_by_rule=rule,
+		client_op_id=client_op_id,
+		ctx=ctx,
+	)
+
+
+def _cancel_assignment_marker(marker: dict) -> None:
+	doc = frappe.get_doc("DA Task", marker.name)
+	if doc.status == "Cancelled":
+		return
+	doc.flags.ignore_permissions = True
+	doc.cancel_task(_("Survey assignment removed."))
+
+
+def _sync_assignments(doc, mode: str, da_ids: list[str], ctx: ScopeContext) -> None:
+	active = {
+		row.da_id: row for row in _assignment_markers(doc.name) if row.status != "Cancelled" and row.da_id
+	}
+	desired = set(da_ids) if mode == "Selected" else set()
+	for da_id, marker in active.items():
+		if da_id not in desired:
+			_cancel_assignment_marker(marker)
+	for da_id in sorted(desired):
+		if da_id not in active:
+			_create_assignment_marker(doc, da_id, ctx)
+
+
+def _clean_assignment_input(
+	woreda: str,
+	mode: str | None,
+	da_ids,
+	ctx: ScopeContext,
+) -> tuple[str, list[str]]:
+	if isinstance(da_ids, str):
+		da_ids = [value.strip() for value in da_ids.split(",") if value.strip()]
+	raw_ids = da_ids if isinstance(da_ids, (list, tuple, set)) else []
+	clean_ids = list(dict.fromkeys(str(value).strip() for value in raw_ids if str(value).strip()))
+	mode = (mode or "").strip() or ("Selected" if clean_ids else "Woreda")
+	if mode not in ("Woreda", "Selected"):
+		frappe.throw(_("assignmentMode must be Woreda or Selected."), frappe.ValidationError)
+	if mode == "Woreda":
+		return mode, []
+	if not clean_ids:
+		frappe.throw(_("Select at least one DA for an individual assignment."), frappe.ValidationError)
+
+	from da_services.services.da_lookup import get_da_reference
+
+	for da_id in clean_ids:
+		ref = get_da_reference(da_id, ctx)
+		if ref.woreda != woreda:
+			frappe.throw(
+				_("DA {0} is not in Woreda {1}.").format(da_id, woreda),
+				frappe.ValidationError,
+			)
+	return mode, sorted(clean_ids)
+
+
+def _da_has_survey_access(doc, da_id: str) -> bool:
+	assigned = _assigned_da_ids(doc.name)
+	return not assigned or da_id in assigned
+
+
+def _ensure_da_survey_access(doc, da_id: str) -> None:
+	if not _da_has_survey_access(doc, da_id):
+		frappe.throw(
+			_("Survey {0} is not assigned to DA {1}.").format(doc.name, da_id),
+			frappe.PermissionError,
+		)
+
+
 def serialize_survey(
 	doc,
 	*,
 	include_parameters: bool = True,
 	collector_da_id: str | None = None,
+	include_assignment: bool = False,
 ) -> dict:
 	counts = _response_counts(doc.name, collector_da_id=collector_da_id)
 	stored = doc.status
@@ -222,7 +396,10 @@ def serialize_survey(
 		"zone": doc.zone,
 		"woreda": doc.woreda,
 		"created_by_user": doc.created_by_user,
+		"assignmentMode": _survey_assignment_mode(doc.name),
 	}
+	if include_assignment:
+		out["assignedDaIds"] = _assigned_da_ids(doc.name)
 	if include_parameters:
 		out["parameters"] = [serialize_parameter(r) for r in doc.parameters]
 	return out
@@ -232,6 +409,7 @@ def serialize_response(doc) -> dict:
 	return {
 		"id": doc.name,
 		"survey_id": doc.survey,
+		"template_version": doc.template_version or None,
 		"collector_da_id": doc.da_id,
 		"farmer_id": doc.farmer_id,
 		"consent": doc.consent or None,
@@ -253,6 +431,40 @@ def _own_da_id(ctx: ScopeContext) -> str:
 	return sorted(ctx.da_ids)[0]
 
 
+def _acting_da_id(ctx: ScopeContext) -> str | None:
+	if ctx.unrestricted or not ctx.has_any_role(C.ROLE_DA):
+		return None
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		officer_ctx = get_officer_scope_context(ctx.user)
+		if officer_ctx is not None:
+			return None
+	return _own_da_id(ctx)
+
+
+def _area_row(code: str, label: str) -> dict:
+	"""One active administrative area, or a validation error."""
+	code = (code or "").strip().upper()
+	if not code:
+		frappe.throw(_("{0} is required.").format(label), frappe.ValidationError)
+	row = frappe.db.get_value(
+		AREA_DOCTYPE,
+		code,
+		["name", "level", "parent_area", "active"],
+		as_dict=True,
+	)
+	if not row:
+		frappe.throw(
+			_("{0} {1} was not found in the administrative areas.").format(label, code),
+			frappe.ValidationError,
+		)
+	if not row.active:
+		frappe.throw(
+			_("{0} {1} is no longer active.").format(label, code),
+			frappe.ValidationError,
+		)
+	return row
+
+
 def _creator_scope(
 	ctx: ScopeContext,
 	*,
@@ -260,28 +472,84 @@ def _creator_scope(
 	zone: str | None = None,
 	woreda: str | None = None,
 ) -> tuple[str | None, str | None, str | None]:
-	"""Stamp region/zone/woreda from the creator's RBAC grant (or explicit Admin target)."""
-	woreda = (woreda or "").strip() or (
-		next(iter(sorted(ctx.woreda_scopes)), None) if ctx.woreda_scopes else None
-	)
-	zone = (zone or "").strip() or (next(iter(sorted(ctx.zone_scopes)), None) if ctx.zone_scopes else None)
-	region = (region or "").strip() or (
-		next(iter(sorted(ctx.region_scopes)), None) if ctx.region_scopes else None
-	)
+	"""Resolve the authoritative Region / Zone / Woreda for a published survey.
+
+	The selected Woreda always comes from ``DA Administrative Area``; its parent Zone
+	and Region are derived from that tree. A client may send ``region`` / ``zone`` as
+	a consistency check, but those values are never used as authorization evidence and
+	a mismatch is rejected. A non-Admin caller must then pass the existing
+	``ScopeContext.covers`` rule against the *derived* hierarchy, so an expired or
+	missing RBAC assignment cannot authorize a target.
+	"""
+	# A role string can outlive its grant (the RBAC controller syncs roles add-only).
+	# For a non-Admin creator, authorization must come from a live Supervisor
+	# assignment, never from the Region/Woreda scope attached to a DA grant.
 	if not ctx.unrestricted:
-		if woreda and ctx.woreda_scopes and woreda not in ctx.woreda_scopes:
-			frappe.throw(_("Woreda {0} is outside your scope.").format(woreda), frappe.PermissionError)
-		if not (woreda or zone or region):
+		officer_ctx = get_officer_scope_context(ctx.user)
+		if officer_ctx is None:
 			frappe.throw(
-				_("Your account has no Region / Zone / Woreda scope to publish a survey."),
+				_("You need an active Supervisor assignment to publish a survey."),
 				frappe.PermissionError,
 			)
-	elif not woreda:
+		ctx = officer_ctx
+
+	selected_woreda = (woreda or "").strip().upper() or None
+	if not selected_woreda:
+		if ctx.unrestricted:
+			frappe.throw(
+				_("woreda is required when an Administrator publishes a survey."),
+				frappe.ValidationError,
+			)
+		if len(ctx.woreda_scopes) == 1:
+			selected_woreda = next(iter(ctx.woreda_scopes))
+		else:
+			frappe.throw(
+				_("Select a Woreda to publish this survey."),
+				frappe.ValidationError,
+			)
+
+	woreda_row = _area_row(selected_woreda, _("Woreda"))
+	if woreda_row.level != "Woreda":
 		frappe.throw(
-			_("woreda is required when an Administrator publishes a survey."),
+			_("{0} is not a Woreda.").format(woreda_row.name),
 			frappe.ValidationError,
 		)
-	return region, zone, woreda
+
+	hierarchy = ancestors_of(woreda_row.name)
+	resolved_region = hierarchy.get("region")
+	resolved_zone = hierarchy.get("zone")
+	if not resolved_region or not resolved_zone:
+		frappe.throw(
+			_("Woreda {0} does not have a complete Region / Zone hierarchy.").format(woreda_row.name),
+			frappe.ValidationError,
+		)
+
+	supplied_region = (region or "").strip().upper() or None
+	if supplied_region:
+		region_row = _area_row(supplied_region, _("Region"))
+		if region_row.level != "Region" or region_row.name != resolved_region:
+			frappe.throw(
+				_("Region {0} does not match Woreda {1}.").format(region_row.name, woreda_row.name),
+				frappe.ValidationError,
+			)
+
+	supplied_zone = (zone or "").strip().upper() or None
+	if supplied_zone:
+		zone_row = _area_row(supplied_zone, _("Zone"))
+		if zone_row.level != "Zone" or zone_row.name != resolved_zone:
+			frappe.throw(
+				_("Zone {0} does not match Woreda {1}.").format(zone_row.name, woreda_row.name),
+				frappe.ValidationError,
+			)
+
+	if not ctx.unrestricted:
+		if not ctx.covers(resolved_region, woreda_row.name, resolved_zone):
+			frappe.throw(
+				_("Woreda {0} is outside your scope.").format(woreda_row.name),
+				frappe.PermissionError,
+			)
+
+	return resolved_region, resolved_zone, woreda_row.name
 
 
 def _load_template(survey_id: str, ctx: ScopeContext, *, write: bool = False):
@@ -294,6 +562,9 @@ def _load_template(survey_id: str, ctx: ScopeContext, *, write: bool = False):
 		frappe.throw(_("You do not have access to this survey."), frappe.PermissionError)
 	if write and ctx.has_any_role(C.ROLE_EXECUTIVE) and not ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_ADMIN):
 		frappe.throw(_("Executives cannot modify surveys."), frappe.PermissionError)
+	acting_da = _acting_da_id(ctx)
+	if acting_da:
+		_ensure_da_survey_access(doc, acting_da)
 	return doc
 
 
@@ -381,6 +652,7 @@ def _validate_template_input(
 				"type": qtype,
 				"options": options,
 				"required": bool(q.get("required", True)),
+				"translations": _clean_translations(q.get("translations")),
 			}
 		)
 
@@ -400,6 +672,7 @@ def _parameter_rows(questions: list[dict]) -> list[dict]:
 			"response_type": q["type"],
 			"required": 1 if q["required"] else 0,
 			"options_json": _json_dump(q["options"]) if q["options"] else None,
+			"prompts_json": _json_dump(q["translations"]) if q["translations"] else None,
 		}
 		if q["type"] == "rating":
 			row["helper"] = "1 = very dissatisfied · 5 = very satisfied"
@@ -408,6 +681,84 @@ def _parameter_rows(questions: list[dict]) -> list[dict]:
 
 
 # -- create / patch / list templates -------------------------------------------------
+
+
+def _template_payload(
+	*,
+	title: str,
+	survey_type: str,
+	start,
+	end,
+	langs: list[str],
+	target: int,
+	clean_questions: list[dict],
+	assignment_mode: str,
+	assigned_da_ids: list[str],
+	region: str | None,
+	zone: str | None,
+	woreda: str | None,
+) -> dict:
+	"""Canonical request payload used to compare an idempotent template replay."""
+	return {
+		"title": title,
+		"survey_type": survey_type,
+		"window_open": str(getdate(start)),
+		"window_close": str(getdate(end)),
+		"languages": sorted(langs),
+		"target_farmers": int(target),
+		"questions": [
+			{
+				"prompt": q["prompt"],
+				"type": q["type"],
+				"options": list(q["options"]),
+				"required": bool(q["required"]),
+				"translations": dict(sorted(q["translations"].items())),
+			}
+			for q in clean_questions
+		],
+		"assignment_mode": assignment_mode,
+		"assigned_da_ids": sorted(assigned_da_ids),
+		"region": region,
+		"zone": zone,
+		"woreda": woreda,
+	}
+
+
+def _template_payload_from_doc(doc) -> dict:
+	"""The stored equivalent of ``_template_payload``."""
+	return {
+		"title": doc.title,
+		"survey_type": doc.survey_type,
+		"window_open": str(getdate(doc.window_open)),
+		"window_close": str(getdate(doc.window_close)),
+		"languages": sorted(_json_load(doc.languages_json, []) or []),
+		"target_farmers": int(doc.target_farmers or 0),
+		"questions": [
+			{
+				"prompt": p.prompt,
+				"type": p.response_type,
+				"options": _options_of(p.options_json),
+				"required": bool(p.required),
+				"translations": dict(sorted(_translations_of(p.prompts_json).items())),
+			}
+			for p in doc.parameters
+			if p.response_type not in ("consent", "auto")
+		],
+		"assignment_mode": _survey_assignment_mode(doc.name),
+		"assigned_da_ids": _assigned_da_ids(doc.name),
+		"region": doc.region,
+		"zone": doc.zone,
+		"woreda": doc.woreda,
+	}
+
+
+def _find_template_by_client_op(client_op_id: str) -> dict | None:
+	return frappe.db.get_value(
+		TEMPLATE_DOCTYPE,
+		{"client_op_id": client_op_id},
+		["name", "created_by_user"],
+		as_dict=True,
+	)
 
 
 def create_template(
@@ -424,6 +775,10 @@ def create_template(
 	region: str | None = None,
 	zone: str | None = None,
 	woreda: str | None = None,
+	assignmentMode: str | None = None,
+	assignment_mode: str | None = None,
+	assignedDaIds=None,
+	assigned_da_ids=None,
 	client_op_id: str | None = None,
 	ctx: ScopeContext | None = None,
 ) -> dict:
@@ -433,22 +788,20 @@ def create_template(
 			_("Only a Supervisor or Administrator can create survey templates."), frappe.PermissionError
 		)
 
+	if not ctx.unrestricted:
+		officer_ctx = get_officer_scope_context(ctx.user)
+		if officer_ctx is not None:
+			ctx = officer_ctx
+
 	client_op_id = (client_op_id or "").strip() or None
+	existing = None
 	if client_op_id:
-		existing = frappe.db.get_value(
-			TEMPLATE_DOCTYPE,
-			{"client_op_id": client_op_id},
-			["name", "created_by_user"],
-			as_dict=True,
-		)
+		existing = _find_template_by_client_op(client_op_id)
 		if existing:
 			# A replay may only read back the row the same user created. Someone
 			# else's operation id is a conflict, never a template disclosure.
 			if existing.created_by_user != ctx.user:
-				raise SurveyConflictError(
-					_("client_op_id was already used by another user.")
-				)
-			return serialize_survey(frappe.get_doc(TEMPLATE_DOCTYPE, existing.name))
+				raise SurveyConflictError(_("client_op_id was already used by another user."))
 
 	survey_type = survey_type or type
 	target = target_farmers if target_farmers is not None else targetFarmers
@@ -462,6 +815,29 @@ def create_template(
 		questions=questions,
 	)
 	region, zone, woreda = _creator_scope(ctx, region=region, zone=zone, woreda=woreda)
+	mode_input = assignmentMode if assignmentMode is not None else assignment_mode
+	ids_input = assignedDaIds if assignedDaIds is not None else assigned_da_ids
+	assignment_mode, assigned_da_ids = _clean_assignment_input(woreda, mode_input, ids_input, ctx)
+	payload = _template_payload(
+		title=title,
+		survey_type=survey_type,
+		start=start,
+		end=end,
+		langs=langs,
+		target=target,
+		clean_questions=clean_qs,
+		assignment_mode=assignment_mode,
+		assigned_da_ids=assigned_da_ids,
+		region=region,
+		zone=zone,
+		woreda=woreda,
+	)
+
+	if existing:
+		stored = frappe.get_doc(TEMPLATE_DOCTYPE, existing.name)
+		if _template_payload_from_doc(stored) == payload:
+			return serialize_survey(stored, include_assignment=True)
+		raise SurveyConflictError(_("client_op_id was already used with a different template."))
 
 	params = _parameter_rows(clean_qs)
 	doc = frappe.get_doc(
@@ -484,17 +860,44 @@ def create_template(
 			"parameters": params,
 		}
 	)
-	doc.insert(ignore_permissions=True)
-	return serialize_survey(doc)
+	try:
+		doc.insert(ignore_permissions=True)
+	except frappe.UniqueValidationError, frappe.DuplicateEntryError:
+		if not client_op_id:
+			raise
+		# A concurrent request may have committed the same operation id after our
+		# lookup. Re-read the operation row and apply the same payload comparison.
+		frappe.db.rollback()
+		existing = _find_template_by_client_op(client_op_id)
+		if not existing:
+			raise
+		if existing.created_by_user != ctx.user:
+			raise SurveyConflictError(_("client_op_id was already used by another user."))
+		stored = frappe.get_doc(TEMPLATE_DOCTYPE, existing.name)
+		if _template_payload_from_doc(stored) == payload:
+			return serialize_survey(stored, include_assignment=True)
+		raise SurveyConflictError(_("client_op_id was already used with a different template.")) from None
+	_sync_assignments(doc, assignment_mode, assigned_da_ids, ctx)
+	return serialize_survey(doc, include_assignment=True)
 
 
 def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) -> dict:
 	ctx = ctx or require_roles(*CREATE_ROLES)
-	doc = _load_template(survey_id, ctx, write=True)
 	if not ctx.has_any_role(*CREATE_ROLES):
 		frappe.throw(
 			_("Only a Supervisor or Administrator can update survey templates."), frappe.PermissionError
 		)
+	# As with create, a role string alone is not authorization: require a live
+	# officer assignment so an expired grant cannot borrow a DA assignment's scope.
+	if not ctx.unrestricted:
+		officer_ctx = get_officer_scope_context(ctx.user)
+		if officer_ctx is None:
+			frappe.throw(
+				_("You need an active Supervisor assignment to update a survey."),
+				frappe.PermissionError,
+			)
+		ctx = officer_ctx
+	doc = _load_template(survey_id, ctx, write=True)
 
 	if "status" in body and body["status"] is not None:
 		status = str(body["status"]).strip()
@@ -536,14 +939,19 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 			frappe.throw(_("Give the template a name."), frappe.ValidationError)
 		doc.title = title
 
+	assignment_change = None
+	assignment_keys = ("assignmentMode", "assignment_mode", "assignedDaIds", "assigned_da_ids")
+	if any(key in body for key in assignment_keys):
+		mode_input = body.get("assignmentMode", body.get("assignment_mode"))
+		ids_input = body.get("assignedDaIds", body.get("assigned_da_ids"))
+		if ids_input is None and mode_input == "Selected":
+			ids_input = _assigned_da_ids(doc.name)
+		assignment_change = _clean_assignment_input(doc.woreda, mode_input, ids_input, ctx)
+
 	if "questions" in body and body["questions"] is not None:
 		counts = _response_counts(doc.name)
 		if counts["collected"] > 0:
-			frappe.response["http_status_code"] = 409
-			frappe.throw(
-				_("Questions cannot change after responses have been collected."),
-				frappe.ValidationError,
-			)
+			raise SurveyConflictError(_("Questions cannot change after responses have been collected."))
 		_title, _stype, _s, _e, _langs, _t, clean_qs = _validate_template_input(
 			name=doc.title,
 			survey_type=doc.survey_type,
@@ -560,7 +968,9 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 		doc.template_version = _bump_version(doc.template_version)
 
 	doc.save(ignore_permissions=True)
-	return serialize_survey(doc)
+	if assignment_change:
+		_sync_assignments(doc, assignment_change[0], assignment_change[1], ctx)
+	return serialize_survey(doc, include_assignment=True)
 
 
 def list_templates(
@@ -568,6 +978,7 @@ def list_templates(
 	*,
 	status: str | None = None,
 	type: str | None = None,
+	woreda: str | None = None,
 	q: str | None = None,
 	limit: int = 50,
 	start: int = 0,
@@ -575,54 +986,71 @@ def list_templates(
 	ctx = ctx or require_roles(*RESULTS_ROLES)
 	limit = max(1, min(int(limit or 50), 200))
 	start = max(0, int(start or 0))
+	status = status if status in ("Open", "Closing soon", "Closed") else None
 	filters: dict = {}
 	if type:
 		filters["survey_type"] = type
-	# Stored status is Open/Closed; UI status Closing soon is derived later.
-	if status == "Closed":
-		filters["status"] = "Closed"
-	elif status in ("Open", "Closing soon"):
-		filters["status"] = "Open"
+	if woreda:
+		filters.update(area_scope.resolve_area_filters(ctx, woreda=woreda))
 
-	# Caller must set the session user so permission_query_conditions apply (same as leave).
-	names = frappe.get_list(
+	# The UI status is derived from the stored status and the close date. Fetch the
+	# scoped candidates first (lightweight columns only), apply the same predicates
+	# before pagination, and count exactly what was filtered. The caller must set the
+	# session user so permission_query_conditions apply, as with the other list APIs.
+	candidates = frappe.get_list(
 		TEMPLATE_DOCTYPE,
 		filters=filters,
-		fields=["name"],
+		fields=[
+			"name",
+			"title",
+			"survey_type",
+			"template_version",
+			"status",
+			"window_open",
+			"window_close",
+			"languages_json",
+			"modified",
+		],
 		order_by="modified desc",
-		limit_page_length=limit,
-		limit_start=start,
+		limit_page_length=0,
 	)
-	total = len(frappe.get_list(TEMPLATE_DOCTYPE, filters=filters, fields=["name"], limit_page_length=0))
-	rows = []
 	needle = (q or "").strip().lower()
-	for n in names:
-		doc = frappe.get_doc(TEMPLATE_DOCTYPE, n.name)
-		item = serialize_survey(doc, include_parameters=False)
-		if status and item["status"] != status:
+	matched = []
+	for row in candidates:
+		ui_status = derive_ui_status(row.status, row.window_close)
+		if status and ui_status != status:
 			continue
-		if (
-			needle
-			and needle
-			not in " ".join(
+		if needle:
+			haystack = " ".join(
 				[
-					item["name"],
-					item["type"],
-					item["templateVersion"],
-					item["status"],
-					" ".join(item["languages"]),
+					row.title or "",
+					row.survey_type or "",
+					row.template_version or "",
+					ui_status,
+					" ".join(_json_load(row.languages_json, []) or []),
 				]
 			).lower()
-		):
-			continue
-		rows.append(item)
+			if needle not in haystack:
+				continue
+		matched.append(row)
+
+	total = len(matched)
+	page = matched[start : start + limit]
+	rows = [
+		serialize_survey(
+			frappe.get_doc(TEMPLATE_DOCTYPE, row.name),
+			include_parameters=False,
+			include_assignment=True,
+		)
+		for row in page
+	]
 	return rows, total
 
 
 def get_template(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 	ctx = ctx or require_roles(*RESULTS_ROLES)
 	doc = _load_template(survey_id, ctx)
-	return serialize_survey(doc)
+	return serialize_survey(doc, include_assignment=True)
 
 
 # -- assigned surveys (DA view) ------------------------------------------------------
@@ -634,6 +1062,7 @@ def list_surveys(
 	status: str | None = None,
 	type: str | None = None,
 	language: str | None = None,
+	woreda: str | None = None,
 	q: str | None = None,
 	limit: int = 50,
 	start: int = 0,
@@ -644,8 +1073,10 @@ def list_surveys(
 	filters: dict = {}
 	if type:
 		filters["survey_type"] = type
+	if woreda:
+		filters.update(area_scope.resolve_area_filters(ctx, woreda=woreda))
 
-	collector = _own_da_id(ctx) if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted else None
+	collector = _acting_da_id(ctx)
 
 	# Caller must set the session user so permission_query_conditions apply.
 	names = frappe.get_list(
@@ -660,7 +1091,14 @@ def list_surveys(
 	rows = []
 	for n in names:
 		doc = frappe.get_doc(TEMPLATE_DOCTYPE, n.name)
-		item = serialize_survey(doc, include_parameters=False, collector_da_id=collector)
+		if collector and not _da_has_survey_access(doc, collector):
+			continue
+		item = serialize_survey(
+			doc,
+			include_parameters=False,
+			collector_da_id=collector,
+			include_assignment=collector is None,
+		)
 		if status and item["status"] != status:
 			continue
 		if language and language not in item["languages"]:
@@ -688,8 +1126,13 @@ def list_surveys(
 def get_survey(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 	ctx = ctx or require_roles(*LIST_ROLES)
 	doc = _load_template(survey_id, ctx)
-	collector = _own_da_id(ctx) if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted else None
-	return serialize_survey(doc, include_parameters=True, collector_da_id=collector)
+	collector = _acting_da_id(ctx)
+	return serialize_survey(
+		doc,
+		include_parameters=True,
+		collector_da_id=collector,
+		include_assignment=collector is None,
+	)
 
 
 # -- responses -----------------------------------------------------------------------
@@ -714,8 +1157,6 @@ def _validate_answers(parameters, answers: dict, consent: str | None, sync_state
 			_("Unknown answer parameter(s): {0}.").format(", ".join(unknown)),
 			frappe.ValidationError,
 		)
-	if sync_state == "Draft":
-		return
 	if consent == "declined":
 		return
 	visible = _visible_params(parameters, answers)
@@ -750,6 +1191,39 @@ def _validate_answers(parameters, answers: dict, consent: str | None, sync_state
 					frappe.throw(_("{0} is not an allowed value.").format(val), frappe.ValidationError)
 
 
+def _validate_response_timestamps(doc_survey, started, completed) -> None:
+	"""Keep capture timestamps inside the survey window and in a sensible order.
+
+	``window_open`` / ``window_close`` are Date fields, so the collection window is
+	the whole of each day. No clock-skew tolerance is applied: a timestamp later than
+	the server's current time is rejected rather than silently clamped.
+	"""
+	window_start = get_datetime(f"{getdate(doc_survey.window_open)} 00:00:00")
+	window_end = get_datetime(f"{getdate(doc_survey.window_close)} 23:59:59")
+	if started < window_start or started > window_end:
+		frappe.throw(
+			_("started_at must fall inside the survey collection window."),
+			frappe.ValidationError,
+		)
+	if completed is not None:
+		if completed < started:
+			frappe.throw(
+				_("completed_at cannot be earlier than started_at."),
+				frappe.ValidationError,
+			)
+		if completed < window_start or completed > window_end:
+			frappe.throw(
+				_("completed_at must fall inside the survey collection window."),
+				frappe.ValidationError,
+			)
+
+	now = now_datetime()
+	if started > now:
+		frappe.throw(_("started_at cannot be in the future."), frappe.ValidationError)
+	if completed is not None and completed > now:
+		frappe.throw(_("completed_at cannot be in the future."), frappe.ValidationError)
+
+
 def submit_response(
 	survey_id: str,
 	*,
@@ -765,6 +1239,11 @@ def submit_response(
 ) -> dict:
 	ctx = ctx or require_roles(*CAPTURE_ROLES)
 	doc_survey = _load_template(survey_id, ctx)
+	if getdate(today()) < getdate(doc_survey.window_open):
+		frappe.throw(
+			_("This survey opens on {0}.").format(format_survey_date(doc_survey.window_open)),
+			frappe.ValidationError,
+		)
 	ui_status = derive_ui_status(doc_survey.status, doc_survey.window_close)
 	if ui_status == "Closed":
 		frappe.throw(_("This survey window is closed."), frappe.ValidationError)
@@ -786,6 +1265,7 @@ def submit_response(
 		collector = _own_da_id(ctx)
 	else:
 		frappe.throw(_("da_id is required when a Supervisor collects a response."), frappe.ValidationError)
+	_ensure_da_survey_access(doc_survey, collector)
 
 	# The caller-supplied ID is never trusted: resolve it, prove the farmer is in
 	# the collector's assigned Kebele and inside the survey's Woreda, then keep the
@@ -802,15 +1282,34 @@ def submit_response(
 	if consent and consent not in CONSENTS:
 		frappe.throw(_("consent must be granted or declined."), frappe.ValidationError)
 
-	state = (sync_state or "").strip() or ("Declined" if consent == "declined" else "Synced")
-	if state not in SYNC_STATES:
+	# Completed capture only. Declined is forced by the server when consent is
+	# declined; Rejected/Conflict are server-only terminal states and must never
+	# bypass the duplicate guard.
+	requested_state = (sync_state or "").strip() or None
+	if requested_state == "Draft":
 		frappe.throw(
-			_("sync_state must be one of {0}.").format(", ".join(SYNC_STATES)), frappe.ValidationError
+			_("Drafts are no longer accepted; submit the completed response."),
+			frappe.ValidationError,
+		)
+	if requested_state and requested_state not in (*CLIENT_SYNC_STATES, "Declined"):
+		frappe.throw(
+			_("sync_state must be one of {0}.").format(", ".join((*CLIENT_SYNC_STATES, "Declined"))),
+			frappe.ValidationError,
 		)
 	if consent == "declined":
 		state = "Declined"
-	elif state != "Draft" and consent != "granted":
-		frappe.throw(_("consent must be granted to submit a response."), frappe.ValidationError)
+	elif requested_state == "Declined":
+		frappe.throw(
+			_("consent must be declined to submit a Declined response."),
+			frappe.ValidationError,
+		)
+	else:
+		state = requested_state or "Synced"
+		if consent != "granted":
+			frappe.throw(
+				_("consent must be granted to submit a response."),
+				frappe.ValidationError,
+			)
 
 	answers = dict(answers) if isinstance(answers, dict) else {}
 	# The auto answers must agree with the resolved farmer, whatever the client sent.
@@ -836,33 +1335,35 @@ def submit_response(
 				and (_json_load(existing.answers_json, {}) or {}) == answers
 			)
 			if not same_payload:
-				raise SurveyConflictError(
-					_("client_op_id was already used with a different response.")
-				)
+				raise SurveyConflictError(_("client_op_id was already used with a different response."))
 			return serialize_response(frappe.get_doc(RESPONSE_DOCTYPE, existing.name))
 		if frappe.db.exists(RESPONSE_DOCTYPE, {"client_op_id": client_op_id}):
-			raise SurveyConflictError(
-				_("client_op_id was already used for another response.")
-			)
+			raise SurveyConflictError(_("client_op_id was already used for another response."))
 
-	# Duplicate guard for completed non-declined responses. Drafts and declined
-	# responses keep the existing behaviour until the business decision is confirmed.
+	# Duplicate guard for completed non-declined responses. Declined responses do
+	# not reserve the farmer.
 	if state in ("Synced", "Queued") and consent != "declined":
 		guard = f"{survey_id}|{canonical_farmer_id}"
 		if frappe.db.exists(RESPONSE_DOCTYPE, {"duplicate_guard_key": guard}):
-			raise SurveyConflictError(
-				_("A response for this farmer already exists for this survey.")
-			)
+			raise SurveyConflictError(_("A response for this farmer already exists for this survey."))
 	else:
 		guard = None
 
-	started = get_datetime(started_at) if started_at else now_datetime()
-	completed = get_datetime(completed_at) if completed_at else (None if state == "Draft" else now_datetime())
+	try:
+		started = get_datetime(started_at) if started_at else now_datetime()
+		completed = get_datetime(completed_at) if completed_at else now_datetime()
+	except Exception:
+		frappe.throw(
+			_("started_at and completed_at must be valid datetimes."),
+			frappe.ValidationError,
+		)
+	_validate_response_timestamps(doc_survey, started, completed)
 
 	row = frappe.get_doc(
 		{
 			"doctype": RESPONSE_DOCTYPE,
 			"survey": survey_id,
+			"template_version": doc_survey.template_version,
 			"da_id": collector,
 			"farmer_id": canonical_farmer_id,
 			"consent": consent,
@@ -882,9 +1383,29 @@ def submit_response(
 	try:
 		row.insert(ignore_permissions=True)
 	except frappe.UniqueValidationError, frappe.DuplicateEntryError:
-		raise SurveyConflictError(
-			_("A response for this farmer already exists for this survey.")
-		) from None
+		# A concurrent identical retry can pass the pre-checks. Re-read the operation
+		# row after the failed insert and return it only when the payload matches.
+		if client_op_id:
+			frappe.db.rollback()
+			existing = frappe.db.get_value(
+				RESPONSE_DOCTYPE,
+				{"client_op_id": client_op_id, "survey": survey_id, "da_id": collector},
+				["name", "farmer_id", "consent", "answers_json", "sync_state"],
+				as_dict=True,
+			)
+			if existing:
+				same_payload = (
+					existing.farmer_id == canonical_farmer_id
+					and (existing.consent or None) == consent
+					and (existing.sync_state or None) == state
+					and (_json_load(existing.answers_json, {}) or {}) == answers
+				)
+				if same_payload:
+					return serialize_response(frappe.get_doc(RESPONSE_DOCTYPE, existing.name))
+				raise SurveyConflictError(
+					_("client_op_id was already used with a different response.")
+				) from None
+		raise SurveyConflictError(_("A response for this farmer already exists for this survey.")) from None
 	return serialize_response(row)
 
 
@@ -893,21 +1414,42 @@ def list_responses(
 	ctx: ScopeContext | None = None,
 	*,
 	farmer_id: str | None = None,
+	da_id: str | None = None,
+	region: str | None = None,
+	zone: str | None = None,
+	woreda: str | None = None,
+	kebele: str | None = None,
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
 	ctx = ctx or require_roles(*LIST_ROLES)
-	_load_template(survey_id, ctx)
+	officer_ctx = get_officer_scope_context(ctx.user)
+	area_ctx = officer_ctx or ctx
+	_load_template(survey_id, officer_ctx or ctx)
 	limit = max(1, min(int(limit or 50), 200))
 	start = max(0, int(start or 0))
 	filters: dict = {"survey": survey_id}
 	if farmer_id:
 		filters["farmer_id"] = farmer_id
-	if (
-		ctx.has_any_role(C.ROLE_DA)
-		and not ctx.unrestricted
-		and not ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-	):
+	filters.update(
+		area_scope.resolve_area_filters(area_ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
+	)
+	# Officer precedence: a DA + Supervisor/Executive/Admin caller with a live officer
+	# assignment reads the officer scope, not just their own collector rows. Without a
+	# live officer assignment, fall back to the DA rule so an expired grant cannot
+	# widen rows through the scope carried by the DA assignment.
+	if da_id:
+		da_id = da_id.strip()
+		if not area_ctx.unrestricted:
+			if officer_ctx is None and area_ctx.has_any_role(C.ROLE_DA):
+				if da_id not in area_ctx.da_ids:
+					frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
+			else:
+				from da_services.services.da_lookup import get_da_reference
+
+				get_da_reference(da_id, area_ctx)
+		filters["da_id"] = da_id
+	elif officer_ctx is None:
 		filters["da_id"] = ("in", list(ctx.da_ids))
 
 	names = frappe.get_list(
@@ -926,7 +1468,21 @@ def list_responses(
 
 def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 	ctx = ctx or require_roles(*RESULTS_ROLES)
-	doc = _load_template(survey_id, ctx)
+	if not ctx.has_any_role(*RESULTS_ROLES):
+		frappe.throw(
+			_("Only a Supervisor, Executive or Administrator can view survey results."),
+			frappe.PermissionError,
+		)
+	# Same live-officer precedence as response listing and export: an expired officer
+	# role must not borrow the scope of an active DA assignment, and a dual-role user
+	# must not get the union of their DA and officer Woredas.
+	officer_ctx = get_officer_scope_context(ctx.user)
+	if officer_ctx is None:
+		frappe.throw(
+			_("You need an active Supervisor or Executive assignment to view survey results."),
+			frappe.PermissionError,
+		)
+	doc = _load_template(survey_id, officer_ctx)
 	rows = frappe.get_all(
 		RESPONSE_DOCTYPE,
 		filters={"survey": survey_id},
@@ -1008,9 +1564,7 @@ def _cell_datetime(value) -> str:
 
 def build_export_rows(parameters: list[dict], responses: list[dict]) -> list[list]:
 	"""Header + one row per response. Pure, so the workbook layout is unit-testable."""
-	headers = list(EXPORT_BASE_COLUMNS) + [
-		f"{p['id']}: {p['prompt']}" for p in parameters
-	]
+	headers = list(EXPORT_BASE_COLUMNS) + [f"{p['id']}: {p['prompt']}" for p in parameters]
 	rows: list[list] = [headers]
 	for response in responses:
 		answers = response.get("answers") or {}
@@ -1053,8 +1607,14 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 	"""Return ``(filename, xlsx_bytes)`` for every response stored against a survey.
 
 	Result roles only. ``_load_template`` applies the same scope check as results.
-	All stored response rows are exported exactly as recorded; filtering declined or
-	draft rows is a pending business decision and is deliberately not applied.
+	All stored response rows are exported exactly as recorded, including legacy
+	``Draft`` rows that predate the direct-submission flow. No status filter is
+	applied.
+
+	The whole survey is materialised in memory because column selection, PII
+	redaction and asynchronous/paginated exports are still pending business
+	decisions. Production volumes should be reviewed before this is treated as a
+	bulk export path.
 	"""
 	ctx = ctx or require_roles(*RESULTS_ROLES)
 	if not ctx.has_any_role(*RESULTS_ROLES):
@@ -1062,7 +1622,16 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 			_("Only a Supervisor, Executive or Administrator can export survey responses."),
 			frappe.PermissionError,
 		)
-	doc = _load_template(survey_id, ctx)
+	# Require a live officer assignment. Without this, a dual-role user whose officer
+	# grant expired could still export Woreda-wide rows through the scope carried by
+	# their DA assignment, because the role string remains attached.
+	officer_ctx = get_officer_scope_context(ctx.user)
+	if officer_ctx is None:
+		frappe.throw(
+			_("You need an active Supervisor or Executive assignment to export survey responses."),
+			frappe.PermissionError,
+		)
+	doc = _load_template(survey_id, officer_ctx)
 
 	responses = frappe.get_all(
 		RESPONSE_DOCTYPE,
@@ -1070,6 +1639,7 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 		fields=[
 			"name",
 			"survey",
+			"template_version",
 			"da_id",
 			"farmer_id",
 			"consent",
@@ -1101,7 +1671,7 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 		{
 			"name": row.name,
 			"survey": row.survey,
-			"template_version": doc.template_version,
+			"template_version": row.template_version,
 			"farmer_id": row.farmer_id,
 			"farmer_reg_id": reg_ids.get(row.farmer_id),
 			"da_id": row.da_id,

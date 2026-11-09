@@ -7,6 +7,7 @@ import frappe
 _SCHEMA_DOCTYPES = (
 	("da_profile_change_request", "DA Profile Change Request"),
 	("da_integration_event", "DA Integration Event"),
+	("da_survey_parameter", "DA Survey Parameter"),
 )
 
 

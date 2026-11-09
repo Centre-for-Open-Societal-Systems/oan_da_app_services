@@ -9,6 +9,7 @@
  "engine": "InnoDB",
  "field_order": [
   "survey",
+  "template_version",
   "da_id",
   "farmer_id",
   "consent",
@@ -38,6 +39,13 @@
    "options": "DA Survey Template",
    "reqd": 1,
    "search_index": 1
+  },
+  {
+   "description": "Template version at response capture time.",
+   "fieldname": "template_version",
+   "fieldtype": "Data",
+   "label": "Template Version",
+   "read_only": 1
   },
   {
    "description": "Collector DA-ID.",
@@ -154,7 +162,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-03 12:00:00.000000",
+ "modified": "2026-11-06 10:34:14.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Response",

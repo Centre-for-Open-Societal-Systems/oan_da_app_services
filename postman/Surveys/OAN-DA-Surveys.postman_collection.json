@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-surveys",
     "name": "OAN DA Surveys",
-    "description": "Survey templates, assigned tasks, responses, validation, idempotency and XLSX export (FR-09d).\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. Login as Supervisor (or Admin with woreda set)\n2. Create template → stores survey_id\n3. List templates / Get template\n4. Login as DA in the same Woreda (or keep Supervisor)\n5. List surveys / Get survey\n6. Submit response → stores response_id\n7. List responses / Results / Export\n8. (Optional) Patch close\n9. Negative and security cases\n\n## Confirmed rules exercised here\n- DA capture is limited to farmers in the DA's Effective Kebele assignments.\n- One completed response per farmer per template, across all DAs (409).\n- Farmer location is stored from the farmer reference, not the collector DA.\n- `client_op_id` replay is scoped to survey + collector; mismatches are 409.\n- Excel export is Supervisor / Executive / Admin only.\n- Executive sees /surveys in GET /me.\n\n## Auth\nNative DocTypes. Bearer {{access_token}} only. No staff CSRF.\n\n## Docs\n- docs/surveys-integration.md\n- docs/surveys-frontend.md\n- docs/api-da-screens.md §2.16\n\nCreating a template and submitting a response write real rows. Use a disposable site.",
+    "description": "Survey templates, assigned tasks, responses, validation, idempotency and XLSX export (FR-09d).\n\nBase path: /api/v1/da-services\n\n## Run order (happy path, Supervisor token)\n1. Login as Supervisor (or Admin with woreda set) → stores access_token\n2. Set da_id to a DA in that Woreda whose assigned Kebele contains farmer_id\n3. Create template → stores survey_id\n4. List templates / Get template\n5. List surveys / Get survey\n6. Submit response → stores response_id (Supervisor sends da_id)\n7. List responses / Results / Export\n8. (Optional) Patch close\n9. Negative and security cases\n\nThe capture requests also work with a DA-only token: the server ignores da_id and uses the DA's own assignment. To use DA auth for capture, re-run Login with da_usr/da_pwd so it replaces access_token. The separate 'Login (DA — seeds da_access_token for export denial)' request only seeds da_access_token for the export-denial check; it does not replace access_token.\n\n## Required test data\n- farmer_id: farmer in da_id's assigned Kebele and in the survey Woreda.\n- da_id: collector DA-ID used by the Supervisor/Admin happy path and negative capture cases.\n- outside_kebele_farmer_id: farmer in the same Woreda but a Kebele not assigned to da_id.\n- other_da_usr/pwd: second DA in the same Woreda/Kebele for the cross-DA duplicate.\n\n## Confirmed rules exercised here\n- DA capture is limited to farmers in the DA's Effective Kebele assignments.\n- One completed response per farmer per template, across all DAs (409).\n- Farmer location is stored from the farmer reference, not the collector DA.\n- `client_op_id` replay is scoped to survey + collector; mismatches are 409.\n- Excel export is Supervisor / Executive / Admin only.\n- Executive sees /surveys in GET /me.\n\n## Auth\nNative DocTypes. Bearer {{access_token}} only. No staff CSRF.\n\n## Docs\n- docs/surveys-integration.md\n- docs/surveys-frontend.md\n- docs/api-da-screens.md §2.16\n\nCreating a template and submitting a response write real rows. Use a disposable site.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -16,34 +16,122 @@
     ]
   },
   "variable": [
-    { "key": "base_url", "value": "http://127.0.0.1:8200" },
-    { "key": "usr", "value": "" },
-    { "key": "pwd", "value": "" },
-    { "key": "access_token", "value": "" },
-    { "key": "refresh_token", "value": "" },
-    { "key": "survey_id", "value": "" },
-    { "key": "response_id", "value": "" },
-    { "key": "farmer_id", "value": "FR-427495614351" },
-    { "key": "da_id", "value": "" },
-    { "key": "woreda", "value": "ET04-W01" },
-    { "key": "client_op_id", "value": "" },
-    { "key": "window_open", "value": "2026-11-03" },
-    { "key": "window_close", "value": "2026-11-30" },
-    { "key": "bad_farmer_id", "value": "FR-does-not-exist" },
-    { "key": "outside_kebele_farmer_id", "value": "" },
-    { "key": "other_da_usr", "value": "" },
-    { "key": "other_da_pwd", "value": "" },
-    { "key": "other_access_token", "value": "" },
-    { "key": "da_usr", "value": "" },
-    { "key": "da_pwd", "value": "" },
-    { "key": "da_access_token", "value": "" },
-    { "key": "exec_usr", "value": "" },
-    { "key": "exec_pwd", "value": "" },
-    { "key": "executive_access_token", "value": "" },
-    { "key": "replay_farmer_id", "value": "" },
-    { "key": "replay_client_op_id", "value": "" },
-    { "key": "replay_response_id", "value": "" },
-    { "key": "export_filename", "value": "" }
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "usr",
+      "value": ""
+    },
+    {
+      "key": "pwd",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "access_roles",
+      "value": ""
+    },
+    {
+      "key": "survey_id",
+      "value": ""
+    },
+    {
+      "key": "response_id",
+      "value": ""
+    },
+    {
+      "key": "farmer_id",
+      "value": "FR-427495614351"
+    },
+    {
+      "key": "da_id",
+      "value": ""
+    },
+    {
+      "key": "woreda",
+      "value": "ET04-W01"
+    },
+    {
+      "key": "client_op_id",
+      "value": ""
+    },
+    {
+      "key": "window_open",
+      "value": "2026-11-03"
+    },
+    {
+      "key": "window_close",
+      "value": "2026-11-30"
+    },
+    {
+      "key": "bad_farmer_id",
+      "value": "FR-does-not-exist"
+    },
+    {
+      "key": "outside_kebele_farmer_id",
+      "value": ""
+    },
+    {
+      "key": "other_da_usr",
+      "value": ""
+    },
+    {
+      "key": "other_da_pwd",
+      "value": ""
+    },
+    {
+      "key": "other_access_token",
+      "value": ""
+    },
+    {
+      "key": "da_usr",
+      "value": ""
+    },
+    {
+      "key": "da_pwd",
+      "value": ""
+    },
+    {
+      "key": "da_access_token",
+      "value": ""
+    },
+    {
+      "key": "exec_usr",
+      "value": ""
+    },
+    {
+      "key": "exec_pwd",
+      "value": ""
+    },
+    {
+      "key": "executive_access_token",
+      "value": ""
+    },
+    {
+      "key": "replay_farmer_id",
+      "value": ""
+    },
+    {
+      "key": "replay_client_op_id",
+      "value": ""
+    },
+    {
+      "key": "replay_response_id",
+      "value": ""
+    },
+    {
+      "key": "export_filename",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -65,22 +153,35 @@
                   "    if (pm.environment.name) pm.environment.set(key, value);",
                   "}",
                   "save(\"access_token\", data.access_token);",
-                  "save(\"refresh_token\", data.refresh_token);"
+                  "save(\"refresh_token\", data.refresh_token);",
+                  "save(\"access_roles\", (data.roles || []).join(\",\"));"
                 ]
               }
             }
           ],
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/auth/login",
             "description": "Public login. Set usr/pwd in the environment (Supervisor for create; DA for capture)."
@@ -109,16 +210,28 @@
             }
           ],
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/auth/refresh"
           },
@@ -143,16 +256,28 @@
             }
           ],
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"usr\": \"{{other_da_usr}}\",\n  \"pwd\": \"{{other_da_pwd}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/auth/login",
             "description": "Second DA user, in the same Woreda/Kebele as the first DA. Used to prove the duplicate rule is cross-DA."
@@ -160,7 +285,7 @@
           "response": []
         },
         {
-          "name": "Login (DA — export must be forbidden)",
+          "name": "Login (DA — seeds da_access_token for export denial)",
           "event": [
             {
               "listen": "test",
@@ -178,19 +303,31 @@
             }
           ],
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"usr\": \"{{da_usr}}\",\n  \"pwd\": \"{{da_pwd}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/auth/login",
-            "description": "Development Agent login; used to assert export returns 403."
+            "description": "Development Agent login; stores da_access_token only, for the export-denial test. It does not replace access_token. For DA-auth capture, run the main Login request with da_usr/da_pwd instead."
           },
           "response": []
         },
@@ -213,16 +350,28 @@
             }
           ],
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"usr\": \"{{exec_usr}}\",\n  \"pwd\": \"{{exec_pwd}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/auth/login",
             "description": "Executive login; used for the /me menu and export checks."
@@ -260,6 +409,7 @@
                   "  pm.expect(data.parameters).to.be.an(\"array\").that.is.not.empty;",
                   "  pm.expect(data.parameters[0].type).to.eql(\"consent\");",
                   "});",
+                  "pm.test(\"Woreda-wide assignment and translations\", function () {\n  pm.expect(data.assignmentMode).to.eql(\"Woreda\");\n  pm.expect(data.assignedDaIds || []).to.be.an(\"array\").that.is.empty;\n  const translated = (data.parameters || []).find(p => p.id === \"p4\") || {};\n  pm.expect(translated.translations).to.include.keys(\"Amharic\", \"Afaan Oromoo\");\n  pm.expect(translated.prompt).to.be.a(\"string\").that.is.not.empty;\n});",
                   "if (data.id) {",
                   "  pm.collectionVariables.set(\"survey_id\", data.id);",
                   "  if (pm.environment.name) pm.environment.set(\"survey_id\", data.id);",
@@ -271,16 +421,26 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Meher season farmer satisfaction\",\n  \"type\": \"Satisfaction\",\n  \"open\": \"{{window_open}}\",\n  \"close\": \"{{window_close}}\",\n  \"languages\": [\"English\", \"Amharic\"],\n  \"targetFarmers\": 20,\n  \"questions\": [\n    {\n      \"prompt\": \"How useful was the advice you received this season?\",\n      \"type\": \"rating\",\n      \"options\": \"\",\n      \"required\": true\n    },\n    {\n      \"prompt\": \"Did you apply the advice on your farm?\",\n      \"type\": \"single\",\n      \"options\": \"Yes, fully, Partly, No\",\n      \"required\": true\n    }\n  ],\n  \"woreda\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"name\": \"Meher season farmer satisfaction\",\n  \"type\": \"Satisfaction\",\n  \"open\": \"{{window_open}}\",\n  \"close\": \"{{window_close}}\",\n  \"languages\": [\n    \"English\",\n    \"Amharic\"\n  ],\n  \"targetFarmers\": 20,\n  \"questions\": [\n    {\n      \"prompt\": \"How useful was the advice you received this season?\",\n      \"type\": \"rating\",\n      \"options\": \"\",\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"በዚህ ወቅት የተቀበሉት ምክር ምን ያህል ጠቃሚ ነበር?\",\n        \"Afaan Oromoo\": \"Gorsa yeroo kana argattan meeqa fayyadaa ture?\"\n      }\n    },\n    {\n      \"prompt\": \"Did you apply the advice on your farm?\",\n      \"type\": \"single\",\n      \"options\": [\n        \"Yes, fully\",\n        \"Partly\",\n        \"No\"\n      ],\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"ምክሩን በእርሻዎ ላይ ተግባራዊ አድርገዋል?\",\n        \"Afaan Oromoo\": \"Gorsa kana lafa qonnaa keessan irratti hojiirra oolchitani?\"\n      }\n    }\n  ],\n  \"woreda\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\",\n  \"assignmentMode\": \"Woreda\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/templates",
-            "description": "POST /surveys/templates — Supervisor/Admin.\n\nAdmin must send woreda. Supervisor woreda is stamped from RBAC; sending woreda is still fine.\nConsent, Farmer ID and Kebele parameters are prepended server-side.\nWrites a real DA Survey Template row."
+            "description": "POST /surveys/templates — Supervisor/Admin.\n\nAdmin must send woreda. Supervisor woreda is checked against the active assignment; sending woreda is still fine.\nConsent, Farmer ID and Kebele parameters are prepended server-side.\nChoice options are sent as a list so the multi-word option \"Yes, fully\" stays one value.\nassignmentMode defaults to Woreda; custom questions carry translations (English stays in prompt).\nWrites a real DA Survey Template row."
           },
           "response": []
         },
@@ -294,24 +454,60 @@
                 "exec": [
                   "pm.test(\"List templates returns 200\", function () { pm.response.to.have.status(200); });",
                   "const body = pm.response.json() || {};",
-                  "pm.test(\"data is an array\", function () { pm.expect(body.data).to.be.an(\"array\"); });"
+                  "pm.test(\"data is an array\", function () { pm.expect(body.data).to.be.an(\"array\"); });",
+                  "if ((body.data || []).length) { pm.test(\"Template exposes assignmentMode\", function () { pm.expect(body.data[0].assignmentMode).to.be.oneOf([\"Woreda\", \"Selected\"]); }); }"
                 ]
               }
             }
           ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/surveys/templates?type=Satisfaction&limit=50&start=0",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "da-services", "surveys", "templates"],
+              "raw": "{{base_url}}/api/v1/da-services/surveys/templates?type=Satisfaction&woreda={{woreda}}&limit=50&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "surveys",
+                "templates"
+              ],
               "query": [
-                { "key": "status", "value": "Open", "disabled": true },
-                { "key": "type", "value": "Satisfaction" },
-                { "key": "q", "value": "Meher", "disabled": true },
-                { "key": "limit", "value": "50" },
-                { "key": "start", "value": "0" }
+                {
+                  "key": "status",
+                  "value": "Open",
+                  "disabled": true
+                },
+                {
+                  "key": "type",
+                  "value": "Satisfaction"
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "Meher",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
               ]
             },
             "description": "GET /surveys/templates — Supervisor, Admin, Executive."
@@ -335,7 +531,12 @@
           ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
             "description": "GET /surveys/templates/{id}"
           },
@@ -357,16 +558,124 @@
           "request": {
             "method": "PATCH",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"close\": \"{{window_close}}\",\n  \"targetFarmers\": 25\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
             "description": "PATCH /surveys/templates/{id} — metadata. Question edits only when collected == 0."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1b. Individual assignment (Supervisor)",
+      "item": [
+        {
+          "name": "Create selected-DA template",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = \"sel-srv-\" + Date.now();",
+                  "pm.collectionVariables.set(\"selected_client_op_id\", id);",
+                  "if (pm.environment.name) pm.environment.set(\"selected_client_op_id\", id);",
+                  "if (!pm.variables.get(\"da_id\")) { throw new Error(\"Set da_id to the DA that should be individually assigned.\"); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Selected template returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Selected assignment echoes the DA\", function () {",
+                  "  pm.expect(data.assignmentMode).to.eql(\"Selected\");",
+                  "  pm.expect(data.assignedDaIds).to.include(pm.collectionVariables.get(\"da_id\"));",
+                  "});",
+                  "if (data.id) {",
+                  "  pm.collectionVariables.set(\"selected_survey_id\", data.id);",
+                  "  if (pm.environment.name) pm.environment.set(\"selected_survey_id\", data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Meher season selected-DA survey\",\n  \"type\": \"Satisfaction\",\n  \"open\": \"{{window_open}}\",\n  \"close\": \"{{window_close}}\",\n  \"languages\": [\n    \"English\",\n    \"Amharic\"\n  ],\n  \"targetFarmers\": 20,\n  \"questions\": [\n    {\n      \"prompt\": \"How useful was the advice you received this season?\",\n      \"type\": \"rating\",\n      \"options\": \"\",\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"በዚህ ወቅት የተቀበሉት ምክር ምን ያህል ጠቃሚ ነበር?\",\n        \"Afaan Oromoo\": \"Gorsa yeroo kana argattan meeqa fayyadaa ture?\"\n      }\n    },\n    {\n      \"prompt\": \"Did you apply the advice on your farm?\",\n      \"type\": \"single\",\n      \"options\": [\n        \"Yes, fully\",\n        \"Partly\",\n        \"No\"\n      ],\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"ምክሩን በእርሻዎ ላይ ተግባራዊ አድርገዋል?\",\n        \"Afaan Oromoo\": \"Gorsa kana lafa qonnaa keessan irratti hojiirra oolchitani?\"\n      }\n    }\n  ],\n  \"woreda\": \"{{woreda}}\",\n  \"client_op_id\": \"{{selected_client_op_id}}\",\n  \"assignmentMode\": \"Selected\",\n  \"assignedDaIds\": [\n    \"{{da_id}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/templates",
+            "description": "POST /surveys/templates with assignmentMode=Selected and assignedDaIds. The DA must belong to the template Woreda. Does not overwrite survey_id used by the main flow."
+          },
+          "response": []
+        },
+        {
+          "name": "Get selected template",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get selected template returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Selected assignment persisted\", function () {",
+                  "  pm.expect(data.assignmentMode).to.eql(\"Selected\");",
+                  "  pm.expect(data.assignedDaIds).to.include(pm.collectionVariables.get(\"da_id\"));",
+                  "  const p4 = (data.parameters || []).find(p => p.id === \"p4\") || {};",
+                  "  pm.expect(p4.translations).to.include.keys(\"Amharic\", \"Afaan Oromoo\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{selected_survey_id}}",
+            "description": "GET /surveys/templates/{id}. Verifies assignmentMode/assignedDaIds round-trip and translations on parameters."
           },
           "response": []
         }
@@ -397,18 +706,57 @@
           ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/surveys?limit=50&start=0",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "da-services", "surveys"],
+              "raw": "{{base_url}}/api/v1/da-services/surveys?woreda={{woreda}}&limit=50&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "surveys"
+              ],
               "query": [
-                { "key": "status", "value": "Open", "disabled": true },
-                { "key": "type", "value": "Satisfaction", "disabled": true },
-                { "key": "language", "value": "English", "disabled": true },
-                { "key": "q", "value": "", "disabled": true },
-                { "key": "limit", "value": "50" },
-                { "key": "start", "value": "0" }
+                {
+                  "key": "status",
+                  "value": "Open",
+                  "disabled": true
+                },
+                {
+                  "key": "type",
+                  "value": "Satisfaction",
+                  "disabled": true
+                },
+                {
+                  "key": "language",
+                  "value": "English",
+                  "disabled": true
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
               ]
             },
             "description": "GET /surveys — Assigned surveys for the caller (DA sees own Woreda)."
@@ -434,7 +782,12 @@
           ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}",
             "description": "GET /surveys/{id} — parameters for capture."
           },
@@ -455,7 +808,11 @@
                 "exec": [
                   "const id = \"resp-\" + Date.now();",
                   "pm.collectionVariables.set(\"client_op_id\", id);",
-                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);"
+                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);",
+                  "const roles = (pm.variables.get(\"access_roles\") || \"\").split(\",\").filter(Boolean);",
+                  "if (roles.length && !roles.includes(\"Development Agent\") && !pm.variables.get(\"da_id\")) {",
+                  "  throw new Error(\"Set da_id to the collector DA-ID when using a Supervisor/Admin token, or log in as a DA.\");",
+                  "}"
                 ]
               }
             },
@@ -473,7 +830,11 @@
                   "if (data.id) {",
                   "  pm.collectionVariables.set(\"response_id\", data.id);",
                   "  if (pm.environment.name) pm.environment.set(\"response_id\", data.id);",
-                  "}"
+                  "}",
+                  "// Seed the idempotency replay with this exact request.",
+                  "pm.collectionVariables.set(\"replay_client_op_id\", pm.collectionVariables.get(\"client_op_id\"));",
+                  "pm.collectionVariables.set(\"replay_farmer_id\", pm.collectionVariables.get(\"farmer_id\"));",
+                  "pm.collectionVariables.set(\"replay_response_id\", data.id || \"\");"
                 ]
               }
             }
@@ -481,30 +842,42 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": {\n    \"p4\": \"4\",\n    \"p5\": \"Yes, fully\"\n  },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": {\n    \"p4\": \"4\",\n    \"p5\": \"Yes, fully\"\n  },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
-            "description": "POST /surveys/{id}/responses — DA (or Supervisor with da_id).\n\np4/p5 match the create-template questions after standard p1–p3.\nDuplicate completed farmer → 409.\nWrites a real DA Survey Response row."
+            "description": "POST /surveys/{id}/responses — DA (or Supervisor/Admin with da_id).\n\nda_id is required for the default Supervisor/Admin token and ignored for a DA-only token. p4/p5 match the create-template questions after standard p1–p3.\nDuplicate completed farmer → 409.\nWrites a real DA Survey Response row."
           },
           "response": []
         },
         {
-          "name": "Save draft response",
+          "name": "Draft rejected (400)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Draft returns 201\", function () { pm.response.to.have.status(201); });",
-                  "const data = (pm.response.json() || {}).data || {};",
-                  "pm.test(\"Draft state\", function () { pm.expect(data.sync_state).to.eql(\"Draft\"); });"
+                  "pm.test(\"Draft is rejected with 400\", function () { pm.response.to.have.status(400); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"Validation error explains direct submission\", function () {",
+                  "  pm.expect(JSON.stringify(body)).to.match(/Draft/i);",
+                  "});"
                 ]
               }
             }
@@ -512,16 +885,26 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}-draft\",\n  \"answers\": {\n    \"p4\": \"3\"\n  },\n  \"sync_state\": \"Draft\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"answers\": {\n    \"p4\": \"3\"\n  },\n  \"sync_state\": \"Draft\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
-            "description": "Draft skips required-answer checks and does not set the duplicate guard."
+            "description": "New responses are submitted directly. sync_state=Draft is rejected with 400; historical Draft rows remain readable/exported."
           },
           "response": []
         },
@@ -543,15 +926,64 @@
           ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses?limit=50&start=0",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "da-services", "surveys", "{{survey_id}}", "responses"],
+              "raw": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses?da_id={{da_id}}&woreda={{woreda}}&kebele={{kebele}}&limit=50&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "surveys",
+                "{{survey_id}}",
+                "responses"
+              ],
               "query": [
-                { "key": "farmer_id", "value": "{{farmer_id}}", "disabled": true },
-                { "key": "limit", "value": "50" },
-                { "key": "start", "value": "0" }
+                {
+                  "key": "farmer_id",
+                  "value": "{{farmer_id}}",
+                  "disabled": true
+                },
+                {
+                  "key": "kebele",
+                  "value": "{{kebele}}",
+                  "disabled": true
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "disabled": true
+                },
+                {
+                  "key": "zone",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "region",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "da_id",
+                  "value": "{{da_id}}",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
               ]
             },
             "description": "GET /surveys/{id}/responses"
@@ -582,7 +1014,12 @@
           ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/results",
             "description": "GET /surveys/{id}/results — Supervisor / Admin / Executive. Basic counts and rating averages."
           },
@@ -611,13 +1048,23 @@
           "request": {
             "method": "PATCH",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"status\": \"Closed\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{survey_id}}",
             "description": "Closes the survey. New responses are refused afterward."
@@ -650,11 +1097,20 @@
             "auth": {
               "type": "bearer",
               "bearer": [
-                { "key": "token", "value": "{{executive_access_token}}", "type": "string" }
+                {
+                  "key": "token",
+                  "value": "{{executive_access_token}}",
+                  "type": "string"
+                }
               ]
             },
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": "{{base_url}}/api/v1/da-services/me",
             "description": "Executive nav includes /surveys; Communications Officer must not."
           },
@@ -663,6 +1119,18 @@
         {
           "name": "Invalid farmer (404)",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const roles = (pm.variables.get(\"access_roles\") || \"\").split(\",\").filter(Boolean);",
+                  "if (roles.length && !roles.includes(\"Development Agent\") && !pm.variables.get(\"da_id\")) {",
+                  "  throw new Error(\"Set da_id to the collector DA-ID when using a Supervisor/Admin token, or log in as a DA.\");",
+                  "}"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -679,13 +1147,23 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{bad_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{bad_farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
             "description": "Farmer is resolved against the Farmer Registry / DA Farmer Reference before insert. No row is written."
@@ -695,6 +1173,21 @@
         {
           "name": "Farmer outside assigned Kebele (403)",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get(\"outside_kebele_farmer_id\")) {",
+                  "  throw new Error(\"Set outside_kebele_farmer_id to a farmer in the same Woreda but a Kebele not assigned to da_id.\");",
+                  "}",
+                  "const roles = (pm.variables.get(\"access_roles\") || \"\").split(\",\").filter(Boolean);",
+                  "if (roles.length && !roles.includes(\"Development Agent\") && !pm.variables.get(\"da_id\")) {",
+                  "  throw new Error(\"Set da_id to the collector DA-ID when using a Supervisor/Admin token, or log in as a DA.\");",
+                  "}"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -711,16 +1204,26 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{outside_kebele_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{outside_kebele_farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
-            "description": "Set outside_kebele_farmer_id to a farmer in the same Woreda but a Kebele this DA is not assigned. No row is written."
+            "description": "Set outside_kebele_farmer_id to a farmer in the same Woreda but a Kebele not assigned to da_id. The request is blocked in pre-request when that variable is empty, so it cannot fall through to a 400. No row is written."
           },
           "response": []
         },
@@ -744,18 +1247,32 @@
             "auth": {
               "type": "bearer",
               "bearer": [
-                { "key": "token", "value": "{{other_access_token}}", "type": "string" }
+                {
+                  "key": "token",
+                  "value": "{{other_access_token}}",
+                  "type": "string"
+                }
               ]
             },
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"5\", \"p5\": \"Partly\" },\n  \"sync_state\": \"Synced\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
             "description": "Same farmer + template already submitted by the first DA. The rule is cross-DA: the second DA gets 409 and no second row is stored."
@@ -763,16 +1280,17 @@
           "response": []
         },
         {
-          "name": "Idempotency seed (fixed client_op_id)",
+          "name": "Idempotency seed (exact replay of the Synced submission)",
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "const id = \"replay-\" + Date.now();",
-                  "pm.collectionVariables.set(\"replay_client_op_id\", id);",
-                  "if (pm.environment.name) pm.environment.set(\"replay_client_op_id\", id);"
+                  "// Run 'Submit response (Synced)' first: it copies its client_op_id and farmer here.",
+                  "if (!pm.collectionVariables.get(\"replay_client_op_id\") || !pm.collectionVariables.get(\"replay_farmer_id\")) {",
+                  "  throw new Error(\"Run 'Submit response (Synced)' first to seed the idempotency replay.\");",
+                  "}"
                 ]
               }
             },
@@ -781,12 +1299,11 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Seed response returns 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"Replay returns 201\", function () { pm.response.to.have.status(201); });",
                   "const data = (pm.response.json() || {}).data || {};",
-                  "if (data.id) {",
-                  "  pm.collectionVariables.set(\"replay_response_id\", data.id);",
-                  "  if (pm.environment.name) pm.environment.set(\"replay_response_id\", data.id);",
-                  "}"
+                  "pm.test(\"Replay returns the original response id\", function () {",
+                  "  pm.expect(data.id).to.eql(pm.collectionVariables.get(\"replay_response_id\"));",
+                  "});"
                 ]
               }
             }
@@ -794,16 +1311,26 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
-            "description": "Set replay_farmer_id to a farmer not used by the happy-path submit. Stores replay_client_op_id and replay_response_id."
+            "description": "Exact replay of the earlier Synced submission: same survey, collector, farmer, answers and client_op_id. Returns the original response id and writes no new row."
           },
           "response": []
         },
@@ -827,13 +1354,23 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"4\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
             "description": "Replay is scoped to the same survey + collector and compares the payload. No new row."
@@ -856,16 +1393,72 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"1\", \"p5\": \"No\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"farmer_id\": \"{{replay_farmer_id}}\",\n  \"da_id\": \"{{da_id}}\",\n  \"consent\": \"granted\",\n  \"answers\": { \"p4\": \"1\", \"p5\": \"Yes, fully\" },\n  \"sync_state\": \"Synced\",\n  \"client_op_id\": \"{{replay_client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses",
-            "description": "Same client_op_id, different farmer/payload. Returns 409 and never discloses the original response."
+            "description": "Same survey, collector, farmer and client_op_id as the Synced submission; only p4 changes. Returns 409 and never discloses the original response."
+          },
+          "response": []
+        },
+        {
+          "name": "Unassigned DA cannot open selected survey (403)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"selected_survey_id\")) { throw new Error(\"Run the Individual assignment folder first.\"); }",
+                  "if (!pm.variables.get(\"other_access_token\")) { throw new Error(\"Set other_da_usr/other_da_pwd and log in as another DA in the same Woreda.\"); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unassigned DA gets 403\", function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{other_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/da-services/surveys/{{selected_survey_id}}",
+            "description": "GET /surveys/{id} as a DA who is not in assignedDaIds for a Selected-mode survey. Must be 403, not empty data."
           },
           "response": []
         },
@@ -896,12 +1489,19 @@
             "auth": {
               "type": "bearer",
               "bearer": [
-                { "key": "token", "value": "{{executive_access_token}}", "type": "string" }
+                {
+                  "key": "token",
+                  "value": "{{executive_access_token}}",
+                  "type": "string"
+                }
               ]
             },
             "method": "GET",
             "header": [
-              { "key": "Accept", "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+              {
+                "key": "Accept",
+                "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              }
             ],
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses/export",
             "description": "Supervisor / Executive / Admin. Returns raw workbook bytes, not the JSON envelope."
@@ -925,11 +1525,20 @@
             "auth": {
               "type": "bearer",
               "bearer": [
-                { "key": "token", "value": "{{da_access_token}}", "type": "string" }
+                {
+                  "key": "token",
+                  "value": "{{da_access_token}}",
+                  "type": "string"
+                }
               ]
             },
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": "{{base_url}}/api/v1/da-services/surveys/{{survey_id}}/responses/export",
             "description": "Export is restricted to Supervisor, Executive and Admin. Communications Officer is also denied."
           },

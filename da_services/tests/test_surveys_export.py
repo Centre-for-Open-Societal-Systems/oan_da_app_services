@@ -41,17 +41,24 @@ RESPONSE = {
 class TestSurveyExportWorkbook(unittest.TestCase):
 	def test_headers_are_base_columns_then_parameters(self):
 		rows = build_export_rows(PARAMETERS, [])
-		self.assertEqual(rows, [list(EXPORT_BASE_COLUMNS) + [
-			"p1: Consent",
-			"p4: How useful was the advice?",
-			"p5: Which crops?",
-		]])
+		self.assertEqual(
+			rows,
+			[
+				[
+					*EXPORT_BASE_COLUMNS,
+					"p1: Consent",
+					"p4: How useful was the advice?",
+					"p5: Which crops?",
+				]
+			],
+		)
 
 	def test_response_row_uses_stored_farmer_location_and_answers(self):
 		rows = build_export_rows(PARAMETERS, [RESPONSE])
 		self.assertEqual(len(rows), 2)
 		header = rows[0]
 		row = rows[1]
+		self.assertEqual(row[header.index("Template Version")], "FSS-T1-v1.0")
 		self.assertEqual(row[header.index("Farmer ID")], "farmer-uuid-001")
 		self.assertEqual(row[header.index("Farmer Registry ID")], "FR-000101")
 		self.assertEqual(row[header.index("Collector DA ID")], "DA-000001")
@@ -81,3 +88,9 @@ class TestSurveyExportWorkbook(unittest.TestCase):
 			[{**RESPONSE, "answers": {}}],
 		)
 		self.assertEqual(rows[1][-1], "")
+
+	def test_missing_stored_version_is_blank(self):
+		rows = build_export_rows(PARAMETERS, [{**RESPONSE, "template_version": None}])
+		header = rows[0]
+		row = rows[1]
+		self.assertEqual(row[header.index("Template Version")], "")

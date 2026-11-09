@@ -103,13 +103,10 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 		self.assertEqual(total, 2)
 
-	def test_da_does_not_see_farmers_in_other_kebele(self):
-		"""Test DA cannot see farmers outside assigned Kebele."""
-		farmers, total = svc.list_farmers(self.ctx_da, kebele=self.kebele_b)
-
-		# Even with explicit filter, DA should not see Kebele B farmers
-		self.assertEqual(len(farmers), 0)
-		self.assertEqual(total, 0)
+	def test_da_gets_403_for_another_kebele_filter(self):
+		"""An explicit out-of-scope Kebele is rejected, not silently emptied."""
+		with self.assertRaises(frappe.PermissionError):
+			svc.list_farmers(self.ctx_da, kebele=self.kebele_b)
 
 	def test_da_no_assignment_sees_empty_list(self):
 		"""Test DA with no Kebele assignment sees empty list."""
