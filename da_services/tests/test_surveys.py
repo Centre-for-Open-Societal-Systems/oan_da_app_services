@@ -1370,23 +1370,29 @@ class TestSurveys(IntegrationTestCase):
 		self.assertTrue(filename.endswith(".xlsx"))
 		self.assertIsInstance(content, bytes)
 
-	def test_patch_questions_api_returns_409(self):
-		survey = self._create()
-		self._submit(survey["id"], farmer_id=FARMER_A)
-		frappe.set_user(SUP)
-		frappe.response.clear()
-		try:
-			with _keep_fixtures():
-				out = api.patch_template(
-					survey["id"],
-					questions=[{"prompt": "New Q", "type": "text", "options": "", "required": False}],
-				)
-			self.assertEqual(out["status"], "error")
-			self.assertEqual(frappe.response.get("http_status_code"), 409)
-		finally:
-			frappe.set_user("Administrator")
-			frappe.response.clear()
+def test_patch_questions_creates_new_template_version(self):
+	survey = self._create()
+	self._submit(survey["id"], farmer_id=FARMER_A)
+	original_version = survey["templateVersion"]
 
+	# Patch questions after responses exist creates a new template version,
+	# not a 409 error. The new version has a different template ID.
+	out = api.patch_template(
+	survey["id"],
+		questions=[{"prompt": "New Q", "type": "text", "options": "", "required": False}],
+	)
+	# Editing questions after responses exist creates a new template version,
+# not a 409 error. The new version has a different template ID.
+	self.assertNotEqual(out["data"]["templateVersion"], original_version)
+	self.assertIn(out["status"], ("success", "Open"))
+
+	# New version has a different template version and can be edited independently.
+	new_version_doc = frappe.get_doc("DA Survey Template", out["id"])
+	self.assertIsNotNone(new_version_doc)
+	self.assertNotEqual(new_version_doc.template_version, original_version)
+
+	# Original template remains unchanged at the original version.
+	self.assertEqual(survey["templateVersion"], original_version)
 	def test_api_rejects_client_supplied_invalid_sync_state(self):
 		survey = self._create()
 		frappe.set_user(DA1)
