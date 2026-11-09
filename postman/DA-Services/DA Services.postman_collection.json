@@ -1,0 +1,772 @@
+{
+  "info": {
+    "_postman_id": "51a5b11e-9bb2-4558-8bcd-10ba106580a8",
+    "name": "DA Services",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "59157441",
+    "_collection_link": "https://go.postman.co/collection/59157441-51a5b11e-9bb2-4558-8bcd-10ba106580a8?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "SSO Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const jsonData = pm.response.json();",
+                  "",
+                  "if (jsonData && jsonData.data) {",
+                  "    pm.environment.set(\"access_token\", jsonData.data.access_token);",
+                  "    pm.environment.set(\"csrf_token\", jsonData.data.csrf_token);",
+                  "    console.log(\"access_token and csrf_token stored in environment.\");",
+                  "} else {",
+                  "    console.error(\"Unexpected response structure:\", jsonData);",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"da-agent@services.com\",\n    \"password\": \"admin@123\",\n    \"key\": \"agent\"\n  }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/sso/login",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "sso",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Master Data & Attribute",
+      "item": [
+        {
+          "name": "Get Master Data",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/get_master_data?data_type=geo&field_name=region&parent=ET&current_page=1&page_size=100&search",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "get_master_data"
+              ],
+              "query": [
+                {
+                  "key": "data_type",
+                  "value": "geo",
+                  "description": "geo or attribute"
+                },
+                {
+                  "key": "field_name",
+                  "value": "region",
+                  "description": "CROP_COMMODITY"
+                },
+                {
+                  "key": "parent",
+                  "value": "ET"
+                },
+                {
+                  "key": "current_page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "100"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Articles",
+      "item": [
+        {
+          "name": "List articles",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List articles returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/articles?category={{category}}&language=EN&limit=20&start=0",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "articles"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "{{category}}"
+                },
+                {
+                  "key": "source",
+                  "value": "{{source}}",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "Published",
+                  "disabled": true
+                },
+                {
+                  "key": "language",
+                  "value": "EN"
+                },
+                {
+                  "key": "search",
+                  "value": "teff",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Readers see only Published items whose audience covers them; writers see every status/audience (optionally filter with status). Response meta: count, total, limit (max 100), start. Disabled query params are optional filters. `language` returns that language's title/summary (fallback to default)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get article returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/articles/{{article_id}}",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "articles",
+                "{{article_id}}"
+              ]
+            },
+            "description": "One article with every language version (title, summary, body) and its audience scopes."
+          },
+          "response": []
+        },
+        {
+          "name": "Create article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Create article returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });\nconst data = (pm.response.json() || {}).data || {};\nif (data.name) { pm.collectionVariables.set(\"article_id\", data.name); if (pm.environment.name) pm.environment.set(\"article_id\", data.name); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Teff row-planting: spacing and seed rate\",\n  \"summary\": \"Row planting at 20 cm spacing cuts seed rate to 5-8 kg/ha.\",\n  \"category\": \"{{category}}\",\n  \"source\": \"{{source}}\",\n  \"published_on\": \"2026-09-11\",\n  \"status\": \"Draft\",\n  \"languages\": [\n    {\n      \"language\": \"EN\",\n      \"title\": \"Teff row-planting: spacing and seed rate\",\n      \"summary\": \"Row planting at 20 cm spacing ...\",\n      \"body\": \"<p>Plant in rows 20 cm apart.</p>\"\n    },\n    {\n      \"language\": \"አማ\",\n      \"title\": \"የጤፍ በመስመር መዝራት\",\n      \"summary\": \"በ20 ሴ.ሜ ርቀት መዝራት ...\",\n      \"body\": \"<p>በመስመር ይዘሩ።</p>\"\n    }\n  ],\n  \"audience_scopes\": [\n    {\n      \"region\": \"{{region}}\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/articles",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "articles"
+              ]
+            },
+            "description": "Writers only. Required: title, category, and at least one language version. status defaults to Draft."
+          },
+          "response": []
+        },
+        {
+          "name": "Update article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Update article returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"summary\": \"Updated summary\",\n  \"status\": \"Published\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/articles/{{article_id}}",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "articles",
+                "{{article_id}}"
+              ]
+            },
+            "description": "Writers only. Send only the keys to change. A table key (languages, audience_scopes) replaces the whole table."
+          },
+          "response": []
+        },
+        {
+          "name": "Archive article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Archive article returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Archived\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/articles/{{article_id}}",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "articles",
+                "{{article_id}}"
+              ]
+            },
+            "description": "Archive instead of delete."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Videos",
+      "item": [
+        {
+          "name": "List videos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List videos returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/videos?category={{category}}&limit=20&start=0",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "videos"
+              ],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "{{category}}"
+                },
+                {
+                  "key": "source",
+                  "value": "{{source}}",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "Published",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "poultry",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Readers see only Published items whose audience covers them; writers see every status/audience (optionally filter with status). Response meta: count, total, limit (max 100), start. Disabled query params are optional filters."
+          },
+          "response": []
+        },
+        {
+          "name": "Get video",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get video returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/videos/{{video_id}}",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "videos",
+                "{{video_id}}"
+              ]
+            },
+            "description": "One video with its audience scopes."
+          },
+          "response": []
+        },
+        {
+          "name": "Create video",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Create video returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });\nconst data = (pm.response.json() || {}).data || {};\nif (data.name) { pm.collectionVariables.set(\"video_id\", data.name); if (pm.environment.name) pm.environment.set(\"video_id\", data.name); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Profitable poultry farming started by a returnee\",\n  \"description\": \"Profitable poultry farming started by a returnee after migration.\",\n  \"youtube_url\": \"https://youtu.be/dQw4w9WgXcQ\",\n  \"category\": \"{{category}}\",\n  \"source\": \"{{source}}\",\n  \"published_on\": \"2026-10-07\",\n  \"status\": \"Draft\",\n  \"audience_scopes\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/videos",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "videos"
+              ]
+            },
+            "description": "Writers only. Required: title, youtube_url, category. youtube_id is parsed from the URL; thumbnail defaults to the YouTube thumbnail."
+          },
+          "response": []
+        },
+        {
+          "name": "Update video",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Update video returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated description\",\n  \"status\": \"Published\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/videos/{{video_id}}",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "videos",
+                "{{video_id}}"
+              ]
+            },
+            "description": "Writers only. Send only the keys to change."
+          },
+          "response": []
+        },
+        {
+          "name": "Archive video",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Archive video returns 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Archived\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/videos/{{video_id}}",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "videos",
+                "{{video_id}}"
+              ]
+            },
+            "description": "Archive instead of delete."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

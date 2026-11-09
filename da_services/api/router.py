@@ -90,6 +90,9 @@ def _register() -> None:
 		visits,
 	)
 
+	# Knowledge Base endpoints live under integrations/ rather than api/v1/.
+	from da_services.integrations.knowledge_base import articles, videos
+
 	for rule in _rules:
 		if rule not in frappe.api.API_URL_MAP._rules:
 			frappe.api.API_URL_MAP.add(rule.empty())

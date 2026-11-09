@@ -1,0 +1,182 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-11-09 12:00:00.000000",
+ "description": "YouTube video shown as a card on the Knowledge Base.",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "description",
+  "col_a",
+  "category",
+  "source",
+  "published_on",
+  "status",
+  "sec_yt",
+  "youtube_url",
+  "youtube_id",
+  "col_b",
+  "thumbnail",
+  "sec_aud",
+  "audience_scopes"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "reqd": 1,
+   "in_list_view": 1,
+   "length": 200
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "col_a",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "category",
+   "fieldtype": "Link",
+   "label": "Category",
+   "options": "KB Category",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Link",
+   "label": "Source",
+   "options": "KB Source",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "published_on",
+   "fieldtype": "Date",
+   "label": "Published On",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nPublished\nArchived",
+   "default": "Draft",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "sec_yt",
+   "fieldtype": "Section Break",
+   "label": "YouTube"
+  },
+  {
+   "fieldname": "youtube_url",
+   "fieldtype": "Data",
+   "label": "YouTube URL",
+   "reqd": 1,
+   "options": "URL"
+  },
+  {
+   "fieldname": "youtube_id",
+   "fieldtype": "Data",
+   "label": "YouTube ID",
+   "read_only": 1,
+   "no_copy": 1,
+   "length": 20,
+   "description": "Parsed from the URL on save."
+  },
+  {
+   "fieldname": "col_b",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "thumbnail",
+   "fieldtype": "Data",
+   "label": "Thumbnail URL",
+   "description": "Filled from YouTube when left empty."
+  },
+  {
+   "fieldname": "sec_aud",
+   "fieldtype": "Section Break",
+   "label": "Audience (empty = everyone)"
+  },
+  {
+   "fieldname": "audience_scopes",
+   "fieldtype": "Table",
+   "label": "Region / Zone / Woreda",
+   "options": "KB Audience Scope"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-09 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "KB Video",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "OAN Administrator",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Communications Officer",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "write": 1,
+   "export": 1
+  },
+  {
+   "role": "Development Agent",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Supervisor",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Executive",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "format:KB-VID-{#####}",
+ "title_field": "title",
+ "search_fields": "title,description",
+ "naming_rule": "Expression"
+}

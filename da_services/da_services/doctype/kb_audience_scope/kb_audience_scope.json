@@ -1,0 +1,50 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-11-09 12:00:00.000000",
+ "description": "Region / Zone / Woreda a KB item is limited to. No rows means everywhere. Narrowest level filled in wins.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "region",
+  "zone",
+  "woreda"
+ ],
+ "fields": [
+  {
+   "fieldname": "region",
+   "fieldtype": "Link",
+   "label": "Region",
+   "options": "DA Administrative Area",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Link",
+   "label": "Zone",
+   "options": "DA Administrative Area",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Link",
+   "label": "Woreda",
+   "options": "DA Administrative Area",
+   "in_list_view": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-09 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "KB Audience Scope",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "istable": 1
+}
