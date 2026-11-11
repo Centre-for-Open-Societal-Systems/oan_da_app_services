@@ -21,7 +21,7 @@ add_to_apps_screen = [
 	{
 		"name": "da_services",
 		"title": "DA Services",
-		"route": "/app/da-rbac-assignment",
+		"route": "/desk/da-services",
 		"has_permission": "da_services.api.permission.has_app_permission",
 	}
 ]

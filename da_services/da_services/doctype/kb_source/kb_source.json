@@ -1,0 +1,109 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-11-09 12:00:00.000000",
+ "description": "Publisher shown on a card, e.g. Ministry of Agriculture, ATI Plant Health.",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "source_name",
+  "source_name_am",
+  "col_a",
+  "logo",
+  "enabled"
+ ],
+ "fields": [
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Data",
+   "label": "Source Name",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "source_name_am",
+   "fieldtype": "Data",
+   "label": "Source Name (Amharic)"
+  },
+  {
+   "fieldname": "col_a",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "logo",
+   "fieldtype": "Attach Image",
+   "label": "Logo"
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-09 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "KB Source",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "OAN Administrator",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "write": 1,
+   "delete": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1
+  },
+  {
+   "role": "Communications Officer",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "write": 1,
+   "export": 1
+  },
+  {
+   "role": "Development Agent",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Supervisor",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Executive",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "field:source_name",
+ "search_fields": "source_name",
+ "naming_rule": "By fieldname"
+}
