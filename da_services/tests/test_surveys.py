@@ -1216,20 +1216,73 @@ class TestSurveys(IntegrationTestCase):
 
 	# -- patch / results -------------------------------------------------------
 
-	def test_patch_close_and_questions_blocked_after_response(self):
+	def test_patch_close_and_questions_after_response_creates_new_version(self):
 		survey = self._create()
 		closed = svc.patch_template(survey["id"], {"status": "Closed"}, ctx=_ctx(SUP))
 		self.assertEqual(closed["status"], "Closed")
 
 		# Re-open for the questions check.
-		svc.patch_template(survey["id"], {"status": "Open"}, ctx=_ctx(SUP))
+		reopened = svc.patch_template(survey["id"], {"status": "Open"}, ctx=_ctx(SUP))
+		self.assertEqual(reopened["status"], "Open")
+
 		self._submit(survey["id"], farmer_id=FARMER_A, answers={"p4": "2", "p5": "Yes, fully"})
+		original_version = survey["templateVersion"]
+		new_questions = [
+			{"prompt": "Rate the new service", "type": "rating", "options": "", "required": True},
+			{"prompt": "Any other feedback?", "type": "text", "options": "", "required": False},
+		]
+
+		# Changing questions after a response creates a new template version
+		# instead of rejecting the edit.
+		updated = svc.patch_template(survey["id"], {"questions": new_questions}, ctx=_ctx(SUP))
+		self.assertNotEqual(updated["id"], survey["id"])
+		self.assertNotEqual(updated["templateVersion"], original_version)
+		self.assertEqual(updated["collected"], 0)
+		self.assertEqual(
+			[
+				(prompt["prompt"], prompt["type"])
+				for prompt in updated["parameters"]
+				if prompt["type"] in ("rating", "single", "multi", "text")
+			],
+			[(question["prompt"], question["type"]) for question in new_questions],
+		)
+		self.assertEqual(frappe.db.count("DA Survey Response", {"survey": updated["id"]}), 0)
+
+		# The original template and its questions remain on the original version.
+		original_doc = frappe.get_doc("DA Survey Template", survey["id"])
+		self.assertEqual(original_doc.template_version, original_version)
+		self.assertEqual(
+			[row.prompt for row in original_doc.parameters],
+			[row["prompt"] for row in survey["parameters"]],
+		)
+
+		# The existing response remains on the original template and version.
+		rows, _total = svc.list_responses(survey["id"], _ctx(SUP))
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["survey_id"], survey["id"])
+		self.assertEqual(rows[0]["template_version"], original_version)
+
+	def test_patch_invalid_questions_after_response_does_not_create_version(self):
+		survey = self._create()
+		self._submit(survey["id"], farmer_id=FARMER_A)
+		before = frappe.db.count("DA Survey Template")
+
 		with self.assertRaises(frappe.ValidationError):
 			svc.patch_template(
 				survey["id"],
-				{"questions": [{"prompt": "New Q", "type": "text", "options": "", "required": False}]},
+				{
+					"questions": [
+						{"prompt": "Only one choice", "type": "single", "options": ["One"], "required": True}
+					]
+				},
 				ctx=_ctx(SUP),
 			)
+
+		self.assertEqual(frappe.db.count("DA Survey Template"), before)
+		self.assertEqual(
+			frappe.db.get_value("DA Survey Template", survey["id"], "template_version"),
+			survey["templateVersion"],
+		)
 
 	def test_patch_questions_before_responses_bumps_version(self):
 		survey = self._create()
@@ -1370,29 +1423,42 @@ class TestSurveys(IntegrationTestCase):
 		self.assertTrue(filename.endswith(".xlsx"))
 		self.assertIsInstance(content, bytes)
 
-def test_patch_questions_creates_new_template_version(self):
-	survey = self._create()
-	self._submit(survey["id"], farmer_id=FARMER_A)
-	original_version = survey["templateVersion"]
+	def test_patch_questions_creates_new_template_version(self):
+		survey = self._create()
+		self._submit(survey["id"], farmer_id=FARMER_A)
+		original_version = survey["templateVersion"]
 
-	# Patch questions after responses exist creates a new template version,
-	# not a 409 error. The new version has a different template ID.
-	out = api.patch_template(
-	survey["id"],
-		questions=[{"prompt": "New Q", "type": "text", "options": "", "required": False}],
-	)
-	# Editing questions after responses exist creates a new template version,
-# not a 409 error. The new version has a different template ID.
-	self.assertNotEqual(out["data"]["templateVersion"], original_version)
-	self.assertIn(out["status"], ("success", "Open"))
+		# Patch questions after responses exist creates a new template version,
+		# not a 409 error. The new version has a different template ID.
+		out = api.patch_template(
+			survey["id"],
+			questions=[{"prompt": "New Q", "type": "text", "options": "", "required": False}],
+		)
+		self.assertNotEqual(out["data"]["templateVersion"], original_version)
+		self.assertIn(out["status"], ("success", "Open"))
+		self.assertEqual(out["data"]["collected"], 0)
+		self.assertEqual(
+			[p["prompt"] for p in out["data"]["parameters"] if p["type"] == "text"],
+			["New Q"],
+		)
 
-	# New version has a different template version and can be edited independently.
-	new_version_doc = frappe.get_doc("DA Survey Template", out["id"])
-	self.assertIsNotNone(new_version_doc)
-	self.assertNotEqual(new_version_doc.template_version, original_version)
+		# New version has a different template version and its own questions.
+		new_version_doc = frappe.get_doc("DA Survey Template", out["data"]["id"])
+		self.assertIsNotNone(new_version_doc)
+		self.assertNotEqual(new_version_doc.template_version, original_version)
+		self.assertEqual(
+			[row.prompt for row in new_version_doc.parameters if row.response_type == "text"],
+			["New Q"],
+		)
 
-	# Original template remains unchanged at the original version.
-	self.assertEqual(survey["templateVersion"], original_version)
+		# Original template and its questions remain unchanged at the original version.
+		original_doc = frappe.get_doc("DA Survey Template", survey["id"])
+		self.assertEqual(original_doc.template_version, original_version)
+		self.assertEqual(
+			[row.prompt for row in original_doc.parameters],
+			[row["prompt"] for row in survey["parameters"]],
+		)
+
 	def test_api_rejects_client_supplied_invalid_sync_state(self):
 		survey = self._create()
 		frappe.set_user(DA1)

@@ -949,26 +949,39 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 		assignment_change = _clean_assignment_input(doc.woreda, mode_input, ids_input, ctx)
 
 	if "questions" in body and body["questions"] is not None:
+		_title, _stype, _s, _e, _langs, _t, clean_qs = _validate_template_input(
+			name=doc.title,
+			survey_type=doc.survey_type,
+			open_date=doc.window_open,
+			close_date=doc.window_close,
+			languages=_json_load(doc.languages_json, []),
+			target_farmers=doc.target_farmers,
+			questions=body["questions"],
+		)
+		params = _parameter_rows(clean_qs)
 		counts = _response_counts(doc.name)
 		if counts["collected"] > 0:
 			# Create a new template version record instead of modifying the
 			# original. The original remains locked; the new record has no
 			# responses yet so question edits are allowed.
-			new_doc = frappe.get_doc({
-				"doctype": TEMPLATE_DOCTYPE,
-				"title": doc.title,
-				"survey_type": doc.survey_type,
-				"window_open": doc.window_open,
-				"window_close": doc.window_close,
-				"languages_json": doc.languages_json,
-				"target_farmers": doc.target_farmers,
-				"region": doc.region,
-				"zone": doc.zone,
-				"woreda": doc.woreda,
-				"parameters": [row.as_dict() for row in doc.parameters],
-				"status": doc.status,
-				"template_version": _bump_version(doc.template_version),
-			})
+			new_doc = frappe.get_doc(
+				{
+					"doctype": TEMPLATE_DOCTYPE,
+					"title": doc.title,
+					"survey_type": doc.survey_type,
+					"window_open": doc.window_open,
+					"window_close": doc.window_close,
+					"languages_json": doc.languages_json,
+					"target_farmers": doc.target_farmers,
+					"region": doc.region,
+					"zone": doc.zone,
+					"woreda": doc.woreda,
+					"parameters": params,
+					"est_minutes": _est_minutes(len(params)),
+					"status": doc.status,
+					"template_version": _bump_version(doc.template_version),
+				}
+			)
 			new_doc.insert(ignore_permissions=True)
 			new_doc.save(ignore_permissions=True)
 
@@ -977,17 +990,8 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 				_sync_assignments(doc, assignment_change[0], assignment_change[1], ctx)
 			return serialize_survey(new_doc, include_assignment=True)
 		else:
-			_title, _stype, _s, _e, _langs, _t, clean_qs = _validate_template_input(
-				name=doc.title,
-				survey_type=doc.survey_type,
-				open_date=doc.window_open,
-				close_date=doc.window_close,
-				languages=_json_load(doc.languages_json, []),
-				target_farmers=doc.target_farmers,
-				questions=body["questions"],
-			)
 			doc.set("parameters", [])
-			for row in _parameter_rows(clean_qs):
+			for row in params:
 				doc.append("parameters", row)
 			doc.est_minutes = _est_minutes(len(doc.parameters))
 			doc.template_version = _bump_version(doc.template_version)

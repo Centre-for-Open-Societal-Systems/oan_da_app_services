@@ -57,7 +57,7 @@ Prefix `/api/v1/da-services`. Bearer token only (no staff CSRF). Envelope: `succ
 | POST | `/surveys/templates` | 201. Body = `TemplateInput`. Prepends standard params. |
 | GET | `/surveys/templates` | Supervisor / Admin / Executive. Filters: `status`, `type`, `q`, `limit`, `start`. Filters and `meta.total` use the same matched set; `Closed` includes stored-Closed and expired `Open` templates. |
 | GET | `/surveys/templates/{id}` | Full template including parameters. |
-| PATCH | `/surveys/templates/{id}` | Partial: `name`, `open`/`close`, `languages`, `targetFarmers`, `status` Open\|Closed, `assignmentMode` / `assignedDaIds`. `questions` only when `collected == 0` (bumps `templateVersion`); else **409**. |
+| PATCH | `/surveys/templates/{id}` | Partial: `name`, `open`/`close`, `languages`, `targetFarmers`, `status` Open\|Closed, `assignmentMode` / `assignedDaIds`. `questions` with no collected responses updates the existing template and bumps `templateVersion`; with collected responses it creates a new template version containing the submitted questions and zero responses. Invalid questions → **400**. See [Template versioning on question edits](#template-versioning-on-question-edits). |
 | GET | `/surveys` | Assigned tasks. Filters: `status`, `type`, `language`, `woreda`, `q`. DA `collected` / `queued` / `answered` are for that DA. Selected-assignment surveys are hidden from DAs not assigned. |
 | GET | `/surveys/{id}` | Full `SurveyTask` + `parameters`. Unassigned DA → 403 in `Selected` mode. |
 | POST | `/surveys/{id}/responses` | 201. Submit a completed response. Unknown farmer → 404; outside Kebele / Woreda or unassigned DA → 403; before `window_open`, after close, invalid answers, `sync_state="Draft"` or invalid client sync state → 400; duplicate completed farmer → 409. |
@@ -86,8 +86,26 @@ endpoints use the same scope rule (`da_services/services/area_scope.py`).
 - **403** — role missing or target outside the caller's active scope (forged Woreda,
   expired assignment, DA attempting an officer action).
 - **404** — unknown survey or farmer.
-- **409** — duplicate completed response, locked question edit after collection started,
-  or a non-identical `client_op_id` replay (including cross-user / cross-collector).
+- **409** — duplicate completed response or a non-identical `client_op_id` replay
+  (including cross-user / cross-collector).
+
+## Template versioning on question edits
+
+`PATCH /surveys/templates/{id}` handles a `questions` change according to whether the
+template has collected responses:
+
+| Collected responses | Result |
+| --- | --- |
+| `collected == 0` | The existing template is updated in place and its `templateVersion` is incremented. |
+| `collected > 0` | A new `DA Survey Template` record is created with a new `templateVersion` and the submitted questions. The PATCH response returns the new template. |
+
+The new version starts with `collected == 0`. The original template record remains, with
+its original questions and `templateVersion`; existing responses stay linked to that
+original template and to the version stored when each response was captured. Invalid
+questions are rejected with **400** and do not create a new version.
+
+Other fields included in the same PATCH (`status`, window, languages, `targetFarmers`,
+name and assignment) continue to apply as before.
 
 ## Template body (`POST /surveys/templates`)
 

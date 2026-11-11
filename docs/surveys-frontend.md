@@ -144,7 +144,7 @@ API returns 400 otherwise (no clock-skew tolerance is applied).
 | 400 | Invalid answers, unknown parameter id, capture before `window_open` / after close, invalid timestamps, invalid `sync_state`, unknown/mismatched area codes | Show the validation message |
 | 403 | Farmer outside the DA's Kebele / Woreda, survey outside the caller's scope, or an expired/missing officer assignment | “This farmer is not in your assigned Kebele for this survey.” |
 | 404 | Farmer not found | Ask the user to search again |
-| 409 | Duplicate farmer/template, locked question edit, or unsafe `client_op_id` replay | Show “A response for this farmer already exists for this survey.” Do **not** retry with a new id |
+| 409 | Duplicate farmer/template or unsafe `client_op_id` replay | Show “A response for this farmer already exists for this survey.” Do **not** retry with a new id |
 
 The 409 duplicate rule is **across all DAs**. If another DA has already submitted this
 farmer for the same template, the second DA gets 409 as well. Refresh the task so
@@ -227,7 +227,8 @@ sequenceDiagram
 | Need | Route |
 | --- | --- |
 | Edit window / close survey | `PATCH /surveys/templates/{id}` |
-| Change questions before any response | `PATCH` with `questions` (409 after `collected > 0`) |
+| Change questions with no collected responses | `PATCH` with `questions`; updates the existing template and bumps its version |
+| Change questions after responses exist | `PATCH` with `questions`; creates a new template version with the submitted questions and zero responses. The original template, its questions and existing responses remain unchanged |
 | Change Woreda-wide / selected-DA assignment | `PATCH` with `assignmentMode` / `assignedDaIds` |
 | Response list | `GET /surveys/{id}/responses?farmer_id&da_id&region&zone&woreda&kebele` |
 | Basic results | `GET /surveys/{id}/results` |
