@@ -102,8 +102,30 @@ Facets are computed over the user's scope, not the filtered page. CSV/XLSX expor
 | Notifications bell | §2.19 | ours |
 | "Search portal..." | `GET /search?q=` (farmers, visits, grievances, articles); phase 2 | ours |
 
-Supervisor/Executive/Admin/Comms dashboards (`WOREDA_HEALTH`, `WOREDA_ROLLUPS`, `REGION_SUMMARY`,
-`ADMIN_STATS`, `REGISTRATIONS_TREND`, `PENDING_REGISTRATIONS`, `SIGNALS`) are out of scope here; noted in §4.
+### 2.1b Supervisor Programme Health (`/dashboard`, Supervisor view) — DA-373
+
+Frontend `WoredaHealth` / `KebeleRow` (`features/dashboard/supervisor.ts`): heading `{woreda} - Programme Health`,
+KPI tiles (farmers, active agents, avg data quality /100, open grievances), kebele table with Visit %, Last sync,
+status (`On track` | `Watch` | `At risk`), search + advanced filters (Kebele / Status / Agents) and date range.
+
+**Same route as the DA home:** `GET /dashboard/summary`. Role/scope come from the access token.
+
+| Caller | Behaviour |
+|---|---|
+| Development Agent | `view: "agent"` — visits / tasks / sync (unchanged) |
+| Supervisor / Admin, no `da_id` | `view: "woreda"` — woreda KPIs + kebele breakdown |
+| Officer with `da_id` | `view: "agent"` for that DA (scope-checked) |
+
+| Element | API | Source |
+|---|---|---|
+| Woreda heading + KPI tiles + kebele table | `GET /dashboard/summary?from&to[&woreda&kebele&status&agents&q&limit&start]` | ours: scope + Administrative Area + Farmer Reference + agents + DA Visit + Grievance client |
+| Status thresholds | server: `visit_pct >= 80` On track · `60–79` Watch · `< 60` At risk (same as FE `statusFor`) | derived from visit completion in range |
+| Avg data quality (interim) | `stats.data_quality` = round(mean of kebele `visit_pct`) | no dedicated quality DocType yet |
+| Filters | `kebele`, `status`, `agents` (exact count), `q`; apply to **kebeles only**; stats stay full-woreda | – |
+| Scope | Caller's `woreda_scopes` only; foreign woreda/kebele → 403/400. Multi-woreda supervisors must pass `woreda=` | DA RBAC Assignment |
+
+`GET /dashboard/today` stays DA/agent day plan only. Executive / Admin / Comms roll-up dashboards
+(`WOREDA_ROLLUPS`, `REGION_SUMMARY`, `ADMIN_STATS`, …) remain out of scope here.
 
 ### 2.2 My Farmers (`/farmers`, tabs My Farmers · Visits · Assignments)
 
@@ -476,7 +498,7 @@ two types.
 | 1 | `GET /me` (+ role, scope_label, menu hrefs, agent fields) | shell | Nikky (small change) |
 | 2 | `GET /notifications`, `POST /notifications/{id}/read`, `/read-all` | shell | Nikky |
 | 3 | `GET /master/regions|zones|woredas|kebeles`, `GET /master/reference-values` | forms, filters | Pushkar |
-| 4 | `GET /dashboard/summary`, `GET /dashboard/today` | dashboard | Nikky |
+| 4 | `GET /dashboard/summary` (role-aware), `GET /dashboard/today` | DA + Supervisor dashboard | Nikky / DA-373 |
 | 5 | `GET /farmers`, `GET /farmers/{id}`, `/plots`, `/crops`, `/documents`, `/check-duplicate`, `GET /farmers/priority` | farmers, planner | Nikky (Farmer Registry adapter) |
 | 6 | `POST /farmers` | register farmer | Nikky |
 | 7 | `GET/POST /farmers/{id}/advisory-notes`, `POST /farmers/{id}/change-requests`, `GET /farmers/{id}/consents`, `POST .../withdraw` | farmer profile | Nikky |
@@ -497,10 +519,11 @@ two types.
 | 22 | `GET /approvals`, `POST /approvals/{id}/decide` | supervisor approvals | Nikky |
 | 23 | `POST /files` | uploads | Frappe built-in |
 
-About 75 endpoints for the DA role's screens plus the Supervisor actions they trigger. Supervisor / Executive /
-Admin / Comms dashboards, Agents registry, Fayda and DA-ID pipelines, Registry sync, Alerts inbox, Users &
-Roles, Reports and Settings are not mapped here; Agents/Fayda/DA-ID/Registry sync are Part 1 (Registry)
-screens, Users & Roles maps to our existing RBAC admin API.
+About 75 endpoints for the DA role's screens plus the Supervisor actions they trigger. Supervisor Programme
+Health is `GET /dashboard/summary` with a Supervisor token (DA-373). Executive / Admin / Comms dashboards, Agents registry,
+Fayda and DA-ID pipelines, Registry sync, Alerts inbox, Users & Roles, Reports and Settings are not fully
+mapped here; Agents/Fayda/DA-ID/Registry sync are Part 1 (Registry) screens, Users & Roles maps to our
+existing RBAC admin API.
 
 ## 5. Findings for the UI team
 

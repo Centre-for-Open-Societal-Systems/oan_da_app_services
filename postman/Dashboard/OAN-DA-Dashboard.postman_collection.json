@@ -1,0 +1,249 @@
+{
+  "info": {
+    "_postman_id": "oan-da-dashboard",
+    "name": "OAN DA Dashboard",
+    "description": "Role-aware dashboard summary (DA-373).\n\nBase path: /api/v1/da-services\n\nRoute: GET /dashboard/summary\n- Supervisor token (no da_id) → view=woreda + kebele filters\n- DA token → view=agent (visits/tasks/sync)\n- Officer + da_id → that DA's agent view\n\n## Run order\n1. Login as Supervisor\n2. GET summary (happy path)\n3. GET summary with kebele / status filters\n4. GET summary with foreign woreda (expect 403)\n5. Optional: Login as DA → summary / today\n\nTokens, usr, and pwd stay empty in the committed environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8200" },
+    { "key": "usr", "value": "" },
+    { "key": "pwd", "value": "" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "from", "value": "2026-10-13" },
+    { "key": "to", "value": "2026-11-11" },
+    { "key": "woreda", "value": "ET04-W01" },
+    { "key": "foreign_woreda", "value": "ET03-W02" },
+    { "key": "kebele", "value": "ET04-W01-K03" },
+    { "key": "da_id", "value": "DA-000001" }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Public login. Stores access_token. Set usr/pwd in the environment (Supervisor for woreda summary)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", payload.access_token);",
+                  "save(\"refresh_token\", payload.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Supervisor summary (woreda view)",
+      "item": [
+        {
+          "name": "Summary happy path (Supervisor token)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/dashboard/summary?from={{from}}&to={{to}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "dashboard", "summary"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            },
+            "description": "Supervisor access token, no da_id → view=woreda. Single-woreda supervisors omit woreda=."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Woreda view payload\", function () {",
+                  "    pm.expect(payload.view).to.eql(\"woreda\");",
+                  "    pm.expect(payload.woreda).to.be.an(\"object\");",
+                  "    pm.expect(payload.woreda.code).to.be.a(\"string\");",
+                  "    pm.expect(payload.stats).to.include.keys(\"farmers\", \"active_agents\", \"data_quality\", \"open_grievances\");",
+                  "    pm.expect(payload.kebeles).to.be.an(\"array\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Summary filtered by kebele and status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/dashboard/summary?from={{from}}&to={{to}}&kebele={{kebele}}&status=At%20risk",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "dashboard", "summary"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "kebele", "value": "{{kebele}}" },
+                { "key": "status", "value": "At risk" }
+              ]
+            },
+            "description": "Same summary URL; toggle query params. Stats remain full-woreda."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Filtered kebeles stay in requested kebele when present\", function () {",
+                  "    (payload.kebeles || []).forEach(function (row) {",
+                  "        pm.expect(row.kebele_code).to.eql(pm.variables.get(\"kebele\"));",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Summary foreign woreda denied",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/dashboard/summary?from={{from}}&to={{to}}&woreda={{foreign_woreda}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "dashboard", "summary"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "woreda", "value": "{{foreign_woreda}}" }
+              ]
+            },
+            "description": "Supervisor requesting another woreda must be denied (403)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Foreign woreda denied\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([403, 417]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. DA / officer agent view",
+      "item": [
+        {
+          "name": "Summary with da_id (agent view)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/dashboard/summary?from={{from}}&to={{to}}&da_id={{da_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "dashboard", "summary"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "da_id", "value": "{{da_id}}", "description": "Forces agent view for officers; ignored for DA" }
+              ]
+            },
+            "description": "Same summary URL with da_id → view=agent."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Today",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/dashboard/today?da_id={{da_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "dashboard", "today"],
+              "query": [
+                { "key": "da_id", "value": "{{da_id}}" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}
