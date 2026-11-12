@@ -87,6 +87,7 @@ def _register() -> None:
 		rbac,
 		registries,
 		sso,
+		surveys,
 		visits,
 	)
 

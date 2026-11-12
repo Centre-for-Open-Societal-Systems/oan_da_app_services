@@ -44,7 +44,7 @@ Frontend nav (`NAV_GROUPS`), DA items in bold:
 | | **/feedback** | DA, Supervisor, Admin |
 | Communication | **/knowledge**, **/broadcast** | all / DA, Comms, Admin |
 | | /alerts | Comms, Admin, Supervisor |
-| Performance | **/performance**, **/surveys** | DA, Supervisor |
+| Performance | **/performance**, **/surveys** | DA, Supervisor, Executive (+ Admin on /surveys) |
 | Administration | /admin/users, /admin/reports, /admin/settings | Admin (reports: officers) |
 
 Routes without a nav item that the DA still uses: `/farmers/new`, `/farmers/{id}`, `/farmers/{id}/services`,
@@ -114,7 +114,7 @@ Filters: kebele, crop, status (`Verified, Pending, Enrolling, Inactive, Flagged`
 
 | Element | API | Source |
 |---|---|---|
-| Table + filters + facets + total | `GET /farmers?q&kebele&crop&status&education&limit&start` → `Farmer` fields above + `farmer_id` (registry id) | ours: DA Farmer Reference (projection) + DA Farmer Link; `visits`, `lastVisit` derived from DA Visit |
+| Table + filters + facets + total | `GET /farmers?q&woreda&kebele&crop&status&education&limit&start` → `Farmer` fields above + `farmer_id` (registry id). A DA's `woreda` / `kebele` must be inside their assigned scope; an out-of-scope selection is 403, not an empty list | ours: DA Farmer Reference (projection) + DA Farmer Link; `visits`, `lastVisit` derived from DA Visit |
 | Status hover reason | `status_reason` | Farmer Registry (verification state) |
 | Row → profile | `/farmers/{id}` | – |
 | Bulk "Add to segment" (shared with Beneficiaries) | §2.9 | ours |
@@ -203,7 +203,7 @@ yet delivered / Other), farmer notified by SMS.
 
 | Element | API | Source |
 |---|---|---|
-| Table + stats + facets | `GET /visits?q&agent&kebele&status&from&to&limit&start` → `VisitRecord` fields (`agent` = DA name, `assigned_by`) + `stats` | ours: DA Visit |
+| Table + stats + facets | `GET /visits?q&agent&region&zone&woreda&kebele&status&from&to&limit&start` → `VisitRecord` fields (`agent` = DA name, `assigned_by`) + `stats`. Explicit area selections are validated against the caller's scope; unauthorized areas are 403 | ours: DA Visit |
 | View details | `GET /visits/{id}` → record + `timeline[]` (from DA Visit status history) | ours |
 | Reschedule | `POST /visits/{id}/reschedule {scheduled_at, reason}` → new DA Visit with `rescheduled_from`, old one `Rescheduled`; SMS job | ours + SMS |
 | Supervisor assigns a visit to a DA (`assignedBy`) | `POST /visits` with `da_id` by a Supervisor (scope: own Woreda) | ours |
@@ -363,20 +363,32 @@ xlsx/csv with `TEMPLATE_HEADERS`.
 
 ### 2.16 Surveys (`/surveys`, `/surveys/{id}`)
 
+Backend contract: [surveys-integration.md](surveys-integration.md). Frontend wire-up: [surveys-frontend.md](surveys-frontend.md). Postman: `postman/Surveys/`.
+
 `SurveyTask {id, name, templateVersion, type (Satisfaction | Service quality | Needs assessment), window {open,
 close}, languages[], targetFarmers, collected, queued, status (Open | Closing soon | Closed), estMinutes,
-parameters[], answered[] farmer ids}`; `Parameter {id, order, prompt, type (consent | auto | lookup | rating |
-single | multi | text), required, options?, helper?, prefill? (Farmer Registry | DA assignment), condition?
-{parameterId, equals}}`. Capture: pick farmer (one response per farmer per survey), consent first (declined
-ends the response), skip logic, Save draft (device), submit → `Synced | Queued`. Supervisor/Admin create
-template `TemplateInput {name, type, open, close, languages[], targetFarmers, questions[] {prompt, type,
-options, required}}`.
+assignmentMode (Woreda | Selected), assignedDaIds[], parameters[], answered[] farmer ids}`; `Parameter {id, order,
+prompt, type (consent | auto | lookup | rating | single | multi | text), required, options?, helper?, prefill?
+(Farmer Registry | DA assignment), translations? {Amharic?, Afaan Oromoo?}, condition? {parameterId, equals}}`.
+Capture: pick farmer (one response per farmer per survey), consent first (declined ends the response), then submit
+directly → `Synced | Queued`. Only `Queued` and `Synced` are client-settable; `Draft` is rejected with 400.
+`Declined` is forced when consent is declined, and `Rejected` / `Conflict` are server-only. Supervisor/Admin create
+template `TemplateInput {name, type, open, close, languages[], targetFarmers, questions[] {prompt, type, options,
+required, translations?}, assignmentMode?, assignedDaIds?, woreda?, region?, zone?, client_op_id?}`.
+The Woreda is resolved from `DA Administrative Area`, its Zone/Region are derived, and the target is checked
+against the creator's live RBAC assignment; supplied Region/Zone are consistency checks only. Deployments are
+Woreda-wide by default; `Selected` restricts visibility/capture to the listed DAs in that Woreda.
 
 | Element | API | Source |
 |---|---|---|
-| Assigned surveys | `GET /surveys?status&type&language&q` → tasks with my `collected`, `queued`, `answered[]` | ours: DA Survey Template + DA Survey Response (data-model §7) |
-| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, consent: granted/declined, answers {param_id: value}, started_at, completed_at, client_op_id}` → 409 on duplicate farmer | ours |
-| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open task to every DA in scope | ours |
+| Assigned surveys | `GET /surveys?status&type&language&woreda&q` → tasks with my `collected`, `queued`, `answered[]`; `Selected` surveys hidden from unassigned DAs | ours: DA Survey Template + DA Survey Response (data-model §7) |
+| Capture | `GET /surveys/{id}` (parameters; unassigned DA → 403 in `Selected` mode); `POST /surveys/{id}/responses {farmer_id, da_id?, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}`. `da_id` is required when a Supervisor or Admin collects on behalf of a DA. Farmer must be in the collector DA's assigned Kebele and the survey Woreda: unknown → 404, out of scope → 403, duplicate farmer/template → 409 (across all DAs). Before `window_open` / after close, invalid timestamps, or an invalid client `sync_state` (including `Draft`) → 400. Response stores the farmer's location, not the DA's | ours |
+| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey into the authoritative Woreda. The Woreda → Zone → Region hierarchy is resolved from master data; forged, unknown, inactive or mismatched areas are rejected and the target must be inside the caller's active assignment. `assignmentMode=Selected` requires non-empty `assignedDaIds` from the same Woreda | ours |
+| Template list / detail | `GET /surveys/templates?status&type&woreda&q`, `GET /surveys/templates/{id}` (Supervisor/Admin/Executive). Search and derived status filters apply before pagination; `meta.total` is the filtered count and `Closed` includes expired Open templates | ours |
+| Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed, assignmentMode/assignedDaIds; question edits with no collected responses update the template and bump its version, while edits after responses exist create a new template version with the submitted questions and zero responses (original template/questions/responses unchanged); invalid questions → 400 | ours |
+| Responses list | `GET /surveys/{id}/responses?farmer_id&da_id&region&zone&woreda&kebele` — DA own rows; a DA + Supervisor/Executive with a **live** officer assignment uses the officer scope. An expired officer grant falls back to DA rows. Explicit area/DA selections are validated; unauthorized values are 403, not silently ignored | ours |
+| Excel export | `GET /surveys/{id}/responses/export` → complete XLSX download (all base columns + every parameter; Supervisor/Executive/Admin with a live assignment, survey in scope) | ours |
+| Results | `GET /surveys/{id}/results` — counts, rating averages, choice histograms (basic; Part 2 analytics later) | ours |
 
 ### 2.17 Sync queue (`/sync`)
 
@@ -466,7 +478,7 @@ two types.
   enum (Low, Medium, High, Critical); status values mirror the Grievance Service list above.
 - **DA Beneficiary Classification**: statuses Enrolled / Pending verification / Removed map to
   `active` + `review_state` + `previously_removed`; no change, document the mapping.
-- **Surveys**: parameter `type` enum and `condition` (skip logic), `prefill`, one-response-per-farmer unique.
+- **Surveys**: parameter `type` enum, `translations`, `prefill`; one-response-per-farmer is enforced by a unique canonical `duplicate_guard_key` (cross-DA, 409). Declined responses do not reserve the farmer; new drafts are rejected (historical Draft rows remain readable/exported). Template scope comes from the `DA Administrative Area` hierarchy and a live RBAC assignment; client `region` / `zone` values are only consistency checks. Woreda-wide is the default; `Selected` restricts the survey to the listed DA-IDs.
 - **KPI**: `DA KPI Record` fields per `ManualForm`; tier thresholds as a single settings doc.
 
 ## 4. Consolidated endpoint list (DA screens)
@@ -491,7 +503,7 @@ two types.
 | 16 | `GET /issues`, `POST /issues`, `/assign`, `/request-info`, `/resolve`, `/reopen`, `GET /issues/assignees` | feedback | Pushkar (candidate) |
 | 17 | Knowledge articles/videos, `POST /broadcasts`, `GET /broadcasts`, signals | knowledge, broadcast | Pushkar (candidate, after grievance) |
 | 18 | `GET /performance/me`, goals, `GET /performance/agents`, tiers, KPI records + import | performance | Nikky |
-| 19 | `GET /surveys`, `GET /surveys/{id}`, `POST /surveys/{id}/responses`, `POST /surveys/templates` | surveys | Nikky |
+| 19 | `GET /surveys`, `GET /surveys/{id}`, `POST /surveys/{id}/responses`, `GET /surveys/{id}/responses`, `GET /surveys/{id}/results`, `POST/GET/PATCH /surveys/templates` | surveys | Nikky |
 | 20 | `POST /sync/operations`, `/attachments`, `GET /sync/status`, `/operations`, `/conflicts/{id}`, `POST /conflicts/{id}/resolve`, `POST /operations/{id}/retry` | sync | Pushkar |
 | 21 | `GET /profile/me`, change-requests, dependents, certificates, leave, leave-requests | profile | Nikky |
 | 22 | `GET /approvals`, `POST /approvals/{id}/decide` | supervisor approvals | Nikky |

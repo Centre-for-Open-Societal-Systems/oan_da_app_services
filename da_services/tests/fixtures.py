@@ -7,6 +7,7 @@ import frappe
 _SCHEMA_DOCTYPES = (
 	("da_profile_change_request", "DA Profile Change Request"),
 	("da_integration_event", "DA Integration Event"),
+	("da_survey_parameter", "DA Survey Parameter"),
 )
 
 
@@ -29,6 +30,7 @@ ADMINISTRATIVE_AREAS = [
 	("ET04-Z01", "Zone", "ET04", "West Shewa"),
 	("ET04-W01", "Woreda", "ET04-Z01", "Bako Tibe"),
 	("ET04-W01-K01", "Kebele", "ET04-W01", "Bako 01"),
+	("ET04-W01-K02", "Kebele", "ET04-W01", "Bako 02"),
 	("ET04-W01-K03", "Kebele", "ET04-W01", "Dambi Gobu"),
 	("ET04-W01-K04", "Kebele", "ET04-W01", "Dambi 04"),
 	("ET04-W01-K05", "Kebele", "ET04-W01", "Kebele 05"),

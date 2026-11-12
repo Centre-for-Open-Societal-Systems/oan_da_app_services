@@ -101,6 +101,9 @@ def active_assignments(user: str | None = None) -> list[dict]:
 	)
 
 
+OFFICER_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE)
+
+
 def get_scope_context(user: str | None = None) -> ScopeContext:
 	user = user or frappe.session.user
 	roles = frozenset(frappe.get_roles(user))
@@ -128,6 +131,37 @@ def get_scope_context(user: str | None = None) -> ScopeContext:
 		zone_scopes=frozenset(zones),
 		woreda_scopes=frozenset(woredas),
 		da_ids=frozenset(da_ids),
+	)
+
+
+def get_officer_scope_context(user: str | None = None) -> ScopeContext | None:
+	"""Scope built only from the user's *live* Supervisor / Executive assignments.
+
+	Role attachment on the User is add-only in the RBAC controller, so a role string
+	can outlive its grant. A DA assignment also carries Region / Woreda scope, and
+	using the aggregated context for officer reads would let a dual-role user see a
+	whole Woreda after their officer grant expired. This helper keeps the officer
+	path tied to an active officer assignment; callers fall back to the DA rule when
+	it returns ``None``.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ctx
+	rows = [row for row in active_assignments(user) if row.role in OFFICER_ROLES]
+	if not rows:
+		return None
+	roles = ctx.roles & frozenset(OFFICER_ROLES)
+	if not roles:
+		return None
+	return ScopeContext(
+		user=user,
+		roles=roles,
+		unrestricted=False,
+		region_scopes=frozenset(row.region_scope for row in rows if row.region_scope),
+		zone_scopes=frozenset(row.zone_scope for row in rows if row.zone_scope),
+		woreda_scopes=frozenset(row.woreda_scope for row in rows if row.woreda_scope),
+		da_ids=frozenset(),
 	)
 
 

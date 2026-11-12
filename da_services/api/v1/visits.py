@@ -151,7 +151,21 @@ def plan(**kwargs):
 @handle_api_errors
 def list_visits(**kwargs):
 	ctx = require_roles(*svc.READ_ROLES)
-	q = _body(kwargs, "date", "from", "to", "status", "farmer_id", "da_id", "limit", "start")
+	q = _body(
+		kwargs,
+		"date",
+		"from",
+		"to",
+		"status",
+		"farmer_id",
+		"da_id",
+		"region",
+		"zone",
+		"woreda",
+		"kebele",
+		"limit",
+		"start",
+	)
 	limit = int(q.get("limit") or 50)
 	start = int(q.get("start") or 0)
 	rows, total = svc.list_visits(
@@ -162,6 +176,10 @@ def list_visits(**kwargs):
 		status=q.get("status"),
 		farmer_id=q.get("farmer_id"),
 		da_id=q.get("da_id"),
+		region=q.get("region"),
+		zone=q.get("zone"),
+		woreda=q.get("woreda"),
+		kebele=q.get("kebele"),
 		limit=limit,
 		start=start,
 	)

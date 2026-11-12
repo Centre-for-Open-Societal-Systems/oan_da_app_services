@@ -253,6 +253,15 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 		"""Get farmer from mock fixtures."""
 		return MOCK_FARMERS.get(farmer_id)
 
+	def find_internal_id(self, reference: str) -> str | None:
+		"""Resolve the Farmer-ID shown in the UI (``FR-…``) to the internal id."""
+		if reference in MOCK_FARMERS:
+			return reference
+		for farmer in MOCK_FARMERS.values():
+			if farmer.reg_id == reference:
+				return farmer.farmer_id
+		return None
+
 	def list_farmers(
 		self,
 		*,

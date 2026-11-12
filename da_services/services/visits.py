@@ -25,6 +25,7 @@ from da_services.da_services.doctype.da_visit.da_visit import (
 	PLANNED_STATES,
 	RESCHEDULED,
 )
+from da_services.services import area_scope
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
 from da_services.services.da_lookup import get_da_reference
@@ -578,6 +579,10 @@ def list_visits(
 	status: str | None = None,
 	farmer_id: str | None = None,
 	da_id: str | None = None,
+	region: str | None = None,
+	zone: str | None = None,
+	woreda: str | None = None,
+	kebele: str | None = None,
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
@@ -602,6 +607,9 @@ def list_visits(
 		)
 	if farmer_id:
 		filters["farmer_id"] = farmer_id
+	filters.update(
+		area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
+	)
 
 	# Scope already validated for officers when da_id is named (registry), so query by
 	# da_id with get_all and skip the woreda/zone permission clause that hides visits

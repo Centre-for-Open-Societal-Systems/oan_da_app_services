@@ -7,7 +7,7 @@ has_permission mirrors it for a single document. Both are registered in hooks.py
 import frappe
 
 from da_services.services import constants as C
-from da_services.utils.permissions import get_scope_context
+from da_services.utils.permissions import get_officer_scope_context, get_scope_context
 
 DENY = "1=0"
 
@@ -305,11 +305,40 @@ def has_da_survey_template_permission(doc, ptype: str = "read", user: str | None
 
 
 def da_survey_response_query_conditions(user: str | None = None) -> str:
-	return da_scoped_query_conditions("DA Survey Response", user)
+	"""Survey-response read scope, with active-officer precedence over the DA role.
+
+	A dual-role user (DA + Supervisor/Executive) is treated as the officer for reads,
+	matching ``list_responses`` / ``export_responses``. A pure DA still sees only rows
+	they collected. Officer precedence requires a *live* officer assignment, not just
+	the role string: the RBAC controller attaches roles add-only, so an expired grant
+	must not widen a DA to Woreda-wide rows through the scope on the DA grant itself.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Survey Response`"
+	officer = get_officer_scope_context(user)
+	if officer is not None:
+		return _officer_scope_clause(t, officer)
+	if ctx.has_any_role(C.ROLE_DA):
+		if not ctx.da_ids:
+			return DENY
+		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
+	return DENY
 
 
 def has_da_survey_response_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
-	"""Writes go through services/surveys.py; Desk/REST stays read-only in scope."""
-	if ptype != "read" and not _is_unrestricted(user or frappe.session.user):
+	"""Single-document mirror of ``da_survey_response_query_conditions``."""
+	user = user or frappe.session.user
+	if ptype != "read" and not _is_unrestricted(user):
 		return False
-	return has_da_scoped_permission(doc, ptype, user)
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	officer = get_officer_scope_context(user)
+	if officer is not None:
+		return officer.covers(doc.region, doc.woreda, doc.zone)
+	if ctx.has_any_role(C.ROLE_DA):
+		return ctx.owns_da(doc.da_id)
+	return False

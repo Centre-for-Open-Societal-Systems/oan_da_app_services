@@ -562,6 +562,23 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not in your scope", result["message"].lower())
 
+	def test_da_area_filters_cannot_escape_assigned_scope(self):
+		frappe.set_user(DA1)
+
+		from da_services.api.v1.farmers import list_farmers
+
+		result = list_farmers(woreda="ET03-W02")
+		self.assertEqual(result["status"], "error")
+		self.assertIn("not in your scope", result["message"].lower())
+
+		result = list_farmers(kebele="Bako 02")
+		self.assertEqual(result["status"], "error")
+		self.assertIn("not in your assigned kebeles", result["message"].lower())
+
+		result = list_farmers(kebele="Bako 01")
+		self.assertEqual(result["status"], "success")
+		self.assertEqual(len(result["data"]["farmers"]), 1)
+
 	def test_zone_scoped_supervisor_denied(self):
 		"""Test zone-scoped Supervisor is denied when no zone on records (PR #12 fix)."""
 		# Note: Can't create zone-only supervisor without woreda due to RBAC validation
