@@ -6,8 +6,8 @@ authorization):
 * Read:  any DA Services role. A reader sees only *Published* items, and only items whose
   audience covers them: no audience rows = everyone; otherwise at least one Region / Zone /
   Woreda row must lie inside, or above, one of the user's own grants.
-* Write: OAN Administrator, Communications Officer, System Manager. Writers see every
-  status and every audience.
+* Write: OAN Administrator, Supervisor, Executive, System Manager. Writers see every
+  status and every audience. Communications Officer is read only.
 
 An item the caller may not see is answered with "not found", not "forbidden", so its
 existence is not revealed.
@@ -24,7 +24,7 @@ from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext, require_roles
 
 READ_ROLES = (*C.DA_SERVICES_ROLES, C.ROLE_COMMS, "System Manager")
-WRITE_ROLES = (C.ROLE_ADMIN, C.ROLE_COMMS, C.ROLE_SUPERVISOR, "System Manager")
+WRITE_ROLES = (C.ROLE_ADMIN, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, "System Manager")
 
 MAX_PAGE_LENGTH = 100
 STATUSES = ("Draft", "Published", "Archived")
