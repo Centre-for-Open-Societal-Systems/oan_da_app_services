@@ -39,12 +39,12 @@ class TestBeneficiarySegments(IntegrationTestCase):
 	def test_admin_create_segment_success(self):
 		"""Test successful segment creation by Admin."""
 		result = svc.create_segment(
-			segment_name="Input subsidy – teff & wheat",
+			segment_name="Input subsidy - teff & wheat",
 			description="Input subsidy for teff and wheat farmers",
 			client_op_id="test-op-001",
 		)
 
-		self.assertEqual(result["segment_name"], "Input subsidy – teff & wheat")
+		self.assertEqual(result["segment_name"], "Input subsidy - teff & wheat")
 		self.assertEqual(result["description"], "Input subsidy for teff and wheat farmers")
 		self.assertEqual(result["is_active"], True)
 		self.assertTrue(result["name"].startswith("DA-BS-"))
@@ -99,13 +99,13 @@ class TestBeneficiarySegments(IntegrationTestCase):
 	def test_admin_reject_duplicate_name(self):
 		"""Test Admin cannot create segment with duplicate name."""
 		svc.create_segment(
-			segment_name="Input subsidy – teff & wheat",
+			segment_name="Input subsidy - teff & wheat",
 			description="Original description",
 		)
 
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.create_segment(
-				segment_name="Input subsidy – teff & wheat",
+				segment_name="Input subsidy - teff & wheat",
 				description="Duplicate attempt",
 			)
 
@@ -136,7 +136,7 @@ class TestBeneficiarySegments(IntegrationTestCase):
 		# Try to create segment as supervisor
 		with self.assertRaises(frappe.PermissionError):
 			create_segment(
-				segment_name="Input subsidy – teff & wheat",
+				segment_name="Input subsidy - teff & wheat",
 				ctx=supervisor_ctx,
 			)
 
@@ -146,7 +146,7 @@ class TestBeneficiarySegments(IntegrationTestCase):
 
 		# Create a segment as admin first
 		create_result = svc.create_segment(
-			segment_name="Input subsidy – teff & wheat",
+			segment_name="Input subsidy - teff & wheat",
 			description="Original",
 		)
 

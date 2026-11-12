@@ -5,7 +5,7 @@ beneficiary segments. Segments group farmers for subsidy, credit, or
 response programs.
 
 Examples:
-- Input subsidy – teff & wheat
+- Input subsidy - teff & wheat
 - Credit-eligible smallholders
 - Drought-response kebeles
 - Women-headed households
@@ -14,17 +14,19 @@ Examples:
 from __future__ import annotations
 
 import frappe
+from frappe import _
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
 from da_services.services import constants as C
 from da_services.services.beneficiary_segments import (
-	create_segment,
-	list_segments,
-	get_segment,
-	update_segment,
-	set_segment_status,
+    create_segment,
+    get_segment,
+    list_segments,
+    set_segment_status,
+    update_segment,
 )
+from da_services.utils.permissions import require_roles
 
 
 @route("/beneficiary-segments", methods=("POST",), status=201, summary="Create beneficiary segment (Admin only)")
@@ -37,7 +39,7 @@ def create_beneficiary_segment(**kwargs):
 
   Request body (JSON):
    {
-    "segment_name": "Input subsidy – teff & wheat",
+    "segment_name": "Input subsidy - teff & wheat",
     "description": "Input subsidy for teff and wheat farmers",
     "client_op_id": "unique-operation-id"  // optional
    }
@@ -47,7 +49,7 @@ def create_beneficiary_segment(**kwargs):
     "success": true,
     "data": {
      "name": "DA-BS-2026-00001",
-     "segment_name": "Input subsidy – teff & wheat",
+     "segment_name": "Input subsidy - teff & wheat",
      "description": "Input subsidy for teff and wheat farmers",
      "is_active": true,
      "assigned_by": "admin@test.com",
@@ -56,7 +58,7 @@ def create_beneficiary_segment(**kwargs):
     "message": "Segment created successfully"
    }
   """
- ctx = require_roles(C.ROLE_ADMIN)
+ require_roles(C.ROLE_ADMIN)
 
  segment_name = kwargs.get("segment_name") or kwargs.get("segment_name") or ""
  if not segment_name and frappe.form_dict:
@@ -92,7 +94,7 @@ def list_beneficiary_segments(**kwargs):
  """List beneficiary segments.
 
   Query parameters:
-   - active_only: bool (default true) – return only active segments
+   - active_only: bool (default true) - return only active segments
    - limit: page size (default 50)
    - start: offset (default 0)
 
@@ -146,7 +148,7 @@ def get_beneficiary_segment(segment_name: str):
     "success": true,
     "data": {
      "name": "DA-BS-2026-00001",
-     "segment_name": "Input subsidy – teff & wheat",
+     "segment_name": "Input subsidy - teff & wheat",
      "description": "Input subsidy for teff and wheat farmers",
      "is_active": true,
      "assigned_by": "admin@test.com",
@@ -178,8 +180,8 @@ def update_beneficiary_segment(segment_name: str, **kwargs):
 
   Request body (JSON, optional fields):
    {
-    "segment_name": "Input subsidy – teff & wheat",
-    "description": "Updated description"
+"segment_name": "Input subsidy - teff & wheat",
+     "description": "Updated description"
    }
 
   Response:
@@ -187,13 +189,13 @@ def update_beneficiary_segment(segment_name: str, **kwargs):
     "success": true,
     "data": {
      "name": "DA-BS-2026-00001",
-     "segment_name": "Input subsidy – teff & wheat",
+     "segment_name": "Input subsidy - teff & wheat",
      "description": "Updated description",
      "is_active": true
     }
    }
   """
- ctx = require_roles(C.ROLE_ADMIN)
+ require_roles(C.ROLE_ADMIN)
 
  new_segment_name = kwargs.get("segment_name") or None
  new_description = kwargs.get("description") or None
@@ -228,12 +230,12 @@ def deactivate_beneficiary_segment(segment_name: str):
     "success": true,
     "data": {
      "name": "DA-BS-2026-00001",
-     "segment_name": "Input subsidy – teff & wheat",
+     "segment_name": "Input subsidy - teff & wheat",
      "is_active": false
     }
    }
   """
- ctx = require_roles(C.ROLE_ADMIN)
+ require_roles(C.ROLE_ADMIN)
 
  result = set_segment_status(
   segment_name=segment_name,
@@ -263,12 +265,12 @@ def activate_beneficiary_segment(segment_name: str):
     "success": true,
     "data": {
      "name": "DA-BS-2026-00001",
-     "segment_name": "Input subsidy – teff & wheat",
+     "segment_name": "Input subsidy - teff & wheat",
      "is_active": true
     }
    }
   """
- ctx = require_roles(C.ROLE_ADMIN)
+ require_roles(C.ROLE_ADMIN)
 
  result = set_segment_status(
   segment_name=segment_name,

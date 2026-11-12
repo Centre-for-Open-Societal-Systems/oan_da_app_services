@@ -10,7 +10,7 @@ class DABeneficiarySegment(Document):
  """Beneficiary Segment: a grouping of farmers for subsidy, credit, or response programs.
 
   Segments are managed by OAN Administrator and used for manual farmer assignment.
-  Examples: "Input subsidy – teff & wheat", "Credit-eligible smallholders",
+  Examples: "Input subsidy - teff & wheat", "Credit-eligible smallholders",
   "Drought-response kebeles", "Women-headed households".
  """
 

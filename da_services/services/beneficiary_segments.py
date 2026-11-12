@@ -4,7 +4,7 @@ Business logic for creating, listing, retrieving, updating, and deactivating
 beneficiary segments. Segments are managed by OAN Administrator only.
 
 Segments group farmers for subsidy, credit, or response programs:
-- Input subsidy – teff & wheat
+- Input subsidy - teff & wheat
 - Credit-eligible smallholders
 - Drought-response kebeles
 - Women-headed households
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from da_services.utils.permissions import ScopeContext
 from frappe.model.naming import make_autoname
 
+from da_services.utils.permissions import ScopeContext
 
 WRITE_ROLES = ("OAN Administrator",)
 
