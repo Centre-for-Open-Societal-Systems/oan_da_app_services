@@ -24,7 +24,7 @@ from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext, require_roles
 
 READ_ROLES = (*C.DA_SERVICES_ROLES, C.ROLE_COMMS, "System Manager")
-WRITE_ROLES = (C.ROLE_ADMIN, C.ROLE_COMMS, "System Manager")
+WRITE_ROLES = (C.ROLE_ADMIN, C.ROLE_COMMS, C.ROLE_SUPERVISOR, "System Manager")
 
 MAX_PAGE_LENGTH = 100
 STATUSES = ("Draft", "Published", "Archived")
