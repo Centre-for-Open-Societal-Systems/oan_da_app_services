@@ -15,7 +15,12 @@ import requests
 from da_services.integrations.staff_api.auth import apply_bearer_and_csrf, auth_and_csrf_headers
 from da_services.integrations.staff_api.transport import http_failure, staff_envelope
 
-from .client import CropRegistryClient, CropRegistryClientError, CropRegistryError, CropRegistryServerError
+from .client import (
+	CropRegistryClient,
+	CropRegistryClientError,
+	CropRegistryError,
+	CropRegistryServerError,
+)
 from .intake import describe_form, form_selector, section_index, submit_with_metadata
 from .mapper import submission_to_crop
 from .schemas import CropSubmission
@@ -334,42 +339,73 @@ class HTTPCropRegistryClient(CropRegistryClient):
 			raise CropRegistryClientError("Rendered Crop Sown form has no readable tabs")
 		return tabs
 
-	def list_for_farmer(self, farmer_id: str, *, reg_id: str | None = None) -> list[dict]:
+	def list_for_farmer(self, farmer_id: str, *, reg_id: str | None = None, source: str) -> list[dict]:
 		"""Find Crop Sown rows for one farmer.
 
-		Submissions are named with the Farmer-ID (``record_name`` = ``FR-…``).
-		Register rows point at the internal id through ``link_internal_record_id``
-		or ``functional_record_id``. When both ids are known, each endpoint is
-		searched once with the id it stores. Register discovery runs once per
-		client, and a configured ``register_id`` skips it.
+		``source`` selects one staff search: submissions (``record_name`` =
+		Farmer-ID) or register rows (internal farmer id). One path only.
 		"""
 		if not farmer_id:
 			raise CropRegistryClientError("farmer_id is required")
 		register_id = self._discover_register_id()
 		submission_text = (reg_id or "").strip() or farmer_id
 		owned = {farmer_id, submission_text}
-		found: list[dict] = []
-		seen: set[str] = set()
-		for path, action, search_text in (
-			(
+		# Allowlist is enforced by the API; this client only knows these staff paths.
+		if source == "submission":
+			path, action, search_text = (
 				"/intake-form-data/search_in_intake_form_submissions",
 				"search crop submissions",
 				submission_text,
-			),
-			("/register-data/search_in_a_register", "search crop register", farmer_id),
+			)
+		elif source == "register":
+			path, action, search_text = (
+				"/register-data/search_in_a_register",
+				"search crop register",
+				farmer_id,
+			)
+		else:
+			raise CropRegistryClientError(f"unsupported Crop Sown list source: {source}")
+		found: list[dict] = []
+		seen: set[str] = set()
+		for row in self._search_pages(
+			path, {"register_id": register_id}, action=action, search_text=search_text
 		):
-			for row in self._search_pages(
-				path, {"register_id": register_id}, action=action, search_text=search_text
-			):
-				if not any(_row_matches_farmer(row, candidate) for candidate in owned):
-					continue
-				key = str(row.get("submission_id") or row.get("internal_record_id") or "")
-				if key and key in seen:
-					continue
-				if key:
-					seen.add(key)
-				found.append(row)
+			if not any(_row_matches_farmer(row, candidate) for candidate in owned):
+				continue
+			key = str(row.get("submission_id") or row.get("internal_record_id") or "")
+			if key and key in seen:
+				continue
+			if key:
+				seen.add(key)
+			found.append(dict(row))
 		return found
+
+	def get_register_tab(self, internal_record_id: str, tab_id: str) -> dict:
+		"""One Crop Sown register tab (single staff round trip)."""
+		record_id = (internal_record_id or "").strip()
+		wanted_tab = (tab_id or "").strip()
+		if not record_id:
+			raise CropRegistryClientError("internal_record_id is required")
+		if not wanted_tab:
+			raise CropRegistryClientError("tab_id is required")
+		register_id = self._discover_register_id()
+		records = self._post(
+			"/register-data/get_tab_records",
+			{
+				"subject_register_id": register_id,
+				"subject_record_id": record_id,
+				"tab_id": wanted_tab,
+			},
+			action="read crop register tab",
+		)
+		if not isinstance(records, list):
+			raise CropRegistryClientError("Crop Sown register tab records were not a list")
+		return {
+			"internal_record_id": record_id,
+			"register_id": register_id,
+			"tab_id": wanted_tab,
+			"tabs": [{"tab_id": wanted_tab, "records": records}],
+		}
 
 	def _search_pages(self, path: str, payload: dict, *, action: str, search_text: str) -> list[dict]:
 		rows: list[dict] = []
@@ -448,9 +484,11 @@ class HTTPCropRegistryClient(CropRegistryClient):
 			for section in sections
 		}
 		described = describe_form(form, fields, self._catalogs(sections))
+		form_id = str(form.get("form_id") or self._form_id or "")
 		described["intake_forms"] = [
 			{"form_id": str(row["form_id"]), "form_mnemonic": row.get("form_mnemonic")}
 			for row in self._intake_forms()
+			if str(row.get("form_id") or "") == form_id
 		]
 		return described
 

@@ -2,10 +2,11 @@
 
 GET /api/v1/da-services/farmers/{farmer_id}/crops
 
-Searches Crop Sown once per endpoint. Pass reg_id (the profile Farmer-ID)
-when the path id is the internal farmer id: submissions are searched by
-that Farmer-ID, and the register is searched by the internal id. Pass
-submission_id to read one intake submission and its tabs instead.
+List requires ``source=submission`` or ``source=register`` (one staff search).
+Pass ``reg_id`` (profile Farmer-ID) when the path id is the internal farmer id
+so submission search uses that Farmer-ID. Pass ``submission_id`` for one intake
+submission, or ``internal_record_id`` with required ``tab_id`` for one register
+tab (``/register-data/get_tab_records``).
 
 The Crop Sown staff host is called by the registry client, which sends the
 staff bearer and the matching CSRF header and cookie. This route checks the
@@ -20,7 +21,12 @@ from oan_auth_service.api.utils import error_response, handle_api_errors, succes
 
 from da_services.api.router import route
 from da_services.integrations.crop_registry import get_crop_registry_client
-from da_services.integrations.crop_registry.client import CropRegistryClientError, CropRegistryServerError
+from da_services.integrations.crop_registry.client import (
+	CropRegistryClientError,
+	CropRegistryServerError,
+	get_crop_list_sources,
+	get_crop_register_tab_ids,
+)
 from da_services.integrations.crop_registry.intake import _SCREEN_SECTIONS
 from da_services.integrations.crop_registry.schemas import CropSubmission
 from da_services.integrations.farmer_registry.client import (
@@ -99,26 +105,28 @@ def crop_sown_payload(farmer_id: str, submission: CropSubmission, tabs: list[dic
 @frappe.whitelist()
 @handle_api_errors
 def get_farmer_crops(farmer_id: str):
-	"""List Crop Sown register rows linked to this farmer.
+	"""List or detail Crop Sown data for one farmer.
 
-	``submission_id`` reads that one intake submission and its tabs.
+	List requires ``source``: ``submission`` (form history) or ``register``
+	(approved register rows). One staff search only.
 
-	Without it, the route searches Crop Sown once. Submissions are searched
-	with the Farmer-ID (``reg_id`` from the profile, or the same value already
-	stored on DA Farmer Reference). The register is searched with the internal
-	id. Query ``reg_id`` must match that farmer. The farmer register id is not
-	a Crop Sown register id and is not accepted here.
+	``submission_id`` reads one intake submission and its tabs.
+	``internal_record_id`` with required ``tab_id`` reads one register tab
+	(``/register-data/get_tab_records``, one round trip).
 
-	The id in the path may be the Farmer-ID printed on the Crop Sown form
-	(``FR-…``). That number is not always a Farmer Registry subject id, so a
-	missing registry profile does not block the Crop Sown read. When the
-	farmer is in the registry, the profile lookup still enforces scope.
+	``reg_id`` is the Farmer-ID for submission search; it must match this farmer.
 	"""
 	ctx = require_roles(*READ_ROLES)
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	submission_id = (frappe.form_dict.get("submission_id") or "").strip()
+	internal_record_id = (frappe.form_dict.get("internal_record_id") or "").strip()
+	if submission_id and internal_record_id:
+		frappe.throw(
+			_("Pass submission_id or internal_record_id, not both."),
+			frappe.ValidationError,
+		)
 	requested_id = farmer_id
 	try:
 		resolved_id = _internal_farmer_id(farmer_id)
@@ -126,13 +134,28 @@ def get_farmer_crops(farmer_id: str):
 		if in_registry:
 			farmer_id = resolved_id
 		client = get_crop_registry_client()
+		if internal_record_id:
+			tab_id = (frappe.form_dict.get("tab_id") or "").strip()
+			if not tab_id:
+				frappe.throw(_("tab_id is required with internal_record_id."), frappe.ValidationError)
+			if tab_id not in get_crop_register_tab_ids():
+				frappe.throw(_("tab_id is not a Crop Sown register tab."), frappe.ValidationError)
+			detail = client.get_register_tab(internal_record_id, tab_id)
+			return success_response(data={"farmer_id": requested_id, **detail})
 		if not submission_id:
+			source = (frappe.form_dict.get("source") or "").strip().lower()
+			allowed_sources = get_crop_list_sources()
+			if source not in allowed_sources:
+				frappe.throw(
+					_("source must be one of: {0}.").format(", ".join(sorted(allowed_sources))),
+					frappe.ValidationError,
+				)
 			search_id = farmer_id if in_registry else requested_id
 			reg_id = _submission_reg_id(requested_id, search_id, in_registry=in_registry)
-			crops = client.list_for_farmer(search_id, reg_id=reg_id)
+			crops = client.list_for_farmer(search_id, reg_id=reg_id, source=source)
 			if not crops and not in_registry:
 				frappe.throw(_("Farmer {0} not found.").format(requested_id), frappe.DoesNotExistError)
-			return success_response(data={"farmer_id": requested_id, "crops": crops})
+			return success_response(data={"farmer_id": requested_id, "crops": crops, "source": source})
 		submission = client.get_submission(submission_id)
 		tabs = client.get_tabs(submission_id) if submission is not None else []
 	except CropRegistryClientError as exc:
@@ -195,16 +218,18 @@ def _section_requests(body: dict) -> tuple[str | None, str | None, list]:
 @route("/crop-sown/intake-form", methods=("GET",), summary="Current Crop Sown intake form")
 @frappe.whitelist()
 @handle_api_errors
-def get_crop_intake_form(form: str | None = None):
+def get_crop_intake_form():
 	"""Return one live intake form: sections, labels, static options, and catalog rows.
 
-	Query ``form`` selects the staff form: ``planning`` (default), ``cultivation``,
-	``sowing``, or ``harvesting``. The Crop Sown tab is ``planning``. That form
-	holds farmer identity, season, and location. Catalog rows are loaded only
-	when ``crop_registry_master_data_url`` is set. Geography is a separate call.
+	Query ``form`` is required and selects the staff form: ``planning``,
+	``cultivation``, ``sowing``, or ``harvesting``. Response is that form only.
+	Catalog rows load when ``crop_registry_master_data_url`` is set. Geography is
+	a separate call.
 	"""
 	require_roles(*READ_ROLES)
-	form_name = (form or frappe.form_dict.get("form") or "").strip() or None
+	form_name = (frappe.form_dict.get("form") or "").strip()
+	if not form_name:
+		frappe.throw(_("form is required."), frappe.ValidationError)
 	try:
 		described = get_crop_registry_client().describe_intake_form(form_name=form_name)
 	except CropRegistryClientError as exc:

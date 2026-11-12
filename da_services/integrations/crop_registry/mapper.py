@@ -18,6 +18,7 @@ def submission_to_crop(payload: dict) -> CropSubmission:
 		records = [row for row in (section.get("records") or []) if isinstance(row, dict)]
 		sections.append(
 			CropSection(
+				section_id=section.get("section_id"),
 				section_register_id=section.get("section_register_id"),
 				records=records,
 			)
