@@ -1,0 +1,44 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DA-BS-{YYYY}-{#######}",
+ "creation": "2026-11-12 00:00:00.000000",
+ "description": "Beneficiary Segment: a grouping of farmers for subsidy, credit, or response programs (DA-XX). Segments are managed by OAN Administrator and used for manual farmer assignment.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "segment_name",
+  "description",
+  "is_active",
+  "assigned_by",
+  "assigned_at",
+  "client_op_id"
+ ],
+ "fields": [
+  {"fieldname": "segment_name", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Segment Name", "reqd": 1, "search_index": 1},
+  {"fieldname": "description", "fieldtype": "Small Text", "in_list_view": 1, "label": "Description"},
+  {"default": "1", "fieldname": "is_active", "fieldtype": "Check", "in_list_view": 1, "label": "Active"},
+  {"fieldname": "assigned_by", "fieldtype": "Link", "label": "Assigned By", "options": "User", "read_only": 1},
+  {"fieldname": "assigned_at", "fieldtype": "Datetime", "label": "Assigned At", "read_only": 1},
+  {"description": "Idempotency key of the operation that created this row; enforced unique by the database (NULL when absent).", "fieldname": "client_op_id", "fieldtype": "Data", "label": "Client Op ID", "unique": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "DA Services",
+ "name": "DA Beneficiary Segment",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 0, "export": 1, "print": 0, "read": 1, "report": 1, "role": "OAN Administrator", "share": 0, "write": 1},
+  {"create": 1, "delete": 1, "email": 0, "export": 1, "print": 0, "read": 1, "report": 1, "role": "System Manager", "share": 0, "write": 1},
+  {"read": 1, "role": "Supervisor"},
+  {"read": 1, "role": "Development Agent"},
+  {"read": 1, "role": "Executive"}
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "segment_name",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}
