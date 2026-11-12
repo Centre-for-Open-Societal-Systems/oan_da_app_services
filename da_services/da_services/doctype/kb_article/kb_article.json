@@ -104,7 +104,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-12 13:59:55.043418",
+ "modified": "2026-11-12 16:57:46.751111",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "KB Article",
@@ -136,12 +136,10 @@
    "write": 1
   },
   {
-   "create": 1,
    "export": 1,
    "read": 1,
    "report": 1,
-   "role": "Communications Officer",
-   "write": 1
+   "role": "Communications Officer"
   },
   {
    "read": 1,
@@ -156,9 +154,11 @@
    "write": 1
   },
   {
+   "create": 1,
    "read": 1,
    "report": 1,
-   "role": "Executive"
+   "role": "Executive",
+   "write": 1
   }
  ],
  "row_format": "Dynamic",

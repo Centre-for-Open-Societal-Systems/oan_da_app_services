@@ -1,4 +1,4 @@
-"""Knowledge Base: doctypes (KB Article / KB Video / KB Send Log) and the REST handlers."""
+"""Knowledge Base: doctypes (KB Article / KB Video / KB Send Log / KB Category) and the REST handlers."""
 
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -6,6 +6,7 @@ from frappe.utils import today
 
 from da_services.da_services.doctype.kb_video.kb_video import parse_youtube_id
 from da_services.integrations.knowledge_base import articles as article_api
+from da_services.integrations.knowledge_base import categories as category_api
 from da_services.integrations.knowledge_base import common
 from da_services.integrations.knowledge_base import videos as video_api
 from da_services.services import constants as C
@@ -14,12 +15,15 @@ from da_services.utils.permissions import get_scope_context
 
 TAG = "KBTEST"
 CATEGORY = f"{TAG} Cat"
+CATEGORY_OFF = f"{TAG} Cat Off"  # disabled
 SOURCE = f"{TAG} Src"
-WRITER = "kbtest-comms@da.local"
+WRITER = "kbtest-admin@da.local"  # OAN Administrator
+SUPERVISOR = "kbtest-sup-w01@da.local"  # Supervisor, Woreda ET04-W01
+EXECUTIVE = "kbtest-exec-et04@da.local"  # Executive, Region-only grant ET04
+COMMS = "kbtest-comms@da.local"  # Communications Officer: read only
 READER_W01 = "kbtest-da-w01@da.local"  # Woreda ET04-W01 (Region ET04)
 READER_W02 = "kbtest-da-w02@da.local"  # Woreda ET03-W02 (Region ET03)
-READER_REGION = "kbtest-exec-et04@da.local"  # Region-only grant ET04
-USERS = (WRITER, READER_W01, READER_W02, READER_REGION)
+USERS = (WRITER, SUPERVISOR, EXECUTIVE, COMMS, READER_W01, READER_W02)
 
 EN = {"language": "EN", "title": "en title", "summary": "en summary", "body": "<p>en</p>"}
 AM = {"language": "አማ", "title": "am title", "summary": "am summary", "body": "<p>am</p>"}
@@ -82,7 +86,7 @@ def _cleanup():
 		for n in frappe.get_all(dt, filters={"title": ("like", f"{TAG}%")}, pluck="name"):
 			frappe.delete_doc(dt, n, force=True, ignore_permissions=True)
 	frappe.db.delete("DA RBAC Assignment", {"user": ("in", USERS)})
-	for dt, name in (("KB Category", CATEGORY), ("KB Source", SOURCE)):
+	for dt, name in (("KB Category", CATEGORY), ("KB Category", CATEGORY_OFF), ("KB Source", SOURCE)):
 		if frappe.db.exists(dt, name):
 			frappe.delete_doc(dt, name, force=True, ignore_permissions=True)
 	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
@@ -93,15 +97,20 @@ class TestKnowledgeBase(IntegrationTestCase):
 		_cleanup()
 		create_administrative_areas()
 		frappe.get_doc({"doctype": "KB Category", "category_name": CATEGORY}).insert()
+		frappe.get_doc({"doctype": "KB Category", "category_name": CATEGORY_OFF, "enabled": 0}).insert()
 		frappe.get_doc({"doctype": "KB Source", "source_name": SOURCE}).insert()
-		_user(WRITER, C.ROLE_COMMS)
+		_user(WRITER, C.ROLE_ADMIN)
+		_user(SUPERVISOR, C.ROLE_SUPERVISOR)
+		_user(EXECUTIVE, C.ROLE_EXECUTIVE)
+		_user(COMMS, C.ROLE_COMMS)
 		_user(READER_W01, C.ROLE_DA)
 		_user(READER_W02, C.ROLE_DA)
-		_user(READER_REGION, C.ROLE_EXECUTIVE)
-		_grant(WRITER, C.ROLE_COMMS)
+		_grant(WRITER, C.ROLE_ADMIN)
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(EXECUTIVE, C.ROLE_EXECUTIVE, region_scope="ET04")
+		_grant(COMMS, C.ROLE_COMMS)
 		_grant(READER_W01, C.ROLE_DA, da_id="DA-KB0001", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(READER_W02, C.ROLE_DA, da_id="DA-KB0002", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(READER_REGION, C.ROLE_EXECUTIVE, region_scope="ET04")
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		frappe.set_user("Administrator")
 
@@ -248,6 +257,18 @@ class TestKnowledgeBase(IntegrationTestCase):
 		frappe.set_user(WRITER)
 		self.assertEqual(_code(_video(youtube_url="nope")), "VALIDATION_ERROR")
 
+	def test_supervisor_and_executive_can_create_and_update(self):
+		for user in (SUPERVISOR, EXECUTIVE):
+			frappe.set_user(user)
+			art = _article(status="Draft")
+			self.assertEqual(_code(art), "ok", user)
+			upd = article_api.update_article(art["data"]["name"], status="Published")
+			self.assertEqual(_code(upd), "ok", user)
+			vid = _video()
+			self.assertEqual(_code(vid), "ok", user)
+			upd = video_api.update_video(vid["data"]["name"], title=f"{TAG} renamed")
+			self.assertEqual(_code(upd), "ok", user)
+
 	def test_unknown_item_is_not_found(self):
 		frappe.set_user(WRITER)
 		self.assertEqual(_code(article_api.get_article("KB-ART-NOPE")), "NOT_FOUND")
@@ -258,7 +279,7 @@ class TestKnowledgeBase(IntegrationTestCase):
 	def test_only_writer_roles_can_create_or_update(self):
 		frappe.set_user(WRITER)
 		name = _article(status="Published")["data"]["name"]
-		for user in (READER_W01, READER_REGION):
+		for user in (READER_W01, COMMS):
 			frappe.set_user(user)
 			self.assertEqual(_code(_article()), "PERMISSION_DENIED", user)
 			self.assertEqual(_code(_video()), "PERMISSION_DENIED", user)
@@ -303,9 +324,8 @@ class TestKnowledgeBase(IntegrationTestCase):
 
 		self.assertEqual(visible(READER_W01), {"everyone", "woreda", "region"})
 		self.assertEqual(visible(READER_W02), {"everyone"})  # another Region and Woreda
-		self.assertEqual(
-			visible(READER_REGION), {"everyone", "woreda", "region"}
-		)  # Region grant reaches below
+		self.assertEqual(visible(COMMS), {"everyone"})  # read-only role with no area grant
+		self.assertEqual(visible(EXECUTIVE), {"everyone", "woreda", "region"})  # writers see every audience
 		frappe.set_user(READER_W02)
 		self.assertEqual(_code(article_api.get_article(everyone)), "ok")
 		self.assertEqual(_code(article_api.get_article(woreda)), "NOT_FOUND")  # hidden, not forbidden
@@ -327,7 +347,7 @@ class TestKnowledgeBase(IntegrationTestCase):
 		self.assertIn("ET04-Z01", woreda_user)  # ancestor: content aimed at the Zone reaches the Woreda
 		self.assertIn("ET04", woreda_user)
 		self.assertNotIn("ET04-W09", woreda_user)  # the Region on the assignment is not a Region grant
-		region_user = common._reach(get_scope_context(READER_REGION))
+		region_user = common._reach(get_scope_context(EXECUTIVE))
 		self.assertTrue({"ET04", "ET04-Z01", "ET04-W01"} <= region_user)
 		self.assertNotIn("ET03", region_user)
 
@@ -359,3 +379,25 @@ class TestKnowledgeBase(IntegrationTestCase):
 			r for r in article_api.list_articles(category=CATEGORY)["data"] if r["title"] == f"{TAG} both"
 		)
 		self.assertEqual(row["languages"], ["EN", "አማ"])
+
+	# -- API: categories -----------------------------------------------------------
+
+	def test_categories_list_only_enabled_in_sort_order(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_value("KB Category", CATEGORY, "sort_order", -1)  # sorts first
+		_commit()
+		for user in (READER_W01, COMMS, WRITER):
+			frappe.set_user(user)
+			res = category_api.list_categories()
+			self.assertEqual(_code(res), "ok", user)
+			names = [r["name"] for r in res["data"]]
+			self.assertEqual(names[0], CATEGORY, user)
+			self.assertNotIn(CATEGORY_OFF, names, user)  # disabled is hidden, even for writers
+			self.assertEqual(res["meta"]["count"], len(names))
+		self.assertEqual(
+			set(res["data"][0]), {"name", "category_name", "category_name_am", "color", "sort_order"}
+		)
+
+	def test_categories_list_needs_a_kb_role(self):
+		frappe.set_user("Guest")
+		self.assertEqual(_code(category_api.list_categories()), "PERMISSION_DENIED")

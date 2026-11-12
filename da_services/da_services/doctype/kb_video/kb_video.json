@@ -115,7 +115,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-12 13:59:14.846548",
+ "modified": "2026-11-12 16:58:17.562054",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "KB Video",
@@ -147,12 +147,10 @@
    "write": 1
   },
   {
-   "create": 1,
    "export": 1,
    "read": 1,
    "report": 1,
-   "role": "Communications Officer",
-   "write": 1
+   "role": "Communications Officer"
   },
   {
    "read": 1,
@@ -167,9 +165,11 @@
    "write": 1
   },
   {
+   "create": 1,
    "read": 1,
    "report": 1,
-   "role": "Executive"
+   "role": "Executive",
+   "write": 1
   }
  ],
  "row_format": "Dynamic",
