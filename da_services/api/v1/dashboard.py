@@ -1,10 +1,14 @@
-"""v1 DA dashboard (docs/api-da-screens.md 2.1, DA-198).
+"""v1 DA dashboard (docs/api-da-screens.md 2.1, DA-198 / DA-373).
 
-GET /api/v1/da-services/dashboard/summary?from=YYYY-MM-DD&to=YYYY-MM-DD[&da_id=]
+GET /api/v1/da-services/dashboard/summary?from=&to=
+  [&da_id=][&woreda=&kebele=&status=&agents=&q=&limit=&start=]
 GET /api/v1/da-services/dashboard/today?date=YYYY-MM-DD[&da_id=]
 
-`da_id` is ignored for a Development Agent (always their own) and required for an
-officer. The default range is the last 30 days ending today.
+Role comes from the access token (``ScopeContext``), not from the client:
+
+- Development Agent → agent tiles (visits / tasks / sync); ``da_id`` ignored.
+- Supervisor / Admin with no ``da_id`` → woreda programme health + kebele filters.
+- Officer with ``da_id`` → that DA's agent tiles (must be in scope).
 """
 
 from __future__ import annotations
@@ -23,13 +27,31 @@ def _query(*names: str) -> dict:
 	return {n: form.get(n) for n in names}
 
 
-@route("/dashboard/summary", methods=("GET",), summary="Dashboard tiles: visits, tasks, sync")
+@route(
+	"/dashboard/summary",
+	methods=("GET",),
+	summary="Dashboard summary (agent tiles or Supervisor woreda health by role)",
+)
 @frappe.whitelist()
 @handle_api_errors
 def summary(**_kwargs):
 	ctx = require_roles(*svc.READ_ROLES)
-	q = _query("from", "to", "da_id")
-	return success_response(data=svc.summary(ctx, from_date=q["from"], to_date=q["to"], da_id=q["da_id"]))
+	q = _query("from", "to", "da_id", "woreda", "kebele", "status", "agents", "q", "limit", "start")
+	return success_response(
+		data=svc.summary(
+			ctx,
+			from_date=q["from"],
+			to_date=q["to"],
+			da_id=q["da_id"],
+			woreda=q["woreda"],
+			kebele=q["kebele"],
+			status=q["status"],
+			agents=q["agents"],
+			q=q["q"],
+			limit=q["limit"],
+			start=q["start"],
+		)
+	)
 
 
 @route("/dashboard/today", methods=("GET",), summary="Today's Plan: visits and tasks for one day")
