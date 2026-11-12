@@ -1,10 +1,9 @@
 {
  "actions": [],
- "allow_rename": 0,
- "creation": "2026-11-09 12:00:00.000000",
+ "autoname": "format:KB-ART-{#####}",
+ "creation": "2026-11-09 12:00:00",
  "description": "Knowledge Base article shown as a card with a send count.",
  "doctype": "DocType",
- "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
   "title",
@@ -22,19 +21,18 @@
  ],
  "fields": [
   {
+   "description": "Used in lists and as fallback when a language version has no title.",
    "fieldname": "title",
    "fieldtype": "Data",
-   "label": "Title (Default)",
-   "reqd": 1,
    "in_list_view": 1,
+   "label": "Title (Default)",
    "length": 200,
-   "description": "Used in lists and as fallback when a language version has no title."
+   "reqd": 1
   },
   {
    "fieldname": "summary",
    "fieldtype": "Small Text",
-   "label": "Summary (Default)",
-   "reqd": 0
+   "label": "Summary (Default)"
   },
   {
    "fieldname": "col_a",
@@ -43,43 +41,43 @@
   {
    "fieldname": "category",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Category",
    "options": "KB Category",
-   "reqd": 1,
-   "in_list_view": 1,
-   "in_standard_filter": 1
+   "reqd": 1
   },
   {
    "fieldname": "source",
-   "fieldtype": "Link",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
    "label": "Source",
-   "options": "KB Source",
-   "in_standard_filter": 1
+   "options": "KB Source"
   },
   {
    "fieldname": "published_on",
    "fieldtype": "Date",
-   "label": "Published On",
-   "in_list_view": 1
+   "in_list_view": 1,
+   "label": "Published On"
   },
   {
+   "default": "Draft",
    "fieldname": "status",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Status",
    "options": "Draft\nPublished\nArchived",
-   "default": "Draft",
-   "reqd": 1,
-   "in_list_view": 1,
-   "in_standard_filter": 1
+   "reqd": 1
   },
   {
+   "default": "0",
+   "description": "Number of KB Send Log rows for this article. Maintained by the system.",
    "fieldname": "send_count",
    "fieldtype": "Int",
    "label": "Sends",
-   "default": "0",
-   "read_only": 1,
    "no_copy": 1,
-   "description": "Number of KB Send Log rows for this article. Maintained by the system."
+   "read_only": 1
   },
   {
    "fieldname": "sec_lang",
@@ -105,68 +103,68 @@
    "options": "KB Audience Scope"
   }
  ],
- "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-09 15:00:00.000000",
+ "modified": "2026-11-12 13:59:55.043418",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "KB Article",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "System Manager",
-   "read": 1,
-   "report": 1,
-   "create": 1,
-   "write": 1,
-   "delete": 1,
-   "export": 1,
-   "print": 1,
-   "email": 1,
-   "share": 1
+   "share": 1,
+   "write": 1
   },
   {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
    "role": "OAN Administrator",
-   "read": 1,
-   "report": 1,
+   "share": 1,
+   "write": 1
+  },
+  {
    "create": 1,
-   "write": 1,
-   "delete": 1,
    "export": 1,
-   "print": 1,
-   "email": 1,
-   "share": 1
-  },
-  {
-   "role": "Communications Officer",
    "read": 1,
    "report": 1,
+   "role": "Communications Officer",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Development Agent"
+  },
+  {
    "create": 1,
-   "write": 1,
-   "export": 1
-  },
-  {
-   "role": "Development Agent",
    "read": 1,
-   "report": 1
-  },
-  {
+   "report": 1,
    "role": "Supervisor",
-   "read": 1,
-   "report": 1
+   "write": 1
   },
   {
-   "role": "Executive",
    "read": 1,
-   "report": 1
+   "report": 1,
+   "role": "Executive"
   }
  ],
  "row_format": "Dynamic",
+ "search_fields": "title,summary",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "autoname": "format:KB-ART-{#####}",
- "title_field": "title",
- "search_fields": "title,summary",
- "naming_rule": "Expression"
+ "title_field": "title"
 }
