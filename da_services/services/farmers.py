@@ -114,14 +114,24 @@ def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
 
 
 def resolve_farmer_id(farmer_id: str) -> str:
-	"""Accept the registry's internal id or the Farmer-ID shown in the UI (FR-…)."""
+	"""Accept the registry's internal id or the Farmer-ID shown in the UI (FR-…).
+
+	A registry lookup failure (no auth, unreachable staff, not found) leaves the
+	input unchanged so callers such as ``resolve_farmer_for_capture`` still 404
+	on an unknown Farmer-ID instead of surfacing a 500.
+	"""
 	if frappe.db.exists("DA Farmer Reference", farmer_id):
 		return farmer_id
 	cached = frappe.db.get_value("DA Farmer Reference", {"reg_id": farmer_id}, "name")
 	if cached:
 		return cached
 	finder = getattr(get_farmer_registry_client(), "find_internal_id", None)
-	found = finder(farmer_id) if finder else None
+	if not finder:
+		return farmer_id
+	try:
+		found = finder(farmer_id)
+	except FarmerRegistryError:
+		found = None
 	return found or farmer_id
 
 
@@ -633,9 +643,13 @@ def _get_or_sync_farmer_reference(farmer_id: str) -> dict | None:
 	if cached:
 		return cached
 
-	# Not in cache, fetch from registry
+	# Not in cache, fetch from registry. Auth / transport failures are treated as
+	# "not found" here so farmer reads still 404 instead of 500 outside a staff session.
 	client = get_farmer_registry_client()
-	farmer = client.get_farmer(farmer_id)
+	try:
+		farmer = client.get_farmer(farmer_id)
+	except FarmerRegistryError:
+		return None
 
 	if not farmer:
 		return None

@@ -7,6 +7,8 @@ from .intake import describe_form, form_selector, submit_with_metadata
 from .mapper import submission_to_crop
 from .schemas import CropSubmission
 
+FIXTURE_INTERNAL_RECORD_ID = "crop-rec-001"
+
 FIXTURE_SUBMISSION_ID = "crop-sub-001"
 
 _FIXTURE = {
@@ -15,6 +17,7 @@ _FIXTURE = {
 	"approval_status": "PENDING",
 	"section_payloads": [
 		{
+			"section_id": "crop_farmer_lookup",
 			"section_register_id": "crop-section-1",
 			"records": [
 				{
@@ -22,7 +25,12 @@ _FIXTURE = {
 					"local_name": "Synthetic maize",
 				}
 			],
-		}
+		},
+		{
+			"section_id": "cropsown_cropsown_location_section_03",
+			"section_register_id": "crop-location-1",
+			"records": [{"latitude": "9.032000", "longitude": "38.746900"}],
+		},
 	],
 }
 
@@ -156,14 +164,48 @@ class MockCropRegistryClient(CropRegistryClient):
 			save=self.save_section,
 		)
 
-	def list_for_farmer(self, farmer_id: str, *, reg_id: str | None = None) -> list[dict]:
+	def list_for_farmer(self, farmer_id: str, *, reg_id: str | None = None, source: str) -> list[dict]:
 		if not farmer_id:
 			return []
-		return [
+		if source == "submission":
+			return [
+				{
+					"submission_id": FIXTURE_SUBMISSION_ID,
+					"record_name": reg_id or farmer_id,
+					"display_fields": [{"field_name": "local_name", "order": 1, "value": "Synthetic maize"}],
+				}
+			]
+		if source == "register":
+			return [
+				{
+					"internal_record_id": FIXTURE_INTERNAL_RECORD_ID,
+					"link_internal_record_id": farmer_id,
+					"record_name": "Synthetic maize",
+					"display_fields": [{"field_name": "local_name", "order": 1, "value": "Synthetic maize"}],
+				}
+			]
+		raise CropRegistryClientError(f"unsupported Crop Sown list source: {source}")
+
+	def get_register_tab(self, internal_record_id: str, tab_id: str) -> dict:
+		record_id = (internal_record_id or "").strip()
+		wanted_tab = (tab_id or "").strip()
+		if not record_id:
+			raise CropRegistryClientError("internal_record_id is required")
+		if not wanted_tab:
+			raise CropRegistryClientError("tab_id is required")
+		if record_id != FIXTURE_INTERNAL_RECORD_ID:
+			raise CropRegistryClientError("Crop Sown register record not found")
+		records = [
 			{
-				"internal_record_id": "crop-rec-001",
-				"link_internal_record_id": farmer_id,
-				"record_name": "Synthetic maize",
-				"display_fields": [{"field_name": "local_name", "order": 1, "value": "Synthetic maize"}],
+				"section_id": "cropsown_cropsown_location_section_03",
+				"section_register_id": "crop-location-1",
+				"is_list": False,
+				"records": [{"latitude": "9.032000", "longitude": "38.746900"}],
 			}
 		]
+		return {
+			"internal_record_id": record_id,
+			"register_id": "reg-1",
+			"tab_id": wanted_tab,
+			"tabs": [{"tab_id": wanted_tab, "records": records}],
+		}

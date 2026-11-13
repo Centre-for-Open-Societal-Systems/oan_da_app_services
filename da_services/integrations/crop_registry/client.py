@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+import frappe
+
 from .schemas import CropSubmission
 
 
@@ -44,12 +46,19 @@ class CropRegistryClient(ABC):
 		"""Read every tab of a submission. Each item is {tab_id, records}."""
 
 	@abstractmethod
-	def list_for_farmer(self, farmer_id: str, *, reg_id: str | None = None) -> list[dict]:
-		"""Search Crop Sown once per endpoint.
+	def list_for_farmer(self, farmer_id: str, *, reg_id: str | None = None, source: str) -> list[dict]:
+		"""Search Crop Sown for one farmer.
 
+		``source`` is ``submission`` or ``register`` (one staff search only).
 		``farmer_id`` is the internal id (register ``link_internal_record_id``).
-		``reg_id`` is the Farmer-ID (submission ``record_name``). With both, each
-		endpoint is searched with the id it stores. With one, both use that id.
+		``reg_id`` is the Farmer-ID (submission ``record_name``).
+		"""
+
+	@abstractmethod
+	def get_register_tab(self, internal_record_id: str, tab_id: str) -> dict:
+		"""One register tab via ``/register-data/get_tab_records``.
+
+		Returns ``{internal_record_id, register_id, tab_id, tabs}``.
 		"""
 
 	@abstractmethod
@@ -74,8 +83,9 @@ class CropRegistryClient(ABC):
 		"""One intake form: sections, register fields, labels, and loaded catalog rows.
 
 		``form_name`` selects planning, cultivation, sowing, or harvesting.
-		Omitted, it uses the configured form. Crop Sown identity and location
-		are sections of the planning form.
+		The HTTP intake-form route always passes it. Omitted here, the client
+		uses the configured form. Response ``intake_forms`` lists only the
+		selected form. Crop Sown identity and location are planning sections.
 		"""
 
 	@abstractmethod
@@ -96,8 +106,6 @@ class CropRegistryClient(ABC):
 
 def get_crop_registry_client() -> CropRegistryClient:
 	"""Return the configured client. Defaults to the in-memory mock."""
-	import frappe
-
 	backend = (frappe.conf.get("crop_registry_backend") or "mock").lower()
 	if backend == "mock":
 		from .mock import MockCropRegistryClient

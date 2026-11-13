@@ -241,6 +241,7 @@ class TestCropSownPayload(unittest.TestCase):
 		payload = crop_sown_payload("farmer-1", submission, [{"tab_id": "tab-1", "records": []}])
 		self.assertEqual(payload["farmer_id"], "farmer-1")
 		self.assertEqual(payload["submission_id"], "sub-1")
+		self.assertNotIn("location", payload)
 		self.assertEqual(payload["sections"][0]["records"], [{"local_name": "Teff"}])
 		self.assertEqual(payload["tabs"][0]["tab_id"], "tab-1")
 
@@ -351,7 +352,7 @@ class TestCropSownPayload(unittest.TestCase):
 			{"submission_id": "sub-approved", "record_name": "FR-427495614351"}
 		]
 		previous = frappe.local.form_dict
-		frappe.local.form_dict = frappe._dict(reg_id="FR-427495614351")
+		frappe.local.form_dict = frappe._dict(reg_id="FR-427495614351", source="submission")
 		try:
 			with (
 				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
@@ -372,13 +373,92 @@ class TestCropSownPayload(unittest.TestCase):
 		finally:
 			frappe.local.form_dict = previous
 
-		client.list_for_farmer.assert_called_once_with("farmer-1", reg_id="FR-427495614351")
+		client.list_for_farmer.assert_called_once_with(
+			"farmer-1", reg_id="FR-427495614351", source="submission"
+		)
 		self.assertEqual(result["data"]["crops"][0]["submission_id"], "sub-approved")
+		self.assertEqual(result["data"]["source"], "submission")
+
+	def test_list_requires_source(self):
+		previous = frappe.local.form_dict
+		frappe.local.form_dict = frappe._dict()
+		try:
+			with (
+				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
+				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
+				patch(
+					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
+					return_value={"farmer_id": "farmer-1"},
+				),
+				patch("da_services.api.v1.crop_sown.get_crop_registry_client", return_value=Mock()),
+			):
+				from da_services.api.v1.crop_sown import get_farmer_crops
+
+				result = get_farmer_crops("farmer-1")
+		finally:
+			frappe.local.form_dict = previous
+
+		self.assertEqual(result["status"], "error")
+		self.assertIn("source", result["message"].lower())
+
+	def test_register_detail_requires_tab_id(self):
+		previous = frappe.local.form_dict
+		frappe.local.form_dict = frappe._dict(internal_record_id="crop-rec-001")
+		try:
+			with (
+				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
+				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
+				patch(
+					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
+					return_value={"farmer_id": "farmer-1"},
+				),
+				patch("da_services.api.v1.crop_sown.get_crop_registry_client", return_value=Mock()),
+			):
+				from da_services.api.v1.crop_sown import get_farmer_crops
+
+				result = get_farmer_crops("farmer-1")
+		finally:
+			frappe.local.form_dict = previous
+
+		self.assertEqual(result["status"], "error")
+		self.assertIn("tab_id", result["message"].lower())
+
+	def test_register_detail_passes_internal_record_and_tab(self):
+		client = Mock()
+		client.get_register_tab.return_value = {
+			"internal_record_id": "crop-rec-001",
+			"register_id": "reg-1",
+			"tab_id": "cropsown_cropsown_tab",
+			"tabs": [{"tab_id": "cropsown_cropsown_tab", "records": []}],
+		}
+		previous = frappe.local.form_dict
+		frappe.local.form_dict = frappe._dict(
+			internal_record_id="crop-rec-001", tab_id="cropsown_cropsown_tab"
+		)
+		try:
+			with (
+				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
+				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
+				patch(
+					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
+					return_value={"farmer_id": "farmer-1"},
+				),
+				patch("da_services.api.v1.crop_sown.get_crop_registry_client", return_value=client),
+			):
+				from da_services.api.v1.crop_sown import get_farmer_crops
+
+				result = get_farmer_crops("farmer-1")
+		finally:
+			frappe.local.form_dict = previous
+
+		client.get_register_tab.assert_called_once_with("crop-rec-001", "cropsown_cropsown_tab")
+		self.assertEqual(result["data"]["internal_record_id"], "crop-rec-001")
+		self.assertEqual(result["data"]["tab_id"], "cropsown_cropsown_tab")
 
 	def test_reg_id_for_another_farmer_is_rejected(self):
 		client = Mock()
 		previous = frappe.local.form_dict
-		frappe.local.form_dict = frappe._dict(reg_id="FR-someone-else")
+		frappe.local.form_dict = frappe._dict(reg_id="FR-someone-else", source="submission")
 		try:
 			with (
 				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
@@ -403,6 +483,47 @@ class TestCropSownPayload(unittest.TestCase):
 		self.assertEqual(result["status"], "error")
 		self.assertIn("reg_id", result["message"])
 
+	def test_intake_form_requires_form_query(self):
+		previous = frappe.local.form_dict
+		frappe.local.form_dict = frappe._dict()
+		try:
+			with patch("da_services.api.v1.crop_sown.require_roles", return_value=object()):
+				from da_services.api.v1.crop_sown import get_crop_intake_form
+
+				result = get_crop_intake_form()
+		finally:
+			frappe.local.form_dict = previous
+
+		self.assertEqual(result["status"], "error")
+		self.assertIn("form", result["message"].lower())
+
+	def test_intake_form_passes_named_form(self):
+		client = Mock()
+		client.describe_intake_form.return_value = {
+			"form_id": "form-harvest",
+			"form_mnemonic": "Crop harvesting intake",
+			"intake_forms": [
+				{"form_id": "form-harvest", "form_mnemonic": "Crop harvesting intake"},
+			],
+			"sections": [],
+		}
+		previous = frappe.local.form_dict
+		frappe.local.form_dict = frappe._dict(form="harvesting")
+		try:
+			with (
+				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
+				patch("da_services.api.v1.crop_sown.get_crop_registry_client", return_value=client),
+			):
+				from da_services.api.v1.crop_sown import get_crop_intake_form
+
+				result = get_crop_intake_form()
+		finally:
+			frappe.local.form_dict = previous
+
+		client.describe_intake_form.assert_called_once_with(form_name="harvesting")
+		self.assertEqual(result["data"]["form_id"], "form-harvest")
+		self.assertEqual(len(result["data"]["intake_forms"]), 1)
+
 
 class TestMockCropRegistry(unittest.TestCase):
 	def test_fixture_submission_and_tabs(self):
@@ -423,9 +544,20 @@ class TestMockCropRegistry(unittest.TestCase):
 		self.assertEqual(client.get_tabs("missing"), [])
 
 	def test_list_for_farmer_returns_the_linked_fixture(self):
-		rows = MockCropRegistryClient().list_for_farmer("farmer-1")
+		rows = MockCropRegistryClient().list_for_farmer("farmer-1", source="register")
 		self.assertEqual(rows[0]["link_internal_record_id"], "farmer-1")
 		self.assertEqual(rows[0]["record_name"], "Synthetic maize")
+		self.assertNotIn("location", rows[0])
+
+	def test_mock_register_tab_returns_tabs(self):
+		from da_services.integrations.crop_registry.mock import FIXTURE_INTERNAL_RECORD_ID
+
+		detail = MockCropRegistryClient().get_register_tab(
+			FIXTURE_INTERNAL_RECORD_ID, "cropsown_cropsown_tab"
+		)
+		self.assertEqual(detail["tab_id"], "cropsown_cropsown_tab")
+		self.assertNotIn("location", detail)
+		self.assertEqual(detail["tabs"][0]["tab_id"], "cropsown_cropsown_tab")
 
 
 class TestCropMapper(unittest.TestCase):
@@ -591,14 +723,19 @@ class TestHttpReadPath(unittest.TestCase):
 		)
 
 	def test_search_keeps_rows_linked_to_the_farmer(self):
-		seen = {"urls": [], "search_text": None}
+		seen = {"urls": [], "search_text": None, "search_payload": None}
 
 		def post(url, **kwargs):
 			payload = kwargs["json"]["request_body"]["request_payload"]
 			pagination = kwargs["json"]["request_body"]["pagination_request"]
 			seen["urls"].append(url)
-			seen["payload"] = payload
-			seen["search_text"] = pagination["search_text"]
+			if "search_in_" in url:
+				seen["search_payload"] = payload
+				seen["search_text"] = pagination["search_text"]
+			if url.endswith("/register-metadata/get_all_registers"):
+				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
+			if url.endswith("/intake-form-data/get_intake_form_submission"):
+				raise AssertionError("list must not re-fetch submissions for location")
 			body = _envelope(
 				[
 					{
@@ -614,23 +751,22 @@ class TestHttpReadPath(unittest.TestCase):
 					},
 				]
 			)
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			return _Resp(200, body)
 
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
-			rows = _client().list_for_farmer("FR-427495614351")
+			rows = _client().list_for_farmer("FR-427495614351", source="submission")
 
 		self.assertIn(
 			"https://staff-crop.test/intake-form-data/search_in_intake_form_submissions", seen["urls"]
 		)
-		self.assertIn("https://staff-crop.test/register-data/search_in_a_register", seen["urls"])
-		self.assertEqual(seen["payload"], {"register_id": "reg-1"})
+		self.assertNotIn("https://staff-crop.test/register-data/search_in_a_register", seen["urls"])
+		self.assertEqual(seen["search_payload"], {"register_id": "reg-1"})
 		self.assertEqual(seen["search_text"], "FR-427495614351")
 		self.assertEqual([row["submission_id"] for row in rows], ["sub-approved"])
+		self.assertNotIn("location", rows[0])
 
-	def test_profile_ids_search_each_crop_endpoint_once(self):
-		"""Submissions use the Farmer-ID. The register uses the internal id."""
+	def test_profile_ids_search_submissions_with_farmer_id(self):
+		"""Submissions use the Farmer-ID when source=submission."""
 		seen = {"urls": [], "search_text": []}
 
 		def post(url, **kwargs):
@@ -651,33 +787,102 @@ class TestHttpReadPath(unittest.TestCase):
 						]
 					),
 				)
-			return _Resp(
-				200,
-				_envelope(
-					[
-						{
-							"internal_record_id": "crop-2",
-							"link_internal_record_id": "farmer-1",
-							"record_name": "Maize",
-						}
-					]
-				),
-			)
+			raise AssertionError(url)
 
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
-			rows = _client().list_for_farmer("farmer-1", reg_id="FR-427495614351")
+			rows = _client().list_for_farmer("farmer-1", reg_id="FR-427495614351", source="submission")
 
 		self.assertEqual(
 			seen["urls"],
 			[
 				"https://staff-crop.test/register-metadata/get_all_registers",
 				"https://staff-crop.test/intake-form-data/search_in_intake_form_submissions",
+			],
+		)
+		self.assertEqual(seen["search_text"], ["", "FR-427495614351"])
+		self.assertEqual([row["submission_id"] for row in rows], ["sub-approved"])
+		self.assertNotIn("location", rows[0])
+
+	def test_register_source_searches_only_the_register(self):
+		seen = {"urls": []}
+
+		def post(url, **kwargs):
+			seen["urls"].append(url)
+			if url.endswith("/register-metadata/get_all_registers"):
+				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
+			if "search_in_a_register" in url:
+				return _Resp(
+					200,
+					_envelope(
+						[
+							{
+								"internal_record_id": "crop-2",
+								"link_internal_record_id": "farmer-1",
+								"record_name": "Maize",
+							}
+						]
+					),
+				)
+			raise AssertionError(url)
+
+		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+			rows = _client().list_for_farmer("farmer-1", reg_id="FR-1", source="register")
+
+		self.assertEqual(
+			seen["urls"],
+			[
+				"https://staff-crop.test/register-metadata/get_all_registers",
 				"https://staff-crop.test/register-data/search_in_a_register",
 			],
 		)
-		self.assertEqual(seen["search_text"], ["", "FR-427495614351", "farmer-1"])
-		self.assertEqual([row["submission_id"] for row in rows if row.get("submission_id")], ["sub-approved"])
-		self.assertEqual(rows[1]["link_internal_record_id"], "farmer-1")
+		self.assertEqual(rows[0]["internal_record_id"], "crop-2")
+
+	def test_get_register_tab_posts_once(self):
+		seen = {"urls": [], "payload": None}
+
+		def post(url, **kwargs):
+			seen["urls"].append(url)
+			payload = kwargs["json"]["request_body"]["request_payload"]
+			if url.endswith("/register-metadata/get_all_registers"):
+				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
+			if url.endswith("/register-data/get_tab_records"):
+				seen["payload"] = payload
+				return _Resp(
+					200,
+					_envelope(
+						[
+							{
+								"section_id": "cropsown_cropsown_location_section_03",
+								"records": [{"latitude": "9.1", "longitude": "38.7"}],
+							}
+						]
+					),
+				)
+			raise AssertionError(url)
+
+		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+			detail = _client().get_register_tab("crop-rec-9", "cropsown_cropsown_tab")
+
+		self.assertEqual(
+			seen["urls"],
+			[
+				"https://staff-crop.test/register-metadata/get_all_registers",
+				"https://staff-crop.test/register-data/get_tab_records",
+			],
+		)
+		self.assertEqual(
+			seen["payload"],
+			{
+				"subject_register_id": "reg-1",
+				"subject_record_id": "crop-rec-9",
+				"tab_id": "cropsown_cropsown_tab",
+			},
+		)
+		self.assertNotIn("location", detail)
+		self.assertEqual(
+			detail["tabs"][0]["records"][0]["records"][0],
+			{"latitude": "9.1", "longitude": "38.7"},
+		)
 
 	def test_configured_register_id_skips_discovery(self):
 		seen = {"urls": []}
@@ -695,14 +900,11 @@ class TestHttpReadPath(unittest.TestCase):
 			register_id="crop-reg-fixed",
 		)
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
-			self.assertEqual(client.list_for_farmer("farmer-1", reg_id="FR-1"), [])
+			self.assertEqual(client.list_for_farmer("farmer-1", reg_id="FR-1", source="register"), [])
 
 		self.assertEqual(
 			seen["urls"],
-			[
-				"https://staff-crop.test/intake-form-data/search_in_intake_form_submissions",
-				"https://staff-crop.test/register-data/search_in_a_register",
-			],
+			["https://staff-crop.test/register-data/search_in_a_register"],
 		)
 
 	def test_ambiguous_register_is_rejected(self):
@@ -1224,10 +1426,7 @@ class TestCropRenderContract(unittest.TestCase):
 		self.assertEqual(described["form_id"], "form-cult")
 		self.assertEqual(
 			described["intake_forms"],
-			[
-				{"form_id": "form-plan", "form_mnemonic": "Crop planning intake"},
-				{"form_id": "form-cult", "form_mnemonic": "Crop cultivation intake"},
-			],
+			[{"form_id": "form-cult", "form_mnemonic": "Crop cultivation intake"}],
 		)
 
 

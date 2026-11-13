@@ -45,7 +45,9 @@ DA routes:
 
 - `GET /api/v1/da-services/crop-sown/intake-form`
 - `GET /api/v1/da-services/crop-sown/geo-level-values`
-- `GET /api/v1/da-services/farmers/{farmer_id}/crops`
+- `GET /api/v1/da-services/farmers/{farmer_id}/crops?source=submission|register`
+- `GET /api/v1/da-services/farmers/{farmer_id}/crops?submission_id=`
+- `GET /api/v1/da-services/farmers/{farmer_id}/crops?internal_record_id=&tab_id=`
 - `POST /api/v1/da-services/farmers/{farmer_id}/crops`
 - `POST /api/v1/da-services/farmers/{farmer_id}/crops/{submission_id}/finalize`
 
@@ -55,14 +57,16 @@ The envelope sender is `OAN_REGISTRY_API_TEST`. It has no `instance_id`. An empt
 
 | DA call | Staff POST |
 |---|---|
-| List by farmer id | `/intake-form-data/search_in_intake_form_submissions` and `/register-data/search_in_a_register` |
+| List `source=submission` | `/intake-form-data/search_in_intake_form_submissions` |
+| List `source=register` | `/register-data/search_in_a_register` |
 | Read one submission | `/intake-form-data/get_intake_form_submission` and `/intake-form-data/get_tab_records` |
+| Read one register tab | `/register-data/get_tab_records` |
 | Draw one form | `/register-metadata/get_all_registers`, `/intake-form-metadata/get_all_intake_forms`, `/intake-form-metadata/render_intake_form`, `/register-metadata/get_register_fields`, then master-data `get_attribute_values` for every page of each `attribute_id` on that form |
 | One geography level | Master-data `/geo/get_geo_level_values` |
 | Save one section | `/intake-form-data/save_intake_form_submission` |
 | Finalize | `/intake-form-data/finalize_intake_form_submission` |
 
-`GET /crop-sown/intake-form?form=` selects planning, cultivation, sowing, or harvesting. The default is planning. The flow, hosts, and payload rules are in [crop-sown-integration.md](crop-sown-integration.md). Farmer is in [farmer-integration.md](farmer-integration.md). Livestock auth, which does not call a Livestock host, is in [livestock-integration.md](livestock-integration.md).
+`GET /crop-sown/intake-form?form=` requires `form` (`planning`, `cultivation`, `sowing`, or `harvesting`) and returns that form only. The flow, hosts, and payload rules are in [crop-sown-integration.md](crop-sown-integration.md). Farmer is in [farmer-integration.md](farmer-integration.md). Livestock auth, which does not call a Livestock host, is in [livestock-integration.md](livestock-integration.md).
 
 ## Livestock
 

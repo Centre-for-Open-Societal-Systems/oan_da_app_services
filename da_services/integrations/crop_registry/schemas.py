@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 class CropSection(BaseModel):
 	"""One section of an intake submission."""
 
+	section_id: str | None = None
 	section_register_id: str | None = None
 	records: list[dict] = Field(default_factory=list)
 
