@@ -1,0 +1,1557 @@
+{
+  "info": {
+    "_postman_id": "oan-da-farmers",
+    "name": "OAN DA Farmers",
+    "description": "DA Services farmer routes for the My Farmers list, search, profile, holdings, photo, registration and update. Data comes live from the Farmer Registry; the frontend calls only DA Services. Run SSO login first (see 0. Sign in). List farmers stores farmer_id. Saved responses are shortened live responses from the dev registry, 31 Oct - 1 Nov 2026. Guide: docs/farmer-frontend-integration.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const csrf = pm.variables.get(\"csrf_token\");",
+          "if (csrf) pm.request.headers.upsert({ key: \"X-CSRF-Token\", value: csrf });"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "usr",
+      "value": ""
+    },
+    {
+      "key": "pwd",
+      "value": ""
+    },
+    {
+      "key": "sso_key",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "csrf_token",
+      "value": ""
+    },
+    {
+      "key": "farmer_id",
+      "value": "FR-675618129549"
+    },
+    {
+      "key": "region_id",
+      "value": ""
+    },
+    {
+      "key": "zone_id",
+      "value": ""
+    },
+    {
+      "key": "woreda_id",
+      "value": ""
+    },
+    {
+      "key": "kebele_id",
+      "value": "ET04080101"
+    },
+    {
+      "key": "document_id",
+      "value": ""
+    },
+    {
+      "key": "submission_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Sign in",
+      "description": "Every request sends Authorization: Bearer {{access_token}} and, when csrf_token is set, X-CSRF-Token: {{csrf_token}} (collection pre-request script).\n\nDA Services forwards these two headers to the Farmer Registry, so a local Login token is refused there with 'Unknown Issuer'. For the farmer routes run SSO login: it stores the Keycloak staff access token and its CSRF value. Login and Refresh still work for routes that do not call the registry, such as Who am I.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Local DA Services login. Stores access_token and refresh_token. Field names are usr and pwd (username / password give 400). Leave usr and pwd in the environment.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"refresh_token\", data.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Login success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/auth/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"access_token\": \"ACCESS_TOKEN\",\n    \"refresh_token\": \"REFRESH_TOKEN\",\n    \"expires_in\": 900,\n    \"token_type\": \"Bearer\",\n    \"user\": \"Administrator\",\n    \"roles\": [\n      \"...\"\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "SSO login (staff token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/sso/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "sso",
+                "login"
+              ]
+            },
+            "description": "Keycloak login through OAN IAM in one call. Stores access_token and csrf_token; the collection then sends both on every request. Set usr, pwd and sso_key in the environment (sso_key is the login key of the user's role, for example agent). Use this on a deployed server, or whenever a route calls a registry.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"SSO login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"csrf_token\", data.csrf_token);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "SSO login success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/sso/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "sso",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"access_token\": \"ACCESS_TOKEN\",\n    \"csrf_token\": \"CSRF_TOKEN\",\n    \"user\": {\n      \"...\": \"...\"\n    }\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "The access token lasts 15 minutes. Keep the new refresh_token this returns.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Refresh token returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"refresh_token\", data.refresh_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Who am I",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "me"
+              ]
+            },
+            "description": "Role, role label, the menu paths that role may open, and its scope."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Who am I returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Farmers (read)",
+      "item": [
+        {
+          "name": "List farmers (My Farmers)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers?search_text=FR-&page=1&page_size=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers"
+              ],
+              "query": [
+                {
+                  "key": "search_text",
+                  "value": "FR-",
+                  "description": "FR- = every farmer; or a name, Farmer-ID or phone"
+                },
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "1-based"
+                },
+                {
+                  "key": "page_size",
+                  "value": "50",
+                  "description": "default 50, max 500"
+                }
+              ]
+            },
+            "description": "One endpoint for the table and the search box. search_text=FR- returns every approved farmer in the caller's scope (Admin: all; DA: assigned kebeles; Supervisor: woreda). Each row carries phone, land in hectares, plot count and photo. The first call after a while takes about 20 s, later calls under 1 s for 10 minutes. Stores farmer_id from the first row."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List farmers (My Farmers) returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const rows = (((pm.response.json() || {}).data || {}).farmers) || [];",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "if (rows.length) save(\"farmer_id\", rows[0].reg_id || rows[0].farmer_id);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "List farmers (My Farmers) success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers?search_text=FR-&page=1&page_size=50",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers"
+                  ],
+                  "query": [
+                    {
+                      "key": "search_text",
+                      "value": "FR-",
+                      "description": "FR- = every farmer; or a name, Farmer-ID or phone"
+                    },
+                    {
+                      "key": "page",
+                      "value": "1",
+                      "description": "1-based"
+                    },
+                    {
+                      "key": "page_size",
+                      "value": "50",
+                      "description": "default 50, max 500"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmers\": [\n      {\n        \"farmer_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n        \"reg_id\": \"FR-675618129549\",\n        \"farmer_name\": \"Aster Mulugeta Assefa\",\n        \"phone\": \"+251964815374\",\n        \"kebele\": \"Lekatit\",\n        \"woreda\": \"Shire Endaslasie town\",\n        \"region\": \"Tigray\",\n        \"total_land_hectares\": 4.25,\n        \"total_plots\": 2,\n        \"photo_url\": \"https://minio-farmer.development.oanstaging.com/documents/...signed-link...\",\n        \"registration_state\": \"APPROVED\",\n        \"registered_at\": \"2026-10-30 14:16:40.292811\"\n      }\n    ],\n    \"total\": 25,\n    \"page\": {\n      \"page\": 1,\n      \"page_size\": 50,\n      \"number_of_pages\": 1,\n      \"filtered_client_side\": false\n    },\n    \"source\": \"registry\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Search one farmer by Farmer-ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers?search_text={{farmer_id}}&page=1&page_size=1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers"
+              ],
+              "query": [
+                {
+                  "key": "search_text",
+                  "value": "{{farmer_id}}",
+                  "description": ""
+                },
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": ""
+                },
+                {
+                  "key": "page_size",
+                  "value": "1",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "The same endpoint with the typed text. Debounce the search box (about 400 ms)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Search one farmer by Farmer-ID returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Search one farmer by Farmer-ID success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers?search_text={{farmer_id}}&page=1&page_size=1",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers"
+                  ],
+                  "query": [
+                    {
+                      "key": "search_text",
+                      "value": "{{farmer_id}}",
+                      "description": ""
+                    },
+                    {
+                      "key": "page",
+                      "value": "1",
+                      "description": ""
+                    },
+                    {
+                      "key": "page_size",
+                      "value": "1",
+                      "description": ""
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmers\": [\n      {\n        \"farmer_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n        \"reg_id\": \"FR-675618129549\",\n        \"farmer_name\": \"Aster Mulugeta Assefa\",\n        \"phone\": \"+251964815374\",\n        \"kebele\": \"Lekatit\",\n        \"woreda\": \"Shire Endaslasie town\",\n        \"region\": \"Tigray\",\n        \"total_land_hectares\": 4.25,\n        \"total_plots\": 2,\n        \"photo_url\": \"https://minio-farmer.development.oanstaging.com/documents/...signed-link...\",\n        \"registration_state\": \"APPROVED\",\n        \"registered_at\": \"2026-10-30 14:16:40.292811\"\n      }\n    ],\n    \"total\": 1,\n    \"page\": {\n      \"page\": 1,\n      \"page_size\": 1,\n      \"number_of_pages\": 1,\n      \"filtered_client_side\": false\n    },\n    \"source\": \"registry\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Farmer profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "profile"
+              ]
+            },
+            "description": "Profile header and overview. {id} is the internal id or the Farmer-ID. incomplete_sections names the parts the registry could not deliver. The phone comes without +251 here; the list sends +251."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer profile returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Farmer profile success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/profile",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers",
+                    "{{farmer_id}}",
+                    "profile"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n    \"reg_id\": \"FR-675618129549\",\n    \"name\": \"Aster Mulugeta Assefa\",\n    \"phone\": \"964815374\",\n    \"email\": null,\n    \"gender\": \"female\",\n    \"education_level\": \"PRIMARY\",\n    \"kebele\": \"Lekatit\",\n    \"woreda\": \"Shire Endaslasie town\",\n    \"region\": \"Tigray\",\n    \"total_land_area\": 4.25,\n    \"land_ownership\": \"HYBRID\",\n    \"household_size\": 0,\n    \"registration_date\": \"2026-10-30 14:16:40.292811\",\n    \"last_visit_date\": null,\n    \"last_visit_outcome\": null,\n    \"pending_actions\": 0,\n    \"can_edit\": true,\n    \"is_linked\": false,\n    \"incomplete_sections\": []\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Farmer plots (Holdings)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/plots",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "plots"
+              ]
+            },
+            "description": "Land records. OWNER, SF_HIGH and GRAZING are registry codes; show readable labels."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer plots (Holdings) returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Farmer plots (Holdings) success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/plots",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers",
+                    "{{farmer_id}}",
+                    "plots"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"plots\": [\n      {\n        \"plot_id\": \"0065cd98-...\",\n        \"area_in_hectare\": 1.75,\n        \"land_ownership_type\": \"OWNER\",\n        \"soil_fertility\": \"SF_HIGH\",\n        \"current_land_use\": \"AGRICULTURAL\",\n        \"land_kebele\": null,\n        \"certificate_provided\": false\n      },\n      {\n        \"plot_id\": \"5069b1b1-...\",\n        \"area_in_hectare\": 2.5,\n        \"land_ownership_type\": \"TENANT\",\n        \"soil_fertility\": \"SF_MEDIUM\",\n        \"current_land_use\": \"GRAZING\",\n        \"land_kebele\": null,\n        \"certificate_provided\": false\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Farmer photo",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/photo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "photo"
+              ]
+            },
+            "description": "A signed link that lasts about an hour and needs no token in <img src>. null when there is no photo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer photo returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Farmer photo success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/photo",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers",
+                    "{{farmer_id}}",
+                    "photo"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"photo_url\": \"https://minio-farmer.development.oanstaging.com/documents/...signed-link...\",\n    \"document_id\": \"f4fb2dbc-...\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Farmer edit permission",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/permissions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "permissions"
+              ]
+            },
+            "description": "can_edit, reason, is_linked. Use it to show or hide the Edit button."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer edit permission returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Farmer visits",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/visits",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "visits"
+              ]
+            },
+            "description": "Visit history."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer visits returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Farmer change requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/change-requests?status=&tab=",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "change-requests"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "PENDING | APPROVED | REJECTED; empty = all"
+                },
+                {
+                  "key": "tab",
+                  "value": "",
+                  "description": "farmer | location | household | land | crop | livestock; empty = all"
+                }
+              ]
+            },
+            "description": "Change requests raised on this farmer in the registry."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer change requests returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Registration form data",
+      "item": [
+        {
+          "name": "Registers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/registers",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "registers"
+              ]
+            },
+            "description": "Registers of the Farmer Registry (Farmer, Land, Crop, Livestock ...)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Registers returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Intake form layout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/intake-form",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "intake-form"
+              ]
+            },
+            "description": "Sections and fields of the registration form."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Intake form layout returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Field options (all dropdowns)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/field-options",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "field-options"
+              ]
+            },
+            "description": "{register: {field: [{value, label}]}} from the registry code lists, cached 1 hour. Send value, show label."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Field options (all dropdowns) returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Places: regions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/places?level=region",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "places"
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "region",
+                  "description": ""
+                }
+              ]
+            },
+            "description": "Returns {level, parent, places: [{id, name}]}. Copy an id into region_id for the next request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Places: regions returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Places: zones of a region",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/places?level=zone&parent={{region_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "places"
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "zone",
+                  "description": ""
+                },
+                {
+                  "key": "parent",
+                  "value": "{{region_id}}",
+                  "description": "id from Places: regions"
+                }
+              ]
+            },
+            "description": "Copy an id into zone_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Places: zones of a region returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Places: woredas of a zone",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/places?level=woreda&parent={{zone_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "places"
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "woreda",
+                  "description": ""
+                },
+                {
+                  "key": "parent",
+                  "value": "{{zone_id}}",
+                  "description": "id from Places: zones"
+                }
+              ]
+            },
+            "description": "Copy an id into woreda_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Places: woredas of a zone returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Places: kebeles of a woreda",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/registries/farmer/places?level=kebele&parent={{woreda_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "registries",
+                "farmer",
+                "places"
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "kebele",
+                  "description": ""
+                },
+                {
+                  "key": "parent",
+                  "value": "{{woreda_id}}",
+                  "description": "id from Places: woredas"
+                }
+              ]
+            },
+            "description": "The kebele id (for example ET04080101) is what Register farmer takes as kebele; copy it into kebele_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Places: kebeles of a woreda returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Register a farmer",
+      "item": [
+        {
+          "name": "Upload identity document",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/registrations/documents",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "registrations",
+                "documents"
+              ]
+            },
+            "description": "multipart/form-data with field file (PDF, JPEG or PNG, up to 5 MB). Pick the file in the Body tab. Stores document_id; Register farmer sends it as identity_document_id.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Upload identity document returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"document_id\", data.document_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register farmer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers"
+              ]
+            },
+            "description": "Saves every section into one registry draft, then sends it for approval. Returns submission_id and status PENDING_APPROVAL. Use a new client_op_id per registration; a repeat returns DUPLICATE. The FR- id exists only after a supervisor approves. Codes come from Field options and Places.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_op_id\": \"reg-{{$timestamp}}\",\n  \"first_name\": \"Abebe\",\n  \"father_name\": \"Kebede\",\n  \"grandfather_name\": \"Tesfaye\",\n  \"gender\": \"male\",\n  \"date_of_birth\": \"1985-04-12\",\n  \"phone\": \"+251911234567\",\n  \"kebele\": \"{{kebele_id}}\",\n  \"national_id\": \"1234567890123456\",\n  \"location\": \"9.03 38.74 2350 5\",\n  \"marital_status\": \"married\",\n  \"education_level\": \"read_write\",\n  \"income_sources\": [\n    \"crop\",\n    \"livestock\"\n  ],\n  \"household\": {\n    \"size\": 2,\n    \"members\": [\n      {\n        \"first_name\": \"Almaz\",\n        \"grandfather_name\": \"Bekele\",\n        \"gender\": \"female\",\n        \"date_of_birth\": \"1990-01-01\",\n        \"relationship\": \"spouse\"\n      }\n    ]\n  },\n  \"identity_document_id\": \"{{document_id}}\",\n  \"lands\": [\n    {\n      \"ownership\": \"owner\",\n      \"area_hectare\": 1.5\n    }\n  ],\n  \"crops\": [\n    {\n      \"name\": \"teff\",\n      \"planted_date\": \"2026-07-01\",\n      \"season\": \"meher\"\n    }\n  ],\n  \"livestock\": [\n    {\n      \"animal\": \"cattle\",\n      \"count\": 3,\n      \"system\": \"mixed\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Register farmer returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"submission_id\", data.submission_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Registration status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/registrations/{{submission_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "registrations",
+                "{{submission_id}}"
+              ]
+            },
+            "description": "DRAFT / PENDING_APPROVAL / APPROVED / REJECTED, and the application reference."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Registration status returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Update a farmer",
+      "item": [
+        {
+          "name": "Update farmer",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}"
+              ]
+            },
+            "description": "DA only, on farmers the DA may edit. Queued, then sent to the registry as a change request. Identity fields cannot change.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"912345678\",\n  \"email\": \"farmer@example.com\",\n  \"household_size\": 6,\n  \"client_op_id\": \"upd-{{$timestamp}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Update farmer returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/update-status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "update-status"
+              ]
+            },
+            "description": "Updates not yet in the registry."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Update status returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
