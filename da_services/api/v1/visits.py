@@ -1,7 +1,7 @@
 """v1 visits: plan, list, detail, reschedule, cancel (docs/api-da-screens.md 2.7, 2.8; DA-43).
 
 POST /api/v1/da-services/visits                      plan a visit (201)
-GET  /api/v1/da-services/visits?date|from&to&status&farmer_id&da_id&limit&start
+GET  /api/v1/da-services/visits?date|from&to&status&farmer_id&da_id&region&zone&woreda&kebele&limit&start
 GET  /api/v1/da-services/visits/<visit_id>           one visit + status timeline
 POST /api/v1/da-services/visits/<visit_id>/reschedule {scheduled_at | date+time, reason}
 POST /api/v1/da-services/visits/<visit_id>/cancel     {reason}
@@ -25,8 +25,12 @@ Datetimes: every `*_at` value is site-local time (System Settings time zone, Afr
 in production) serialised as ISO 8601 without an offset, the Frappe convention; `date` and
 `time` in the plan form are read the same way. Clients must not apply a UTC offset.
 
-Scope is enforced in services/visits.py: a DA acts on their own DA-ID, a Supervisor on
-DAs in their Woreda (recorded as `assigned_by`), an Executive reads their Region.
+Scope is enforced in services/visits.py from the access token / ScopeContext (never a client
+role flag): a DA acts on their own DA-ID; a Supervisor lists visits for DAs mapped to their
+Woreda in Frappe DB (live ``DA RBAC Assignment`` and live ``DA Kebele Assignment`` in
+Proposed/Validated/Flagged/Effective — not visit.woreda strings, not the registry mock),
+and may filter with status, kebele, da_id, and date; planning for a DA records `assigned_by`;
+an Executive reads their Region. Another Woreda / out-of-scope kebele or da_id is 403.
 """
 
 from __future__ import annotations
@@ -146,10 +150,15 @@ def plan(**kwargs):
 	return success_response(data=out, message="Visit planned")
 
 
-@route("/visits", methods=("GET",), summary="Visits the caller may see")
+@route(
+	"/visits",
+	methods=("GET",),
+	summary="List visits in caller scope (Supervisor: own Woreda; filters: status/kebele/da_id/date)",
+)
 @frappe.whitelist()
 @handle_api_errors
 def list_visits(**kwargs):
+	# Role and Woreda/DA scope come from the Bearer session → ScopeContext.
 	ctx = require_roles(*svc.READ_ROLES)
 	q = _body(
 		kwargs,

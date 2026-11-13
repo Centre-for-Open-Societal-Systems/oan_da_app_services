@@ -7,6 +7,7 @@ has_permission mirrors it for a single document. Both are registered in hooks.py
 import frappe
 
 from da_services.services import constants as C
+from da_services.services.da_service import da_ids_for_woreda_grant
 from da_services.utils.permissions import get_officer_scope_context, get_scope_context
 
 DENY = "1=0"
@@ -117,16 +118,22 @@ def has_da_leave_request_permission(doc, ptype: str = "read", user: str | None =
 
 
 def da_visit_query_conditions(user: str | None = None) -> str:
-	"""DA Visit list filter (DA-211 Phase 6).
+	"""DA Visit list filter (DA-211 Phase 6 / DA-383).
 
-	A Development Agent sees their own DA-ID rows and visits in Kebeles they hold an
-	Effective assignment for. Officers stay on Region / Zone / Woreda grants.
+	Live Supervisor / Executive grants use Frappe DA↔Woreda mapping (RBAC + live
+	kebele). Development Agents see own DA-ID and peer visits in assigned Kebeles.
 	"""
 	user = user or frappe.session.user
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return ""
 	t = "`tabDA Visit`"
+	oversight = get_officer_scope_context(user)
+	if oversight is not None:
+		da_ids = da_ids_for_woreda_grant(oversight)
+		if not da_ids:
+			return DENY
+		return f"{t}.`da_id` in ({_sql_in(da_ids)})"
 	if ctx.has_any_role(C.ROLE_DA):
 		if not ctx.da_ids:
 			return DENY
@@ -137,8 +144,6 @@ def da_visit_query_conditions(user: str | None = None) -> str:
 		if not kebeles:
 			return own
 		return f"({own} or {t}.`kebele` in ({_sql_in(kebeles)}))"
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		return _officer_scope_clause(t, ctx)
 	return DENY
 
 
@@ -163,6 +168,13 @@ def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return True
+	oversight = get_officer_scope_context(user)
+	if oversight is not None:
+		if doc.da_id not in set(da_ids_for_woreda_grant(oversight)):
+			return False
+		if ptype != "read" and not oversight.has_any_role(C.ROLE_SUPERVISOR):
+			return False
+		return True
 	if ctx.has_any_role(C.ROLE_DA):
 		if ctx.owns_da(doc.da_id):
 			return True
@@ -173,10 +185,6 @@ def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -
 		from da_services.services.farmers import _get_da_assigned_kebeles
 
 		return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
-	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		return ctx.covers(doc.region, doc.woreda, doc.zone)
-	if ctx.has_any_role(C.ROLE_EXECUTIVE):
-		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
 	return False
 
 
@@ -305,13 +313,11 @@ def has_da_survey_template_permission(doc, ptype: str = "read", user: str | None
 
 
 def da_survey_response_query_conditions(user: str | None = None) -> str:
-	"""Survey-response read scope, with active-officer precedence over the DA role.
+	"""Survey-response read scope: live Supervisor/Executive grant, else DA collector.
 
-	A dual-role user (DA + Supervisor/Executive) is treated as the officer for reads,
-	matching ``list_responses`` / ``export_responses``. A pure DA still sees only rows
-	they collected. Officer precedence requires a *live* officer assignment, not just
-	the role string: the RBAC controller attaches roles add-only, so an expired grant
-	must not widen a DA to Woreda-wide rows through the scope on the DA grant itself.
+	Matches ``list_responses`` / ``export_responses``. Officer scope requires a *live*
+	officer assignment (not the role string alone). A Development Agent sees only rows
+	they collected.
 	"""
 	user = user or frappe.session.user
 	ctx = get_scope_context(user)

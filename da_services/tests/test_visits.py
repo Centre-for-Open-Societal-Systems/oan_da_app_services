@@ -6,15 +6,25 @@ from frappe.utils import add_days, add_to_date, now_datetime, today
 
 from da_services.services import constants as C
 from da_services.services import visits
-from da_services.tests.fixtures import ensure_kebele_assignment
+from da_services.tests.fixtures import (
+	clear_rbac_for_users,
+	clear_tasks_for,
+	clear_test_kebele_assignments_for,
+	clear_visits_for,
+	ensure_kebele_assignment,
+)
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "visit-da1@da.local"  # DA-000001, ET04 / ET04-W01
+DA2 = "visit-da2@da.local"  # DA-000002, ET04 / ET04-W01
 DA3 = "visit-da3@da.local"  # DA-000003, ET03
 SUP = "visit-sup@da.local"  # Supervisor ET04 / ET04-W01
 EXEC = "visit-exec@da.local"  # Executive ET04
 COMMS = "visit-comms@da.local"
 ADMIN = "Administrator"
+_USERS = (DA1, DA2, DA3, SUP, EXEC, COMMS)
+# Farmers used by this module (incl. FR-0..FR-9 from list pagination loops).
+_VISIT_FARMERS = (*tuple(f"FR-{i}" for i in range(10)), "FR-88466", "FR-77001", "FR-blank-geo")
 
 
 def _user(email, roles):
@@ -46,24 +56,33 @@ def _ctx(user):
 	return get_scope_context(user)
 
 
+def _clear_visit_module_rows():
+	"""Wipe only this module's fixtures — keep Postman/manual site data."""
+	clear_visits_for(owners=(*_USERS, ADMIN), farmer_ids=_VISIT_FARMERS)
+	clear_tasks_for(owners=(*_USERS, ADMIN), farmer_ids=_VISIT_FARMERS)
+	clear_rbac_for_users(*_USERS)
+	clear_test_kebele_assignments_for("DA-000001", "DA-000002", "DA-000003")
+
+
 class TestDAVisit(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user(ADMIN)
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
+		_clear_visit_module_rows()
 		_user(DA1, [C.ROLE_DA])
+		_user(DA2, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
 		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(DA3, C.ROLE_DA, da_id="DA-000003", region_scope="ET03", woreda_scope="ET03-W02")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
 		_grant(COMMS, C.ROLE_COMMS)
 		# DA lists are scoped to the Effective Kebele posting, which matches the registry kebele.
 		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
+		ensure_kebele_assignment("DA-000002", "ET04-W01-K07")
 		self.tomorrow = f"{add_days(today(), 1)} 09:00:00"
 		self.v1 = visits.plan_visit(
 			farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", purpose="Crop inspection", ctx=_ctx(DA1)
@@ -75,10 +94,7 @@ class TestDAVisit(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user(ADMIN)
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		_clear_visit_module_rows()
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	# -- plan ---------------------------------------------------------------------
@@ -105,6 +121,8 @@ class TestDAVisit(IntegrationTestCase):
 		self.assertEqual(out["assigned_by"], SUP)
 		with self.assertRaises(frappe.PermissionError):
 			visits.plan_visit(farmer_id="FR-3", scheduled_at=self.tomorrow, da_id="DA-000003", ctx=_ctx(SUP))
+		with self.assertRaises(frappe.ValidationError):
+			visits.plan_visit(farmer_id="FR-2", scheduled_at=self.tomorrow, ctx=_ctx(SUP))
 
 	def test_plan_requires_schedule_and_is_idempotent(self):
 		with self.assertRaises(frappe.ValidationError):
@@ -221,7 +239,8 @@ class TestDAVisit(IntegrationTestCase):
 		self.assertEqual(self._visible(DA1), {"DA-000001"})
 		self.assertEqual(self._visible(SUP), {"DA-000001"})
 		self.assertEqual(self._visible(EXEC), {"DA-000001"})
-		self.assertEqual(self._visible(ADMIN), {"DA-000001", "DA-000003"})
+		# Admin sees all site visits; assert fixture DAs without requiring an empty DB.
+		self.assertTrue({"DA-000001", "DA-000003"}.issubset(self._visible(ADMIN)))
 		frappe.set_user(COMMS)
 		with self.assertRaises(frappe.PermissionError):
 			frappe.get_list("DA Visit", fields=["da_id"])
@@ -283,5 +302,85 @@ class TestDAVisit(IntegrationTestCase):
 			self.assertEqual(total, 1)
 			with self.assertRaises(frappe.PermissionError):
 				visits.list_visits(_ctx(DA1), kebele="ET04-W01-K01")
+		finally:
+			frappe.set_user(ADMIN)
+
+	def test_supervisor_woreda_list_all_statuses_and_filters(self):
+		"""DA-383: Supervisor sees all visits in own Woreda only; filter by status/kebele/da_id/date."""
+		frappe.set_user(ADMIN)
+		v2 = visits.plan_visit(
+			farmer_id="FR-2",
+			scheduled_at=self.tomorrow,
+			da_id="DA-000002",
+			ctx=_ctx(SUP),
+		)
+		visits.submit_outcome(self.v1["name"], observed="ok", ctx=_ctx(DA1))
+
+		frappe.set_user(SUP)
+		try:
+			rows, total = visits.list_visits(_ctx(SUP))
+			da_ids = {r["da_id"] for r in rows}
+			self.assertEqual(da_ids, {"DA-000001", "DA-000002"})
+			self.assertNotIn("DA-000003", da_ids)
+			self.assertGreaterEqual(total, 2)
+			statuses = {r["physical_status"] for r in rows}
+			self.assertIn("Physical Visit Complete", statuses)
+			self.assertIn("Planned", statuses)
+
+			planned, planned_total = visits.list_visits(_ctx(SUP), status="Planned")
+			self.assertEqual(planned_total, 1)
+			self.assertEqual(planned[0]["da_id"], "DA-000002")
+			self.assertEqual(planned[0]["name"], v2["name"])
+
+			completed, completed_total = visits.list_visits(_ctx(SUP), status="Completed")
+			self.assertEqual(completed_total, 1)
+			self.assertEqual(completed[0]["name"], self.v1["name"])
+			self.assertEqual(completed[0]["physical_status"], "Physical Visit Complete")
+
+			by_kebele, kebele_total = visits.list_visits(_ctx(SUP), kebele="ET04-W01-K03")
+			self.assertEqual(kebele_total, 1)
+			self.assertEqual(by_kebele[0]["name"], self.v1["name"])
+
+			by_da, da_total = visits.list_visits(_ctx(SUP), da_id="DA-000002")
+			self.assertEqual(da_total, 1)
+			self.assertEqual(by_da[0]["name"], v2["name"])
+
+			by_date, date_total = visits.list_visits(_ctx(SUP), date=today())
+			self.assertEqual(date_total, 1)
+			self.assertEqual(by_date[0]["name"], self.v1["name"])
+
+			by_range, range_total = visits.list_visits(
+				_ctx(SUP), from_date=today(), to_date=add_days(today(), 1)
+			)
+			self.assertEqual(range_total, 2)
+			self.assertEqual({r["name"] for r in by_range}, {self.v1["name"], v2["name"]})
+
+			with self.assertRaises(frappe.PermissionError):
+				visits.list_visits(_ctx(SUP), woreda="ET03-W02")
+			with self.assertRaises(frappe.PermissionError):
+				visits.list_visits(_ctx(SUP), kebele="ET03-W02-K01")
+
+			# Other-Woreda DA is not in the Supervisor Woreda mapping → 403.
+			with self.assertRaises(frappe.PermissionError):
+				visits.list_visits(_ctx(SUP), da_id="DA-000003")
+
+			# Mapped DA still listed when visit.woreda is blank/stale (DB DA↔Woreda mapping).
+			frappe.set_user(ADMIN)
+			blank = visits.plan_visit(
+				farmer_id="FR-blank-geo",
+				scheduled_at=self.tomorrow,
+				da_id="DA-000001",
+				ctx=_ctx(SUP),
+			)
+			frappe.db.set_value(
+				"DA Visit",
+				blank["name"],
+				{"region": None, "woreda": None, "kebele": None},
+				update_modified=False,
+			)
+			frappe.set_user(SUP)
+			blank_rows, blank_total = visits.list_visits(_ctx(SUP), da_id="DA-000001")
+			self.assertGreaterEqual(blank_total, 1)
+			self.assertIn(blank["name"], {r["name"] for r in blank_rows})
 		finally:
 			frappe.set_user(ADMIN)

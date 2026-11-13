@@ -1,6 +1,12 @@
 """Shared test fixtures for DA Services tests."""
 
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 import frappe
+
+from da_services.da_services.doctype.da_kebele_assignment.da_kebele_assignment import LIVE_STATES
 
 # DocTypes whose JSON can be ahead of a site that has not been migrated yet.
 # Integration tests reload them so the DB columns and Select options match the app.
@@ -9,6 +15,65 @@ _SCHEMA_DOCTYPES = (
 	("da_integration_event", "DA Integration Event"),
 	("da_survey_parameter", "DA Survey Parameter"),
 )
+
+# Kebele codes owned by the shared test admin-area fixture (safe to replace per DA).
+_TEST_KEBELE_PREFIXES = ("ET04-W01", "ET03-W02", "Bako")
+
+
+def clear_rbac_for_users(*users: str) -> None:
+	"""Delete RBAC rows for the given test users only — never the whole table."""
+	wanted = [u for u in users if u]
+	if wanted:
+		frappe.db.delete("DA RBAC Assignment", {"user": ("in", wanted)})
+
+
+def clear_visits_for(
+	*,
+	owners: Sequence[str] = (),
+	farmer_ids: Sequence[str] = (),
+) -> None:
+	"""Delete visits created by tests (owner and/or known test farmer ids)."""
+	if owners:
+		frappe.db.delete("DA Visit", {"owner": ("in", list(owners))})
+	if farmer_ids:
+		frappe.db.delete("DA Visit", {"farmer_id": ("in", list(farmer_ids))})
+
+
+def clear_tasks_for(*, owners: Sequence[str] = (), farmer_ids: Sequence[str] = ()) -> None:
+	if owners:
+		frappe.db.delete("DA Task", {"owner": ("in", list(owners))})
+	if farmer_ids:
+		frappe.db.delete("DA Task", {"farmer_id": ("in", list(farmer_ids))})
+
+
+def clear_notifications_for(*users: str) -> None:
+	wanted = [u for u in users if u]
+	if wanted:
+		frappe.db.delete("DA Notification", {"user": ("in", wanted)})
+
+
+def _is_test_fixture_kebele(kebele: str) -> bool:
+	return any(
+		kebele == p or kebele.startswith(f"{p}-") or kebele.startswith(p) for p in _TEST_KEBELE_PREFIXES
+	)
+
+
+def clear_test_kebele_assignments_for(*da_ids: str) -> None:
+	"""Remove only ET04/ET03 fixture kebele rows for the given DAs (never other Woredas).
+
+	Uses SQL delete: DocType ``on_trash`` forbids delete_doc (history / supersede).
+	"""
+	for da_id in da_ids:
+		if not da_id:
+			continue
+		rows = frappe.get_all(
+			"DA Kebele Assignment",
+			filters={"da_id": da_id},
+			fields=["name", "kebele"],
+		)
+		names = [row.name for row in rows if _is_test_fixture_kebele(row.kebele or "")]
+		if names:
+			frappe.db.delete("DA Kebele Assignment", {"name": ("in", names)})
 
 
 def ensure_doctype_schema(*doctypes: str) -> None:
@@ -57,13 +122,24 @@ def ensure_administrative_area(code: str, level: str, parent: str | None, name_e
 
 
 def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic") -> None:
-	"""Replace this DA's assignments with one Effective posting for `kebele`.
+	"""Ensure one Effective posting for ``da_id`` → ``kebele`` without wiping other Woredas.
 
-	Visit and farmer lists for a Development Agent are scoped to Effective
-	DA Kebele Assignment rows, so tests that read those lists need one.
+	Only removes/replaces live rows for this DA that already sit on the shared
+	ET04/ET03 test fixture kebeles (or this exact kebele). Manual/SSO postings
+	under other codes (e.g. ET01010101) are left alone.
 	"""
 	create_administrative_areas()
-	frappe.db.delete("DA Kebele Assignment", {"da_id": da_id})
+	existing = frappe.get_all(
+		"DA Kebele Assignment",
+		filters={"da_id": da_id, "state": ("in", list(LIVE_STATES))},
+		fields=["name", "kebele", "state"],
+	)
+	names = [
+		row.name for row in existing if row.kebele == kebele or _is_test_fixture_kebele(row.kebele or "")
+	]
+	if names:
+		# on_trash refuses delete_doc; tests clear fixture rows via SQL.
+		frappe.db.delete("DA Kebele Assignment", {"name": ("in", names)})
 	frappe.get_doc(
 		{
 			"doctype": "DA Kebele Assignment",
