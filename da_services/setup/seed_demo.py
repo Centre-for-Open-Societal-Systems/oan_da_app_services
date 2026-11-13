@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 import frappe
-from frappe.utils import add_days, today
+from frappe.utils import add_days, now_datetime, today
 
 from da_services.integrations.da_registry.mock import FIXTURE_GEO
 from da_services.services import assignments, notifications, tasks, visits
@@ -31,6 +31,7 @@ USERS = [
 		{"da_id": "DA-000001", "region_scope": "ET04", "woreda_scope": "ET04-W01"},
 	),
 	("sup.demo@da.local", "Almaz", C.ROLE_SUPERVISOR, {"region_scope": "ET04", "woreda_scope": "ET04-W01"}),
+	("exec.demo@da.local", "Catherine", C.ROLE_EXECUTIVE, {"region_scope": "ET04"}),
 ]
 
 DA_ID = "DA-000001"
@@ -147,7 +148,7 @@ def _areas() -> None:
 def _assignments(ctx) -> None:
 	assignments.assign(
 		da_id=DA_ID,
-		kebele="ET04-W01-K03",
+		kebele="ET04-W01-K01",
 		effective_date=add_days(today(), -400),
 		reason="Seeded demo posting",
 		mode="Automatic",
@@ -168,6 +169,73 @@ def _notifications() -> None:
 			notifications.notify(user, kind=kind, title=title, body=body, event=event, da_id=DA_ID)
 
 
+def _create_farmer_references(ctx) -> None:
+	"""Create DA Farmer Reference entries for mock farmers in the demo DA's scope."""
+	mock_farmers = [
+		{
+			"farmer_id": "farmer-uuid-001",
+			"reg_id": "FR-000101",
+			"farmer_name": "Abebe Kebede",
+			"region": "ET04",
+			"woreda": "ET04-W01",
+			"kebele": "Bako 01",
+			"phone": "911234567",
+		},
+		{
+			"farmer_id": "farmer-uuid-002",
+			"reg_id": "FR-000102",
+			"farmer_name": "Almaz Tesfaye",
+			"region": "ET04",
+			"woreda": "ET04-W01",
+			"kebele": "Bako 02",
+			"phone": "922345678",
+		},
+	]
+	for farmer in mock_farmers:
+		if not frappe.db.exists("DA Farmer Reference", farmer["farmer_id"]):
+			doc = frappe.get_doc(
+				{
+					"doctype": "DA Farmer Reference",
+					"farmer_id": farmer["farmer_id"],
+					"reg_id": farmer["reg_id"],
+					"farmer_name": farmer["farmer_name"],
+					"given_name": farmer["farmer_name"].split()[0],
+					"family_name": farmer["farmer_name"].split()[-1] if len(farmer["farmer_name"].split()) > 1 else "",
+					"region": farmer["region"],
+					"woreda": farmer["woreda"],
+					"kebele": farmer["kebele"],
+					"phone": farmer["phone"],
+					"registration_state": "APPROVED",
+					"registered_at": now_datetime(),
+					"total_land_hectares": 2.5,
+					"land_ownership_type": "OWNER",
+				}
+			)
+			doc.insert(ignore_permissions=True, ignore_links=True)
+
+
+def _create_farmer_links(ctx) -> None:
+	"""Create DA Farmer Link entries linking the demo DA to registered farmers."""
+	# Link both farmers to the demo DA (idempotent: skip if link already exists)
+	for farmer_id in ["farmer-uuid-001", "farmer-uuid-002"]:
+		exists = frappe.db.exists(
+			"DA Farmer Link",
+			{"da_id": DA_ID, "farmer_id": farmer_id, "is_active": 1},
+		)
+		if exists:
+			continue
+		doc = frappe.get_doc(
+			{
+				"doctype": "DA Farmer Link",
+				"da_id": DA_ID,
+				"farmer_id": farmer_id,
+				"link_type": "Automatic",
+				"is_active": 1,
+			}
+		)
+		doc.insert(ignore_permissions=True, ignore_links=True)
+
+
 def run(force: str | int | bool = False) -> dict:
 	if not (frappe.conf.get("developer_mode") or str(force).lower() in ("1", "true", "yes")):
 		frappe.throw("seed_demo only runs on a developer_mode site (or with force=1).")
@@ -179,6 +247,8 @@ def run(force: str | int | bool = False) -> dict:
 	_assignments(ctx)
 	_visits(ctx)
 	_tasks(ctx)
+	_create_farmer_references(ctx)
+	_create_farmer_links(ctx)
 	_notifications()
 	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 	counts = {
@@ -187,6 +257,8 @@ def run(force: str | int | bool = False) -> dict:
 		"notifications": frappe.db.count("DA Notification", {"user": "da.demo@da.local"}),
 		"areas": frappe.db.count("DA Administrative Area"),
 		"assignments": frappe.db.count("DA Kebele Assignment", {"da_id": DA_ID}),
+		"farmer_references": frappe.db.count("DA Farmer Reference", {"farmer_id": ("in", ["farmer-uuid-001", "farmer-uuid-002"])}),
+		"farmer_links": frappe.db.count("DA Farmer Link", {"da_id": DA_ID, "is_active": 1}),
 	}
 	print(f"seed_demo: {counts}")
 	return counts

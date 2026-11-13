@@ -413,7 +413,7 @@ def list_farmers(
 		if not assigned_kebeles:
 			# DA has no Kebele assignment - empty list
 			return [], 0
-		filters["kebele"] = ("in", assigned_kebeles)
+		filters["kebele"] = ("in", list(set(assigned_kebeles) | set(_area_names(assigned_kebeles))))
 		# Live registry: fill the cache for Kebeles we have never synced.
 		_ensure_registry_cache(kebeles=assigned_kebeles)
 
