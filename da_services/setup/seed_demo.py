@@ -200,7 +200,9 @@ def _create_farmer_references(ctx) -> None:
 					"reg_id": farmer["reg_id"],
 					"farmer_name": farmer["farmer_name"],
 					"given_name": farmer["farmer_name"].split()[0],
-					"family_name": farmer["farmer_name"].split()[-1] if len(farmer["farmer_name"].split()) > 1 else "",
+					"family_name": farmer["farmer_name"].split()[-1]
+					if len(farmer["farmer_name"].split()) > 1
+					else "",
 					"region": farmer["region"],
 					"woreda": farmer["woreda"],
 					"kebele": farmer["kebele"],
@@ -257,7 +259,9 @@ def run(force: str | int | bool = False) -> dict:
 		"notifications": frappe.db.count("DA Notification", {"user": "da.demo@da.local"}),
 		"areas": frappe.db.count("DA Administrative Area"),
 		"assignments": frappe.db.count("DA Kebele Assignment", {"da_id": DA_ID}),
-		"farmer_references": frappe.db.count("DA Farmer Reference", {"farmer_id": ("in", ["farmer-uuid-001", "farmer-uuid-002"])}),
+		"farmer_references": frappe.db.count(
+			"DA Farmer Reference", {"farmer_id": ("in", ["farmer-uuid-001", "farmer-uuid-002"])}
+		),
 		"farmer_links": frappe.db.count("DA Farmer Link", {"da_id": DA_ID, "is_active": 1}),
 	}
 	print(f"seed_demo: {counts}")
