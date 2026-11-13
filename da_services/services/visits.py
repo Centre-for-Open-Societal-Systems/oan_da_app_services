@@ -294,6 +294,7 @@ def _da_can_read_peer_kebele(doc, ctx: ScopeContext) -> bool:
 
 def _apply_supervisor_visit_filters(
 	filters: dict,
+	or_filters: list,
 	ctx: ScopeContext,
 	*,
 	region: str | None,
@@ -302,12 +303,12 @@ def _apply_supervisor_visit_filters(
 	kebele: str | None,
 	da_id: str | None,
 ) -> bool:
-	"""Scope Supervisor/Executive lists to DAs mapped to the grant in Frappe DB.
+	"""Scope Supervisor/Executive lists: Woreda DA-map and/or Zone/Region geography.
 
-	Mapping = live ``DA RBAC Assignment`` / live ``DA Kebele Assignment``
-	(Proposed/Validated/Flagged/Effective). Optional area picks are validated via
-	Admin Area; ``da_id`` must be mapped. Returns False when no DAs are mapped.
-
+	Woreda grants use live ``DA RBAC Assignment`` / ``DA Kebele Assignment`` DA-IDs
+	(DA-383). Zone grants filter on ``visit.zone``; Region-only on ``visit.region``.
+	A Woreda+Zone grant ORs both. Optional area / ``da_id`` picks must stay in scope.
+	Returns False when the grant resolves to nothing.
 	"""
 	area = area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
 	filters.update(area)
@@ -316,18 +317,58 @@ def _apply_supervisor_visit_filters(
 	if not picked_woreda and isinstance(area.get("woreda"), str):
 		picked_woreda = area["woreda"]
 
-	scoped_das = da_service.da_ids_for_woreda_grant(ctx, woreda=picked_woreda)
-	if not scoped_das:
-		return False
-
 	da_id = (da_id or "").strip() or None
+	woreda_grant = bool(ctx.woreda_scopes)
+	zone_grant = bool(ctx.zone_scopes)
+	region_only = bool(ctx.region_scopes) and not woreda_grant and not zone_grant
+
+	scoped_das: list[str] = []
+	if woreda_grant:
+		scoped_das = da_service.da_ids_for_woreda_grant(ctx, woreda=picked_woreda)
+
 	if da_id:
-		if da_id not in scoped_das:
+		allowed = False
+		if woreda_grant and da_id in scoped_das:
+			allowed = True
+		elif zone_grant or region_only:
+			get_da_reference(da_id, ctx)
+			allowed = True
+		if not allowed:
 			frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
 		filters["da_id"] = da_id
-	else:
+		return True
+
+	# Client already narrowed via area filters — keep those; add Woreda DA map when needed.
+	if area:
+		if woreda_grant and picked_woreda:
+			if not scoped_das:
+				return False
+			filters["da_id"] = scoped_das[0] if len(scoped_das) == 1 else ("in", scoped_das)
+		return True
+
+	if woreda_grant and zone_grant:
+		parts: list[list] = []
+		if scoped_das:
+			parts.append(["da_id", "in", scoped_das])
+		parts.append(["zone", "in", list(ctx.zone_scopes)])
+		or_filters.extend(parts)
+		return True
+
+	if woreda_grant:
+		if not scoped_das:
+			return False
 		filters["da_id"] = scoped_das[0] if len(scoped_das) == 1 else ("in", scoped_das)
-	return True
+		return True
+
+	if zone_grant:
+		filters["zone"] = ("in", list(ctx.zone_scopes))
+		return True
+
+	if region_only:
+		filters["region"] = ("in", list(ctx.region_scopes))
+		return True
+
+	return False
 
 
 def _load_in_scope(name: str, ctx: ScopeContext, write: bool = False):
@@ -335,13 +376,19 @@ def _load_in_scope(name: str, ctx: ScopeContext, write: bool = False):
 	if ctx.unrestricted:
 		return doc
 
-	# Supervisor/Executive: live officer grant → DAs mapped to the Woreda in Frappe DB.
+	# Supervisor/Executive: Woreda → mapped DA-IDs; Zone/Region → visit geography.
 	oversight = get_officer_scope_context(ctx.user)
 	if oversight is not None:
 		if write and not oversight.has_any_role(C.ROLE_SUPERVISOR):
 			# Executives stay read-only on visits.
 			frappe.throw(_("Visit {0} is outside your scope.").format(name), frappe.PermissionError)
-		if doc.da_id and doc.da_id in set(da_service.da_ids_for_woreda_grant(oversight)):
+		if (
+			oversight.woreda_scopes
+			and doc.da_id
+			and doc.da_id in set(da_service.da_ids_for_woreda_grant(oversight))
+		):
+			return doc
+		if oversight.covers(doc.region, doc.woreda, doc.zone):
 			return doc
 		frappe.throw(_("Visit {0} is outside your scope.").format(name), frappe.PermissionError)
 
@@ -680,6 +727,7 @@ def list_visits(
 	if oversight is not None:
 		if not _apply_supervisor_visit_filters(
 			filters,
+			or_filters,
 			oversight,
 			region=region,
 			zone=zone,

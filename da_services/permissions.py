@@ -117,11 +117,42 @@ def has_da_leave_request_permission(doc, ptype: str = "read", user: str | None =
 	return has_da_scoped_permission(doc, ptype, user)
 
 
+def _visit_officer_clause(table: str, oversight) -> str:
+	"""Officer DA Visit list SQL (DA-383 Woreda DA-map OR Zone/Region geography).
+
+	Woreda grants match visits for DAs mapped in Frappe DB (RBAC + live kebele), so
+	rows with blank geography still appear. Zone grants match ``visit.zone``; a
+	Region-only grant matches ``visit.region``. Woreda + Zone grants are OR-ed.
+	Missing zone/woreda on the row never widens a narrow grant.
+	"""
+	clauses: list[str] = []
+	if oversight.woreda_scopes:
+		da_ids = da_ids_for_woreda_grant(oversight)
+		if da_ids:
+			clauses.append(f"{table}.`da_id` in ({_sql_in(da_ids)})")
+	if oversight.zone_scopes:
+		clauses.append(f"{table}.`zone` in ({_sql_in(oversight.zone_scopes)})")
+	if not oversight.woreda_scopes and not oversight.zone_scopes and oversight.region_scopes:
+		clauses.append(f"{table}.`region` in ({_sql_in(oversight.region_scopes)})")
+	if not clauses:
+		return DENY
+	return clauses[0] if len(clauses) == 1 else "(" + " or ".join(clauses) + ")"
+
+
+def _officer_can_access_visit(doc, oversight, *, write: bool = False) -> bool:
+	"""Single-doc mirror of ``_visit_officer_clause`` (Woreda DA-map or geography)."""
+	if write and not oversight.has_any_role(C.ROLE_SUPERVISOR):
+		return False
+	if oversight.woreda_scopes and doc.da_id and doc.da_id in set(da_ids_for_woreda_grant(oversight)):
+		return True
+	return bool(oversight.covers(doc.region, doc.woreda, doc.zone))
+
+
 def da_visit_query_conditions(user: str | None = None) -> str:
 	"""DA Visit list filter (DA-211 Phase 6 / DA-383).
 
-	Live Supervisor / Executive grants use Frappe DA↔Woreda mapping (RBAC + live
-	kebele). Development Agents see own DA-ID and peer visits in assigned Kebeles.
+	Live Supervisor / Executive: Woreda → DA↔Woreda map; Zone/Region → visit
+	geography. Development Agents see own DA-ID and peer visits in assigned Kebeles.
 	"""
 	user = user or frappe.session.user
 	ctx = get_scope_context(user)
@@ -130,10 +161,7 @@ def da_visit_query_conditions(user: str | None = None) -> str:
 	t = "`tabDA Visit`"
 	oversight = get_officer_scope_context(user)
 	if oversight is not None:
-		da_ids = da_ids_for_woreda_grant(oversight)
-		if not da_ids:
-			return DENY
-		return f"{t}.`da_id` in ({_sql_in(da_ids)})"
+		return _visit_officer_clause(t, oversight)
 	if ctx.has_any_role(C.ROLE_DA):
 		if not ctx.da_ids:
 			return DENY
@@ -170,11 +198,7 @@ def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -
 		return True
 	oversight = get_officer_scope_context(user)
 	if oversight is not None:
-		if doc.da_id not in set(da_ids_for_woreda_grant(oversight)):
-			return False
-		if ptype != "read" and not oversight.has_any_role(C.ROLE_SUPERVISOR):
-			return False
-		return True
+		return _officer_can_access_visit(doc, oversight, write=(ptype != "read"))
 	if ctx.has_any_role(C.ROLE_DA):
 		if ctx.owns_da(doc.da_id):
 			return True

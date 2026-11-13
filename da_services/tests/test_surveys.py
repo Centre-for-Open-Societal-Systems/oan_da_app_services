@@ -136,6 +136,8 @@ def _questions():
 class TestSurveys(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
+		frappe.conf.farmer_registry_backend = "mock"
 		ensure_doctype_schema("DA Survey Parameter")
 		create_administrative_areas()
 		self._clean()
@@ -205,6 +207,10 @@ class TestSurveys(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		if self._farmer_backend is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = self._farmer_backend
 		self._clean()
 		MockDARegistryClient.reset()
 

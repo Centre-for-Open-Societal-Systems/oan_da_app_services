@@ -215,12 +215,13 @@ Schedule mode (from the priority list) presets `reason`, `visitType`, `level`.
 
 ### 2.7 Visits list (`/visits`, Supervisor nav item; DA reaches it from the dashboard tile)
 
-Supervisor (role from access token / ScopeContext) lists visits for DAs mapped to their Woreda in
-Frappe DB (`DA RBAC Assignment` + live `DA Kebele Assignment` in Proposed/Validated/Flagged/Effective) —
-planned, completed, and other history — never another Woreda’s agents. Not `visit.woreda` fallback /
-not the registry mock. Same route for DA self-list. Optional filters: `status`, `kebele`, `da_id`,
-`date` or `from`+`to`, `region`/`zone`/`woreda`. Out-of-scope area or DA → 403. Docs:
-[visits-integration.md](visits-integration.md), [visits-frontend.md](visits-frontend.md).
+Supervisor Woreda grant (role from access token / ScopeContext) lists visits for DAs mapped to that
+Woreda in Frappe DB (`DA RBAC Assignment` + live `DA Kebele Assignment` in Proposed/Validated/Flagged/
+Effective) — planned, completed, and other history — never another Woreda’s agents. Zone grants use
+`visit.zone`; Region-only grants use `visit.region` (blank geography does not widen a narrow grant).
+Not `visit.woreda` fallback / not the registry mock. Same route for DA self-list. Optional filters:
+`status`, `kebele`, `da_id`, `date` or `from`+`to`, `region`/`zone`/`woreda`. Out-of-scope area or DA
+→ 403. Docs: [visits-integration.md](visits-integration.md), [visits-frontend.md](visits-frontend.md).
 
 API row (`serialize`): `name`, `da_id`, `farmer_id`, `ui_status` (Planned | Confirmed | Completed | Missed),
 `physical_status`, `scheduled_at`, `kebele`, `woreda`, `purpose`, `plot_ref`, `duration_min`, `assigned_by`, ….

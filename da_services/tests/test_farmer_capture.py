@@ -30,6 +30,9 @@ FARMERS = {
 
 class TestResolveFarmerForCapture(IntegrationTestCase):
 	def setUp(self):
+		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
+		frappe.conf.farmer_registry_backend = "mock"
+
 		create_administrative_areas()
 		frappe.db.delete("DA Kebele Assignment", {"da_id": ("in", [DA_ID, DA_OTHER])})
 		frappe.db.delete("DA Farmer Reference", {"name": ("in", list(FARMERS))})
@@ -52,6 +55,10 @@ class TestResolveFarmerForCapture(IntegrationTestCase):
 		self.ctx = get_scope_context("Administrator")
 
 	def tearDown(self):
+		if self._farmer_backend is None:
+			frappe.conf.pop("farmer_registry_backend", None)
+		else:
+			frappe.conf.farmer_registry_backend = self._farmer_backend
 		frappe.db.delete("DA Kebele Assignment", {"da_id": ("in", [DA_ID, DA_OTHER])})
 		frappe.db.delete("DA Farmer Reference", {"name": ("in", list(FARMERS))})
 

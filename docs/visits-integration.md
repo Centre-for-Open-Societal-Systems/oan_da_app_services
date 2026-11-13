@@ -25,11 +25,17 @@ Response `data` includes `access_token`, `csrf_token`, and `user` (roles / scope
 | Caller | Default list |
 | --- | --- |
 | Development Agent | Own DA-ID visits; without `da_id`, also peers in assigned Kebeles |
-| Supervisor | Visits for DAs mapped to the Supervisor’s Woreda in DB (`DA RBAC Assignment` / live `DA Kebele Assignment`) |
-| Executive | Same pattern for Region grants |
+| Supervisor (Woreda grant) | Visits for DAs mapped to that Woreda in DB (`DA RBAC Assignment` / live `DA Kebele Assignment`) |
+| Executive / officer (Zone grant) | Visits whose `zone` is in the grant (row geography; blank zone does **not** widen) |
+| Executive (Region-only grant) | Visits whose `region` is in the grant |
+| Mixed Woreda + Zone grants | OR of the Woreda DA-map and the Zone geography rules |
 | Admin | Unrestricted |
 
-Supervisor/Executive scope is **Frappe DB DA↔Woreda mapping** only (live officer grant → RBAC / live kebele; not visit.woreda strings, not the registry mock). Live kebele mapping includes **Proposed, Validated, Flagged, and Effective**. Out-of-scope `woreda` / `kebele` / `da_id` → **403**. Farmer profile is not part of this list gate.
+Officer scope uses the **live** Supervisor/Executive grant (`get_officer_scope_context`), never a client role flag:
+
+- **Woreda grant (DA-383):** Frappe DA↔Woreda mapping (RBAC + live kebele in Proposed/Validated/Flagged/Effective). Not the registry mock. Blank visit geography still appears when `da_id` is mapped.
+- **Zone / Region-only grants:** visit row geography (`zone` / `region`), same deny-not-widen rule as other scoped DocTypes.
+- Out-of-scope `woreda` / `kebele` / `da_id` → **403**. Farmer profile is not part of this list gate.
 
 ## `GET /visits`
 
@@ -45,7 +51,7 @@ Query params (all optional filters inside the caller’s scope):
 | `from` + `to` | Inclusive date range on `scheduled_at` (`date` wins if both present) |
 | (no date) | Open date range |
 | `kebele` / `woreda` / `zone` / `region` | Narrow; must be inside grant |
-| `da_id` | One agent; Supervisor/Executive: must be in the Frappe DA↔Woreda mapping for the grant |
+| `da_id` | One agent; Woreda officers: must be in the Frappe DA↔Woreda map; Zone/Region officers: DA must fall inside grant geography |
 | `farmer_id` | Exact farmer id |
 | `limit` / `start` | Page size (default 50, max 500) and offset |
 

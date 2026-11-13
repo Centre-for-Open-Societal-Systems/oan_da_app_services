@@ -82,7 +82,7 @@ def da_ids_for_woreda_grant(ctx: ScopeContext, *, woreda: str | None = None) -> 
 			)
 			if da
 		)
-	elif ctx.region_scopes:
+	elif ctx.region_scopes and not ctx.zone_scopes:
 		ids.update(_live_da_rbac_ids(region_scopes=set(ctx.region_scopes)))
 	return sorted(ids)
 
