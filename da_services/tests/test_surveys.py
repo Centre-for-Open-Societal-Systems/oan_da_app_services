@@ -133,6 +133,35 @@ def _questions():
 	]
 
 
+def _contract_questions():
+	"""Questions in the Survey Template Management contract shape."""
+	return [
+		{
+			"question_no": 1,
+			"question": "How satisfied are you with the agricultural support?",
+			"answer_type": "rating",
+			"rating_scale": {"min": 1, "max": 5},
+			"required": True,
+		},
+		{
+			"question_no": 2,
+			"question": "Which agricultural services have you received?",
+			"answer_type": "multiple_choice",
+			"options": [
+				{"value": "training", "label": "Training"},
+				{"value": "field_visit", "label": "Field Visit"},
+			],
+			"required": True,
+		},
+		{
+			"question_no": 3,
+			"question": "What improvements would you suggest?",
+			"answer_type": "free_text",
+			"required": False,
+		},
+	]
+
+
 class TestSurveys(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
@@ -309,6 +338,251 @@ class TestSurveys(IntegrationTestCase):
 			self._create(
 				questions=[{"prompt": "x", "type": "single", "options": "OnlyOne", "required": True}]
 			)
+
+	def _create_contract(self, user=SUP, **over):
+		"""Create through the Survey Template Management contract field names."""
+		data = {
+			"template_name": "Meher Input Satisfaction Survey",
+			"survey_type": "Satisfaction",
+			"opens_on": today(),
+			"closes_on": add_days(today(), 14),
+			"farmers_per_da": 20,
+			"woreda": "ET04-W01",
+			"assignment": {"type": "every_da_in_woreda"},
+			"questions": _contract_questions(),
+		}
+		data.update(over)
+		return svc.create_template(ctx=_ctx(user), **data)
+
+	def _contract_error_fields(self, **over):
+		with self.assertRaises(svc.SurveyValidationError) as caught:
+			self._create_contract(**over)
+		return {e["field"]: e["message"] for e in caught.exception.errors}
+
+	def test_contract_create_stores_child_question_records(self):
+		out = self._create_contract()
+		self.assertEqual(out["status"], "Open")
+		self.assertTrue(out["published_at"])
+
+		doc = frappe.get_doc("DA Survey Template", out["id"])
+		# English is the default and only language; no languages array was sent.
+		self.assertIn("English", doc.languages_json)
+		custom = [p for p in doc.parameters if p.response_type not in ("consent", "auto")]
+		self.assertEqual([p.question_no for p in custom], [1, 2, 3])
+		self.assertEqual([p.response_type for p in custom], ["rating", "multi", "text"])
+		self.assertEqual([p.required for p in custom], [1, 1, 0])
+		rating, multi, _text = custom
+		self.assertEqual((rating.rating_min, rating.rating_max), (1, 5))
+		self.assertEqual(
+			[(o["value"], o["label"]) for o in svc._option_rows(multi.options_json)],
+			[("training", "Training"), ("field_visit", "Field Visit")],
+		)
+
+	def test_contract_details_round_trip(self):
+		out = self._create_contract()
+		detail = svc.get_template_details(out["id"], _ctx(SUP))
+		self.assertEqual(detail["id"], out["id"])
+		self.assertEqual(detail["template_name"], "Meher Input Satisfaction Survey")
+		self.assertTrue(detail["template_code"].startswith("FSS-T"))
+		self.assertEqual(detail["survey_type"], "Satisfaction")
+		self.assertEqual(detail["opens_on"], str(today()))
+		self.assertEqual(detail["closes_on"], str(add_days(today(), 14)))
+		self.assertEqual(detail["farmers_per_da"], 20)
+		self.assertEqual(detail["woreda"], "ET04-W01")
+		self.assertEqual(detail["assignment"], {"type": "every_da_in_woreda"})
+		self.assertEqual(detail["status"], "open")
+		self.assertTrue(detail["published_at"])
+		self.assertEqual(detail["created_by"], SUP)
+		# The test fixture inserts under the Administrator session, so the last
+		# modifier is that user even though the creator recorded from the context
+		# is the Supervisor.
+		self.assertEqual(detail["modified_by"], "Administrator")
+		self.assertTrue(detail["created_at"])
+		self.assertTrue(detail["modified_at"])
+		self.assertEqual(
+			detail["questions"],
+			_contract_questions(),
+		)
+
+	def test_contract_rejects_unsupported_answer_types(self):
+		questions = _contract_questions()
+		questions[0]["answer_type"] = "single"
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[1].answer_type", fields)
+
+		questions = _contract_questions()
+		questions[0]["answer_type"] = "checkbox"
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[1].answer_type", fields)
+
+	def test_contract_rejects_invalid_rating_scales(self):
+		for scale in ({"min": 0, "max": 5}, {"min": 1, "max": 6}, {"min": 2, "max": 4}):
+			questions = _contract_questions()
+			questions[0]["rating_scale"] = scale
+			fields = self._contract_error_fields(questions=questions)
+			self.assertIn("questions[1].rating_scale", fields, scale)
+
+		# rating_scale is only allowed for rating questions.
+		questions = _contract_questions()
+		questions[2]["rating_scale"] = {"min": 1, "max": 5}
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[3].rating_scale", fields)
+
+	def test_contract_rejects_invalid_options(self):
+		# Multiple choice needs at least one configured option.
+		questions = _contract_questions()
+		questions[1]["options"] = []
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[2].options", fields)
+
+		# Option values must be unique within the question.
+		questions = _contract_questions()
+		questions[1]["options"] = [
+			{"value": "training", "label": "Training"},
+			{"value": "training", "label": "Training again"},
+		]
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[2].options", fields)
+
+		# options are only allowed for multiple-choice questions.
+		questions = _contract_questions()
+		questions[2]["options"] = [{"value": "a", "label": "A"}]
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[3].options", fields)
+
+	def test_contract_rejects_non_sequential_question_numbers(self):
+		questions = _contract_questions()
+		questions[2]["question_no"] = 4
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions", fields)
+
+		# question_no is required in the contract shape; mixed presence is rejected.
+		questions = _contract_questions()
+		del questions[1]["question_no"]
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions", fields)
+
+		# Missing numbers are assigned from payload order instead.
+		questions = _contract_questions()
+		for q in questions:
+			q.pop("question_no", None)
+		out = self._create_contract(questions=questions)
+		doc = frappe.get_doc("DA Survey Template", out["id"])
+		custom = [p for p in doc.parameters if p.response_type not in ("consent", "auto")]
+		self.assertEqual([p.question_no for p in custom], [1, 2, 3])
+
+	def test_contract_question_and_scalar_validations(self):
+		questions = _contract_questions()
+		questions[0]["question"] = "   "
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[1].question", fields)
+
+		questions = _contract_questions()
+		questions[0]["required"] = "maybe"
+		fields = self._contract_error_fields(questions=questions)
+		self.assertIn("questions[1].required", fields)
+
+		fields = self._contract_error_fields(farmers_per_da=0)
+		self.assertIn("farmers_per_da", fields)
+
+		fields = self._contract_error_fields(template_name="ab")
+		self.assertIn("template_name", fields)
+
+		fields = self._contract_error_fields(closes_on=add_days(today(), -1))
+		self.assertIn("closes_on", fields)
+
+	def test_contract_rejects_unknown_assignment_type(self):
+		with self.assertRaises(frappe.ValidationError):
+			self._create_contract(assignment={"type": "only_some_das"})
+
+	def test_contract_create_is_idempotent(self):
+		first = self._create_contract(client_op_id="contract-op-1")
+		second = self._create_contract(client_op_id="contract-op-1")
+		self.assertEqual(first["id"], second["id"])
+		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+
+	def test_details_defaults_to_english_and_skips_standard_params(self):
+		out = self._create_contract()
+		detail = svc.get_template_details(out["id"], _ctx(SUP))
+		# Only the custom questions appear, in their configured order.
+		self.assertEqual([q["question_no"] for q in detail["questions"]], [1, 2, 3])
+
+	def test_api_create_returns_publish_confirmation(self):
+		frappe.set_user(SUP)
+		try:
+			out = api.create_template(
+				template_name="Meher Input Satisfaction Survey",
+				survey_type="Satisfaction",
+				opens_on=str(today()),
+				closes_on=str(add_days(today(), 14)),
+				farmers_per_da=20,
+				woreda="ET04-W01",
+				assignment={"type": "every_da_in_woreda"},
+				questions=_contract_questions(),
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out["status"], "success")
+		self.assertEqual(out["message"], "Survey template created and published successfully")
+		self.assertEqual(sorted(out["data"].keys()), ["id", "published_at", "status", "template_name"])
+		self.assertEqual(out["data"]["template_name"], "Meher Input Satisfaction Survey")
+		self.assertEqual(out["data"]["status"], "open")
+		self.assertTrue(out["data"]["published_at"])
+
+	def test_api_create_rejects_invalid_input_with_field_details(self):
+		frappe.set_user(SUP)
+		try:
+			out = api.create_template(
+				template_name="Meher Input Satisfaction Survey",
+				survey_type="Satisfaction",
+				opens_on=str(today()),
+				closes_on=str(add_days(today(), 14)),
+				farmers_per_da=0,
+				woreda="ET04-W01",
+				assignment={"type": "every_da_in_woreda"},
+				questions=_contract_questions(),
+			)
+			http_status = frappe.response.get("http_status_code")
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out["status"], "error")
+		self.assertEqual(http_status, 400)
+		self.assertEqual(out["code"], "VALIDATION_ERROR")
+		self.assertIn("farmers_per_da", out["details"])
+
+		# Unsupported answer types are rejected through the same field map.
+		questions = _contract_questions()
+		questions[0]["answer_type"] = "single_choice"
+		frappe.set_user(SUP)
+		try:
+			out = api.create_template(
+				template_name="Meher Input Satisfaction Survey",
+				survey_type="Satisfaction",
+				opens_on=str(today()),
+				closes_on=str(add_days(today(), 14)),
+				farmers_per_da=20,
+				woreda="ET04-W01",
+				assignment={"type": "every_da_in_woreda"},
+				questions=questions,
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out["status"], "error")
+		self.assertIn("questions[1].answer_type", out["details"])
+
+	def test_api_get_template_returns_contract_details(self):
+		survey = self._create_contract()
+		frappe.set_user(SUP)
+		try:
+			out = api.get_template(survey["id"])
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out["status"], "success")
+		self.assertEqual(out["message"], "Survey template retrieved successfully")
+		self.assertEqual(out["data"]["id"], survey["id"])
+		self.assertEqual(out["data"]["template_name"], "Meher Input Satisfaction Survey")
+		self.assertEqual([q["question_no"] for q in out["data"]["questions"]], [1, 2, 3])
+		self.assertNotIn("parameters", out["data"])
 
 	def test_questions_store_multilingual_prompts(self):
 		questions = _questions()
@@ -606,12 +880,18 @@ class TestSurveys(IntegrationTestCase):
 			rows, total = svc.list_templates(_ctx(SUP), status="Closed", limit=1, start=0)
 			self.assertEqual(total, 2)
 			self.assertEqual(len(rows), 1)
-			self.assertEqual(rows[0]["status"], "Closed")
+			# Contract rows carry the lowercase lifecycle status; a manually closed
+			# survey stays closed even though its window has not ended yet.
+			self.assertEqual(rows[0]["status"], "closed")
+			self.assertEqual(rows[0]["id"], stored_closed["id"])
+			self.assertEqual(rows[0]["template_name"], "Stored closed survey")
+			self.assertIn("response_count", rows[0])
+			self.assertEqual(rows[0]["assigned_to"]["woreda"], "ET04-W01")
 
 			rows, total = svc.list_templates(_ctx(SUP), status="Closed", limit=1, start=1)
 			self.assertEqual(total, 2)
 			self.assertEqual(len(rows), 1)
-			self.assertEqual(rows[0]["status"], "Closed")
+			self.assertEqual(rows[0]["status"], "closed")
 
 			rows, total = svc.list_templates(_ctx(SUP), status="Closing soon")
 			self.assertEqual(total, 1)
@@ -621,9 +901,24 @@ class TestSurveys(IntegrationTestCase):
 			self.assertEqual(total, 1)
 			self.assertEqual(rows[0]["id"], open_t["id"])
 
+			# Contract status values: lowercase "open" includes "Closing soon"
+			# (that state still accepts responses); "closed" never does.
+			rows, total = svc.list_templates(_ctx(SUP), status="open")
+			self.assertEqual(total, 2)
+			self.assertEqual({r["id"] for r in rows}, {open_t["id"], soon["id"]})
+			self.assertTrue(all(r["status"] == "open" for r in rows))
+
+			rows, total = svc.list_templates(_ctx(SUP), status="closed")
+			self.assertEqual(total, 2)
+			self.assertEqual({r["status"] for r in rows}, {"closed"})
+
 			# Free-text search is applied before pagination and the total is the
 			# count of the matched set, not the unfiltered table.
 			rows, total = svc.list_templates(_ctx(SUP), q="expired", limit=1, start=0)
+			self.assertEqual(total, 1)
+			self.assertEqual(rows[0]["id"], expired["id"])
+
+			rows, total = svc.list_templates(_ctx(SUP), search="expired")
 			self.assertEqual(total, 1)
 			self.assertEqual(rows[0]["id"], expired["id"])
 
@@ -633,6 +928,20 @@ class TestSurveys(IntegrationTestCase):
 			rows, total = svc.list_templates(_ctx(SUP), limit=2, start=2)
 			self.assertEqual(total, 4)
 			self.assertEqual(len(rows), 2)
+
+			# Contract paging: page/page_size with a default page size of 10.
+			rows, total = svc.list_templates(_ctx(SUP), page=1, page_size=2)
+			self.assertEqual(total, 4)
+			self.assertEqual(len(rows), 2)
+			first_page_ids = {r["id"] for r in rows}
+			rows, total = svc.list_templates(_ctx(SUP), page=2, page_size=2)
+			self.assertEqual(total, 4)
+			self.assertEqual(len(rows), 2)
+			self.assertEqual(first_page_ids & {r["id"] for r in rows}, set())
+
+			# Sorting: oldest first when the order is ascending on creation.
+			rows, _total = svc.list_templates(_ctx(SUP), sort_by="creation", sort_order="asc")
+			self.assertEqual(rows[0]["id"], open_t["id"])
 		finally:
 			frappe.set_user("Administrator")
 
@@ -1489,7 +1798,13 @@ class TestSurveys(IntegrationTestCase):
 			out = api.list_templates(status="Closed", limit=1, start=0)
 			self.assertEqual(out["status"], "success")
 			self.assertEqual(out["meta"]["total"], 2)
-			self.assertEqual(len(out["data"]), 1)
-			self.assertEqual(out["data"][0]["status"], "Closed")
+			self.assertEqual(len(out["data"]["templates"]), 1)
+			self.assertEqual(out["data"]["templates"][0]["status"], "closed")
+			pagination = out["data"]["pagination"]
+			self.assertEqual(pagination["total_records"], 2)
+			self.assertEqual(pagination["page_size"], 1)
+			self.assertEqual(pagination["current_page"], 1)
+			self.assertTrue(pagination["has_next"])
+			self.assertFalse(pagination["has_previous"])
 		finally:
 			frappe.set_user("Administrator")

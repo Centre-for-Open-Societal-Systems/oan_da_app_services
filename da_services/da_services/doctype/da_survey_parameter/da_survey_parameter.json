@@ -6,12 +6,15 @@
  "engine": "InnoDB",
  "field_order": [
   "parameter_id",
+  "question_no",
   "sort_order",
   "prompt",
   "prompts_json",
   "response_type",
   "required",
   "options_json",
+  "rating_min",
+  "rating_max",
   "helper",
   "prefill",
   "condition_parameter_id",
@@ -24,6 +27,13 @@
    "in_list_view": 1,
    "label": "Parameter ID",
    "reqd": 1
+  },
+  {
+   "description": "Question sequence number from the creating client (1..N); empty for the standard consent/auto rows.",
+   "fieldname": "question_no",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Question No"
   },
   {
    "fieldname": "sort_order",
@@ -64,6 +74,20 @@
    "fieldname": "options_json",
    "fieldtype": "Long Text",
    "label": "Options JSON"
+  },
+  {
+   "default": "1",
+   "description": "Rating questions only: minimum accepted rating (must be 1).",
+   "fieldname": "rating_min",
+   "fieldtype": "Int",
+   "label": "Rating Min"
+  },
+  {
+   "default": "5",
+   "description": "Rating questions only: maximum accepted rating (must be 5).",
+   "fieldname": "rating_max",
+   "fieldtype": "Int",
+   "label": "Rating Max"
   },
   {
    "fieldname": "helper",

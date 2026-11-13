@@ -47,6 +47,18 @@ class SurveyConflictError(frappe.ValidationError):
 	http_status_code = 409
 
 
+class SurveyValidationError(frappe.ValidationError):
+	"""Input validation with per-field details (HTTP 400, code VALIDATION_ERROR).
+
+	``errors`` is a list of ``{"field": ..., "message": ...}`` dicts; subclasses
+	``frappe.ValidationError`` so generic ``assertRaises`` callers keep working.
+	"""
+
+	def __init__(self, message, errors=None):
+		super().__init__(message)
+		self.errors = list(errors or [])
+
+
 CREATE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 LIST_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 CAPTURE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
@@ -69,6 +81,42 @@ CHOICE_TYPES = frozenset({"single", "multi", "lookup"})
 CLOSING_SOON_DAYS = 7
 MAX_TEXT = 500
 RATING_VALUES = frozenset({"1", "2", "3", "4", "5"})
+
+# Survey Template Management contract (API requirements doc): exactly three answer
+# types cross the API boundary. ``single`` and ``lookup`` stay internal/legacy: old
+# templates may carry them, but the new ``answer_type`` field rejects them.
+ANSWER_TYPES = ("rating", "multiple_choice", "free_text")
+ANSWER_TYPE_TO_INTERNAL = {"rating": "rating", "multiple_choice": "multi", "free_text": "text"}
+INTERNAL_TO_ANSWER_TYPE = {
+	"rating": "rating",
+	"multi": "multiple_choice",
+	"text": "free_text",
+	"single": "single",
+	"lookup": "lookup",
+}
+# API-facing ``assignment.type`` -> internal assignment mode ("Woreda" / "Selected").
+ASSIGNMENT_TYPE_ALIASES = {
+	"every_da_in_woreda": "Woreda",
+	"woreda": "Woreda",
+	"selected_das": "Selected",
+	"selected": "Selected",
+}
+DEFAULT_RATING_SCALE = {"min": 1, "max": 5}
+# Page sizes shown in the listing UI dropdown. The backend accepts any size 1..200
+# so scriptable callers are not forced through the UI dropdown, but 10 is the default.
+DEFAULT_PAGE_SIZE = 10
+TEMPLATE_SORT_FIELDS = {
+	"creation": "creation",
+	"modified": "modified",
+	"template_name": "title",
+	"name": "title",
+	"survey_type": "survey_type",
+	"type": "survey_type",
+	"opens_on": "window_open",
+	"closes_on": "window_close",
+	"status": "status",
+	"woreda": "woreda",
+}
 
 # XLSX export columns that already exist on DA Survey Response / DA Survey Template.
 # Kept as data so the proposed contract is reviewable in docs/surveys-integration.md.
@@ -191,18 +239,48 @@ def _clean_translations(raw) -> dict:
 	return out
 
 
-def _options_of(raw) -> list[str]:
-	if isinstance(raw, list):
-		return [str(o).strip() for o in raw if str(o).strip()]
-	if not raw:
+def _option_rows(raw) -> list[dict]:
+	"""Options normalised to ``[{"value": v, "label": l}]`` in stored order.
+
+	Accepts the stored JSON (list of objects or plain strings), a literal list,
+	or a comma-separated string from the legacy create form. A plain string option
+	keeps the same text as its value and label.
+	"""
+	if raw in (None, ""):
 		return []
-	if isinstance(raw, str):
-		# Accept JSON list or comma-separated choices from the create form.
+	if isinstance(raw, (list, tuple)):
+		items = list(raw)
+	elif isinstance(raw, str):
 		parsed = _json_load(raw)
 		if isinstance(parsed, list):
-			return [str(o).strip() for o in parsed if str(o).strip()]
-		return list(dict.fromkeys(o.strip() for o in raw.split(",") if o.strip()))
-	return []
+			items = parsed
+		else:
+			items = raw.split(",")
+	else:
+		return []
+	out: list[dict] = []
+	seen: set[str] = set()
+	for item in items:
+		if isinstance(item, dict):
+			value = str(item.get("value") or "").strip()
+			label = str(item.get("label") or "").strip() or value
+		else:
+			value = str(item).strip()
+			label = value
+		if value and value not in seen:
+			out.append({"value": value, "label": label})
+			seen.add(value)
+	return out
+
+
+def _option_values(raw) -> list[str]:
+	"""The configured option values, in stored order."""
+	return [row["value"] for row in _option_rows(raw)]
+
+
+def _options_of(raw) -> list[str]:
+	"""Legacy helper: configured option values as plain strings."""
+	return _option_values(raw)
 
 
 def serialize_parameter(row) -> dict:
@@ -396,6 +474,7 @@ def serialize_survey(
 		"zone": doc.zone,
 		"woreda": doc.woreda,
 		"created_by_user": doc.created_by_user,
+		"published_at": _format_datetime(doc.creation),
 		"assignmentMode": _survey_assignment_mode(doc.name),
 	}
 	if include_assignment:
@@ -422,6 +501,126 @@ def serialize_response(doc) -> dict:
 		"zone": doc.zone,
 		"woreda": doc.woreda,
 		"kebele": doc.kebele,
+	}
+
+
+def _format_datetime(value) -> str | None:
+	""" "2026-11-13 10:30:00" — the contract's datetime form."""
+	if not value:
+		return None
+	return get_datetime(value).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _lifecycle_status(stored_status: str, window_close) -> str:
+	""" "open" | "closed" — the lowercase contract status.
+
+	A manually closed survey stays closed whatever the window says (requirement 7);
+	"Closing soon" is a UI hint only and still accepts responses.
+	"""
+	if stored_status == "Closed":
+		return "closed"
+	if getdate(window_close) < getdate(today()):
+		return "closed"
+	return "open"
+
+
+def _split_template_version(version: str | None) -> tuple[str | None, str | None]:
+	"""``FSS-T5-v1.0`` -> ``("FSS-T5", "1.0")``; unsplit versions pass through whole."""
+	m = re.match(r"^(?P<code>.+)-v(?P<version>\d+\.\d+)$", version or "")
+	if not m:
+		return version or None, None
+	return m.group("code"), m.group("version")
+
+
+def _assigned_to(doc) -> dict:
+	"""The contract's ``assigned_to`` block for the listing screen."""
+	mode = _survey_assignment_mode(doc.name)
+	if mode == "Selected":
+		return {"type": "selected_das", "label": "Selected DAs", "woreda": doc.woreda}
+	return {"type": "woreda", "label": "Whole Woreda", "woreda": doc.woreda}
+
+
+def _response_counts_bulk(survey_ids: list[str]) -> dict[str, int]:
+	"""Collected responses per survey, one aggregate query for the whole page."""
+	if not survey_ids:
+		return {}
+	rows = frappe.db.sql(
+		"""
+		select survey, count(name) as n
+		from `tabDA Survey Response`
+		where survey in %(ids)s
+		  and sync_state in ('Synced', 'Queued')
+		  and (consent is null or consent != 'declined')
+		group by survey
+		""",
+		{"ids": tuple(survey_ids)},
+		as_dict=1,
+	)
+	return {row.survey: int(row.n) for row in rows}
+
+
+def serialize_template_summary(doc, response_count: int = 0, *, can_view_results: bool = True) -> dict:
+	"""Listing row in the Survey Template Management contract shape."""
+	code, version = _split_template_version(doc.template_version)
+	return {
+		"id": doc.name,
+		"template_name": doc.title,
+		"template_code": code,
+		"version": version,
+		"survey_type": doc.survey_type,
+		"opens_on": str(getdate(doc.window_open)),
+		"closes_on": str(getdate(doc.window_close)),
+		"assigned_to": _assigned_to(doc),
+		"response_count": int(response_count or 0),
+		"status": _lifecycle_status(doc.status, doc.window_close),
+		"actions": {"can_view": True, "can_view_results": bool(can_view_results)},
+	}
+
+
+def serialize_template_detail(doc) -> dict:
+	"""Full saved template configuration in the contract shape (View action).
+
+	Template configuration only — responses and results belong to their own APIs.
+	"""
+	mode = _survey_assignment_mode(doc.name)
+	questions = []
+	for index, p in enumerate(
+		(p for p in doc.parameters if p.response_type not in ("consent", "auto")), start=1
+	):
+		question = {
+			"question_no": int(p.question_no or index),
+			"question": p.prompt,
+			"answer_type": INTERNAL_TO_ANSWER_TYPE.get(p.response_type, p.response_type),
+			"required": bool(p.required),
+		}
+		if p.response_type == "rating":
+			question["rating_scale"] = {
+				"min": int(p.rating_min or DEFAULT_RATING_SCALE["min"]),
+				"max": int(p.rating_max or DEFAULT_RATING_SCALE["max"]),
+			}
+		options = _option_rows(p.options_json)
+		if p.response_type in CHOICE_TYPES and options:
+			question["options"] = options
+		questions.append(question)
+	code, version = _split_template_version(doc.template_version)
+	return {
+		"id": doc.name,
+		"template_name": doc.title,
+		"template_code": code,
+		"version": version,
+		"survey_type": doc.survey_type,
+		"opens_on": str(getdate(doc.window_open)),
+		"closes_on": str(getdate(doc.window_close)),
+		"farmers_per_da": int(doc.target_farmers or 0),
+		"woreda": doc.woreda,
+		"assignment": {"type": "every_da_in_woreda" if mode == "Woreda" else "selected_das"},
+		"questions": questions,
+		"status": _lifecycle_status(doc.status, doc.window_close),
+		"published_at": _format_datetime(doc.creation),
+		"created_by": doc.created_by_user or doc.owner,
+		"created_at": _format_datetime(doc.creation),
+		"modified_by": doc.modified_by,
+		"modified_at": _format_datetime(doc.modified),
 	}
 
 
@@ -519,6 +718,11 @@ def _creator_scope(
 	resolved_region = hierarchy.get("region")
 	resolved_zone = hierarchy.get("zone")
 	if not resolved_region or not resolved_zone:
+		frappe.logger("da_services.surveys", allow_site=True).warning(
+			"survey template woreda hierarchy incomplete: woreda=%s hierarchy=%s",
+			woreda_row.name,
+			hierarchy,
+		)
 		frappe.throw(
 			_("Woreda {0} does not have a complete Region / Zone hierarchy.").format(woreda_row.name),
 			frappe.ValidationError,
@@ -587,6 +791,70 @@ def _bump_version(version: str) -> str:
 	return f"{m.group(1)}{major}.{minor + 1}"
 
 
+def _clean_required(value, fail, field: str) -> bool:
+	"""``required`` must be a boolean; tolerant of form posts (0/1/"true")."""
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, int) and value in (0, 1):
+		return bool(value)
+	if isinstance(value, str) and value.strip().lower() in ("true", "false", "1", "0", "yes", "no"):
+		return value.strip().lower() in ("true", "1", "yes")
+	fail(field, _("required must be a boolean."))
+	return True
+
+
+def _clean_question_no(value, fail, index: int, *, required: bool = True) -> int | None:
+	if value in (None, ""):
+		if required:
+			fail(f"questions[{index}].question_no", _("Question {0} needs a question_no.").format(index))
+		return None
+	try:
+		return int(value)
+	except TypeError, ValueError:
+		fail(
+			f"questions[{index}].question_no",
+			_("Question {0} question_no must be an integer.").format(index),
+		)
+		return None
+
+
+def _clean_rating_scale(scale, fail, index: int) -> dict | None:
+	"""Rating questions run from 1 to 5; nothing else reaches storage."""
+	if not isinstance(scale, dict):
+		fail(
+			f"questions[{index}].rating_scale",
+			_("Question {0} needs a rating_scale with min and max.").format(index),
+		)
+		return None
+	try:
+		low, high = int(scale.get("min")), int(scale.get("max"))
+	except TypeError, ValueError:
+		fail(f"questions[{index}].rating_scale", _("The rating scale must run from 1 to 5."))
+		return None
+	if low != 1 or high != 5:
+		fail(f"questions[{index}].rating_scale", _("The rating scale must run from 1 to 5."))
+	return {"min": low, "max": high}
+
+
+def _clean_options(raw, fail, index: int, *, minimum: int) -> list[dict]:
+	rows = _option_rows(raw)
+	if isinstance(raw, list):
+		values = [str((o.get("value") if isinstance(o, dict) else o) or "").strip() for o in raw]
+		dupes = sorted({v for v in values if v and values.count(v) > 1})
+		if dupes:
+			fail(
+				f"questions[{index}].options",
+				_("Option values must be unique within a question: {0}.").format(", ".join(dupes)),
+			)
+			return []
+	if len(rows) < minimum:
+		fail(
+			f"questions[{index}].options",
+			_("Question {0} needs at least {1} option(s).").format(index, minimum),
+		)
+	return rows
+
+
 def _validate_template_input(
 	*,
 	name: str | None,
@@ -597,67 +865,133 @@ def _validate_template_input(
 	target_farmers,
 	questions,
 ) -> tuple:
-	errors: list[str] = []
+	errors: list[dict] = []
+
+	def fail(field: str, message: str) -> None:
+		errors.append({"field": field, "message": str(message)})
+
 	title = (name or "").strip()
 	if len(title) < 3:
-		errors.append(_("Give the template a name."))
+		fail("template_name", _("Give the template a name."))
 	if survey_type not in SURVEY_TYPES:
-		errors.append(_("Survey type must be one of {0}.").format(", ".join(SURVEY_TYPES)))
+		fail("survey_type", _("Survey type must be one of {0}.").format(", ".join(SURVEY_TYPES)))
 	try:
 		start, end = getdate(open_date), getdate(close_date)
 	except Exception:
-		errors.append(_("Set the collection window."))
+		fail("opens_on", _("Set the collection window."))
 		start = end = None
 	else:
 		if not open_date or not close_date:
-			errors.append(_("Set the collection window."))
+			fail("opens_on", _("Set the collection window."))
 		elif end < start:
-			errors.append(_("The window must close after it opens."))
+			fail("closes_on", _("The window must close after it opens."))
 
-	langs = languages if isinstance(languages, list) else []
-	langs = [str(l).strip() for l in langs if str(l).strip()]
-	unknown = [l for l in langs if l not in SURVEY_LANGUAGES]
-	if unknown:
-		errors.append(_("Unknown language: {0}.").format(", ".join(unknown)))
-	if not langs:
-		errors.append(_("Pick at least one language."))
+	# English is the default and only supported language (Survey Template Management
+	# contract); no language array is required in the payload. A languages array is
+	# still accepted from legacy clients, but if sent it must be non-empty and known.
+	if languages is None:
+		langs = [SURVEY_LANGUAGES[0]]
+	else:
+		langs = languages if isinstance(languages, list) else []
+		langs = [str(l).strip() for l in langs if str(l).strip()]
+		unknown = [l for l in langs if l not in SURVEY_LANGUAGES]
+		if unknown:
+			fail("languages", _("Unknown language: {0}.").format(", ".join(unknown)))
+		if not langs:
+			fail("languages", _("Pick at least one language."))
 
 	try:
 		target = int(target_farmers)
 	except TypeError, ValueError:
 		target = 0
 	if target < 1:
-		errors.append(_("Set how many farmers each DA should survey."))
+		fail("farmers_per_da", _("Set how many farmers each DA should survey."))
 
 	qs = questions if isinstance(questions, list) else []
 	if not qs:
-		errors.append(_("Add at least one question."))
+		fail("questions", _("Add at least one question."))
 	clean_questions: list[dict] = []
 	for i, q in enumerate(qs, start=1):
 		if not isinstance(q, dict):
-			errors.append(_("Question {0} is invalid.").format(i))
+			fail(f"questions[{i}]", _("Question {0} is invalid.").format(i))
 			continue
-		prompt = (q.get("prompt") or "").strip()
-		qtype = (q.get("type") or "").strip()
-		if not prompt:
-			errors.append(_("Question {0} needs text.").format(i))
-		if qtype not in CUSTOM_QUESTION_TYPES:
-			errors.append(_("Question {0} has an unsupported type.").format(i))
-		options = _options_of(q.get("options"))
-		if qtype in ("single", "multi") and len(options) < 2:
-			errors.append(_("Question {0} needs at least two choices.").format(i))
-		clean_questions.append(
-			{
-				"prompt": prompt,
-				"type": qtype,
-				"options": options,
-				"required": bool(q.get("required", True)),
-				"translations": _clean_translations(q.get("translations")),
-			}
-		)
+		translations = _clean_translations(q.get("translations"))
+		required = _clean_required(q.get("required", True), fail, f"questions[{i}].required")
+		if "question" in q or "answer_type" in q:
+			# Survey Template Management contract shape.
+			text = (q.get("question") or "").strip()
+			if not text:
+				fail(f"questions[{i}].question", _("Question {0} needs text.").format(i))
+			answer_type = (q.get("answer_type") or "").strip().lower()
+			if answer_type not in ANSWER_TYPES:
+				fail(
+					f"questions[{i}].answer_type",
+					_("Question {0} has an unsupported answer type. Supported types: {1}.").format(
+						i, ", ".join(ANSWER_TYPES)
+					),
+				)
+			question_no = _clean_question_no(q.get("question_no"), fail, i, required=False)
+			rating_scale = None
+			if answer_type == "rating":
+				rating_scale = _clean_rating_scale(q.get("rating_scale"), fail, i)
+			elif q.get("rating_scale") is not None:
+				fail(
+					f"questions[{i}].rating_scale",
+					_("rating_scale is only allowed for rating questions."),
+				)
+			options: list[dict] = []
+			if answer_type == "multiple_choice":
+				options = _clean_options(q.get("options"), fail, i, minimum=1)
+			elif answer_type == "free_text" and q.get("options") not in (None, "", []):
+				fail(f"questions[{i}].options", _("options are only allowed for multiple-choice questions."))
+			clean_questions.append(
+				{
+					"question_no": question_no,
+					"question": text,
+					"answer_type": answer_type,
+					"rating_scale": rating_scale,
+					"options": options,
+					"required": required,
+					"translations": translations,
+				}
+			)
+		else:
+			# Legacy shape (prompt/type). Existing clients and stored templates keep
+			# working; ``single``/``lookup`` remain internal types, not API types.
+			prompt = (q.get("prompt") or "").strip()
+			qtype = (q.get("type") or "").strip()
+			if not prompt:
+				fail(f"questions[{i}].question", _("Question {0} needs text.").format(i))
+			if qtype not in CUSTOM_QUESTION_TYPES:
+				fail(f"questions[{i}].answer_type", _("Question {0} has an unsupported type.").format(i))
+			options = _option_rows(q.get("options"))
+			if qtype in ("single", "multi") and len(options) < 2:
+				fail(f"questions[{i}].options", _("Question {0} needs at least two choices.").format(i))
+			clean_questions.append(
+				{
+					"question_no": _clean_question_no(q.get("question_no"), fail, i, required=False),
+					"question": prompt,
+					"answer_type": INTERNAL_TO_ANSWER_TYPE.get(qtype, qtype),
+					"rating_scale": dict(DEFAULT_RATING_SCALE) if qtype == "rating" else None,
+					"options": options,
+					"required": required,
+					"translations": translations,
+				}
+			)
+
+	# question_no must be unique and sequential (1..N) when supplied; otherwise it
+	# is assigned from the payload order, which is also the stored sort order.
+	provided = [q["question_no"] for q in clean_questions if q.get("question_no") is not None]
+	if provided and len(provided) != len(clean_questions):
+		fail("questions", _("question_no must be set on every question."))
+	elif provided and sorted(provided) != list(range(1, len(clean_questions) + 1)):
+		fail("questions", _("question_no must be unique and sequential from 1."))
+	if not provided:
+		for i, q in enumerate(clean_questions, start=1):
+			q["question_no"] = i
 
 	if errors:
-		frappe.throw(" ".join(str(e) for e in errors), frappe.ValidationError)
+		raise SurveyValidationError(" ".join(e["message"] for e in errors), errors=errors)
 	return title, survey_type, start, end, langs, target, clean_questions
 
 
@@ -665,16 +999,21 @@ def _parameter_rows(questions: list[dict]) -> list[dict]:
 	rows = [dict(p) for p in STANDARD_PARAMS]
 	for i, q in enumerate(questions):
 		order = len(STANDARD_PARAMS) + i + 1
+		internal = ANSWER_TYPE_TO_INTERNAL.get(q["answer_type"], q["answer_type"])
 		row = {
 			"parameter_id": f"p{order}",
 			"sort_order": order,
-			"prompt": q["prompt"],
-			"response_type": q["type"],
+			"question_no": q["question_no"],
+			"prompt": q["question"],
+			"response_type": internal,
 			"required": 1 if q["required"] else 0,
 			"options_json": _json_dump(q["options"]) if q["options"] else None,
 			"prompts_json": _json_dump(q["translations"]) if q["translations"] else None,
 		}
-		if q["type"] == "rating":
+		if internal == "rating":
+			scale = q["rating_scale"] or DEFAULT_RATING_SCALE
+			row["rating_min"] = scale["min"]
+			row["rating_max"] = scale["max"]
 			row["helper"] = "1 = very dissatisfied · 5 = very satisfied"
 		rows.append(row)
 	return rows
@@ -706,21 +1045,25 @@ def _template_payload(
 		"window_close": str(getdate(end)),
 		"languages": sorted(langs),
 		"target_farmers": int(target),
-		"questions": [
-			{
-				"prompt": q["prompt"],
-				"type": q["type"],
-				"options": list(q["options"]),
-				"required": bool(q["required"]),
-				"translations": dict(sorted(q["translations"].items())),
-			}
-			for q in clean_questions
-		],
+		"questions": [_canonical_question(q) for q in clean_questions],
 		"assignment_mode": assignment_mode,
 		"assigned_da_ids": sorted(assigned_da_ids),
 		"region": region,
 		"zone": zone,
 		"woreda": woreda,
+	}
+
+
+def _canonical_question(q: dict) -> dict:
+	"""The idempotency-comparable form of one question, identical from input and storage."""
+	return {
+		"question_no": int(q["question_no"]),
+		"question": q["question"],
+		"answer_type": q["answer_type"],
+		"rating_scale": dict(sorted((q["rating_scale"] or {}).items())) or None,
+		"options": [dict(sorted(o.items())) for o in q["options"]],
+		"required": bool(q["required"]),
+		"translations": dict(sorted(q["translations"].items())),
 	}
 
 
@@ -734,15 +1077,27 @@ def _template_payload_from_doc(doc) -> dict:
 		"languages": sorted(_json_load(doc.languages_json, []) or []),
 		"target_farmers": int(doc.target_farmers or 0),
 		"questions": [
-			{
-				"prompt": p.prompt,
-				"type": p.response_type,
-				"options": _options_of(p.options_json),
-				"required": bool(p.required),
-				"translations": dict(sorted(_translations_of(p.prompts_json).items())),
-			}
-			for p in doc.parameters
-			if p.response_type not in ("consent", "auto")
+			_canonical_question(
+				{
+					"question_no": index,
+					"question": p.prompt,
+					"answer_type": INTERNAL_TO_ANSWER_TYPE.get(p.response_type, p.response_type),
+					"rating_scale": (
+						{
+							"min": int(p.rating_min or DEFAULT_RATING_SCALE["min"]),
+							"max": int(p.rating_max or DEFAULT_RATING_SCALE["max"]),
+						}
+						if p.response_type == "rating"
+						else None
+					),
+					"options": _option_rows(p.options_json),
+					"required": bool(p.required),
+					"translations": _translations_of(p.prompts_json),
+				}
+			)
+			for index, p in enumerate(
+				(p for p in doc.parameters if p.response_type not in ("consent", "auto")), start=1
+			)
 		],
 		"assignment_mode": _survey_assignment_mode(doc.name),
 		"assigned_da_ids": _assigned_da_ids(doc.name),
@@ -763,18 +1118,23 @@ def _find_template_by_client_op(client_op_id: str) -> dict | None:
 
 def create_template(
 	*,
-	name: str | None,
+	name: str | None = None,
+	template_name: str | None = None,
 	type: str | None = None,
 	survey_type: str | None = None,
 	open: str | None = None,
+	opens_on: str | None = None,
 	close: str | None = None,
+	closes_on: str | None = None,
 	languages=None,
 	targetFarmers=None,
 	target_farmers=None,
+	farmers_per_da=None,
 	questions=None,
 	region: str | None = None,
 	zone: str | None = None,
 	woreda: str | None = None,
+	assignment: dict | None = None,
 	assignmentMode: str | None = None,
 	assignment_mode: str | None = None,
 	assignedDaIds=None,
@@ -793,6 +1153,14 @@ def create_template(
 		if officer_ctx is not None:
 			ctx = officer_ctx
 
+	# Survey Template Management contract names first, legacy names as aliases.
+	name = template_name or name
+	open = opens_on or open
+	close = closes_on or close
+	target = farmers_per_da
+	if target is None:
+		target = target_farmers if target_farmers is not None else targetFarmers
+
 	client_op_id = (client_op_id or "").strip() or None
 	existing = None
 	if client_op_id:
@@ -804,7 +1172,6 @@ def create_template(
 				raise SurveyConflictError(_("client_op_id was already used by another user."))
 
 	survey_type = survey_type or type
-	target = target_farmers if target_farmers is not None else targetFarmers
 	title, survey_type, start, end, langs, target, clean_qs = _validate_template_input(
 		name=name,
 		survey_type=survey_type,
@@ -817,6 +1184,18 @@ def create_template(
 	region, zone, woreda = _creator_scope(ctx, region=region, zone=zone, woreda=woreda)
 	mode_input = assignmentMode if assignmentMode is not None else assignment_mode
 	ids_input = assignedDaIds if assignedDaIds is not None else assigned_da_ids
+	if assignment is not None:
+		if not isinstance(assignment, dict):
+			frappe.throw(_("assignment must be an object."), frappe.ValidationError)
+		if mode_input is None:
+			raw_type = str(assignment.get("type") or "").strip().lower()
+			if raw_type and raw_type not in ASSIGNMENT_TYPE_ALIASES:
+				frappe.throw(
+					_("assignment.type must be a supported assignment type."), frappe.ValidationError
+				)
+			mode_input = ASSIGNMENT_TYPE_ALIASES.get(raw_type)
+		if ids_input is None:
+			ids_input = assignment.get("da_ids")
 	assignment_mode, assigned_da_ids = _clean_assignment_input(woreda, mode_input, ids_input, ctx)
 	payload = _template_payload(
 		title=title,
@@ -1005,19 +1384,56 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 def list_templates(
 	ctx: ScopeContext | None = None,
 	*,
+	# Survey Template Management contract parameters.
+	page: int = 1,
+	page_size: int = DEFAULT_PAGE_SIZE,
 	status: str | None = None,
 	type: str | None = None,
+	search: str | None = None,
+	sort_by: str = "creation",
+	sort_order: str = "desc",
+	# Legacy parameters (older clients / previous Postman collection).
 	woreda: str | None = None,
 	q: str | None = None,
-	limit: int = 50,
-	start: int = 0,
+	limit: int | None = None,
+	start: int | None = None,
 ) -> tuple[list[dict], int]:
+	"""Scoped template listing in the contract shape: ``(rows, total_matching)``.
+
+	Filtering and permission scope apply before pagination; response counts come
+	from one aggregate query for the whole page.
+	"""
 	ctx = ctx or require_roles(*RESULTS_ROLES)
-	limit = max(1, min(int(limit or 50), 200))
-	start = max(0, int(start or 0))
-	status = status if status in ("Open", "Closing soon", "Closed") else None
+
+	if limit is not None or start is not None:
+		# Legacy limit/start paging wins when supplied so old clients are unaffected.
+		size = max(1, min(int(limit if limit is not None else page_size), 200))
+		first = max(0, int(start if start is not None else 0))
+	else:
+		size = max(1, min(int(page_size or DEFAULT_PAGE_SIZE), 200))
+		first = (max(1, int(page or 1)) - 1) * size
+
+	# Status mapping: the contract's lowercase values are canonical; the legacy
+	# title-case values stay exact so old callers are unaffected. Lowercase "open"
+	# includes "Closing soon" (that state still accepts responses); "closed" is
+	# either manually closed or past its window.
+	raw_status = status
+	wanted: set[str] | None = None
+	if raw_status in ("all", None, ""):
+		wanted = None
+	elif raw_status == "open":
+		wanted = {"Open", "Closing soon"}
+	elif raw_status == "closed":
+		wanted = {"Closed"}
+	else:  # legacy title-case filter: exact match
+		wanted = {raw_status}
+
+	field = TEMPLATE_SORT_FIELDS.get((sort_by or "creation").strip().lower(), "creation")
+	descending = (sort_order or "desc").strip().lower() != "asc"
+	needle = (search or q or "").strip().lower()
+
 	filters: dict = {}
-	if type:
+	if type and type != "all":
 		filters["survey_type"] = type
 	if woreda:
 		filters.update(area_scope.resolve_area_filters(ctx, woreda=woreda))
@@ -1037,43 +1453,53 @@ def list_templates(
 			"status",
 			"window_open",
 			"window_close",
-			"languages_json",
+			"creation",
 			"modified",
+			"woreda",
 		],
-		order_by="modified desc",
+		order_by="creation desc",
 		limit_page_length=0,
 	)
-	needle = (q or "").strip().lower()
 	matched = []
 	for row in candidates:
 		ui_status = derive_ui_status(row.status, row.window_close)
-		if status and ui_status != status:
+		if wanted and ui_status not in wanted:
 			continue
 		if needle:
-			haystack = " ".join(
-				[
-					row.title or "",
-					row.survey_type or "",
-					row.template_version or "",
-					ui_status,
-					" ".join(_json_load(row.languages_json, []) or []),
-				]
-			).lower()
+			haystack = " ".join([row.title or "", row.survey_type or "", row.template_version or ""]).lower()
 			if needle not in haystack:
 				continue
 		matched.append(row)
 
+	matched.sort(key=lambda row: _sort_key(row, field), reverse=descending)
+
 	total = len(matched)
-	page = matched[start : start + limit]
+	page_rows = matched[first : first + size]
+	counts = _response_counts_bulk([row.name for row in page_rows])
 	rows = [
-		serialize_survey(
-			frappe.get_doc(TEMPLATE_DOCTYPE, row.name),
-			include_parameters=False,
-			include_assignment=True,
-		)
-		for row in page
+		serialize_template_summary(row, counts.get(row.name, 0), can_view_results=True) for row in page_rows
 	]
 	return rows, total
+
+
+def _sort_key(row, field: str):
+	"""Sort value for a matched candidate row (unknown fields fall back to creation)."""
+	if field == "title":
+		return (row.title or "").lower()
+	if field in ("survey_type", "status", "woreda"):
+		return str(row.get(field) or "")
+	if field == "window_open":
+		return str(getdate(row.window_open))
+	if field == "window_close":
+		return str(getdate(row.window_close))
+	return str(row.get("creation") or "")
+
+
+def get_template_details(survey_id: str, ctx: ScopeContext | None = None) -> dict:
+	"""Full saved template configuration in the contract shape (View action)."""
+	ctx = ctx or require_roles(*RESULTS_ROLES)
+	doc = _load_template(survey_id, ctx)
+	return serialize_template_detail(doc)
 
 
 def get_template(survey_id: str, ctx: ScopeContext | None = None) -> dict:
@@ -1198,8 +1624,17 @@ def _validate_answers(parameters, answers: dict, consent: str | None, sync_state
 		if val is None or val == "":
 			continue
 		if p.response_type == "rating":
-			if str(val) not in RATING_VALUES:
-				frappe.throw(_("Rating must be 1 to 5."), frappe.ValidationError)
+			low = int(p.rating_min or DEFAULT_RATING_SCALE["min"])
+			high = int(p.rating_max or DEFAULT_RATING_SCALE["max"])
+			try:
+				in_scale = isinstance(val, int) or (isinstance(val, str) and str(val).isdigit())
+				if not in_scale or not low <= int(val) <= high:
+					raise ValueError
+			except TypeError, ValueError:
+				frappe.throw(
+					_("Rating must be an integer from {0} to {1}.").format(low, high),
+					frappe.ValidationError,
+				)
 		elif p.response_type == "text":
 			if not isinstance(val, str):
 				frappe.throw(_("Text answer must be a string."), frappe.ValidationError)
@@ -1208,7 +1643,7 @@ def _validate_answers(parameters, answers: dict, consent: str | None, sync_state
 					_("Text answer cannot exceed {0} characters.").format(MAX_TEXT), frappe.ValidationError
 				)
 		elif p.response_type in CHOICE_TYPES:
-			options = _options_of(p.options_json)
+			options = _option_values(p.options_json)
 			if p.response_type == "multi":
 				if not isinstance(val, list):
 					frappe.throw(_("Multi answers must be a list."), frappe.ValidationError)
@@ -1537,9 +1972,11 @@ def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 			summary["response_count"] += 1
 			values.append(val)
 		if p.response_type == "rating" and values:
-			nums = [int(v) for v in values if str(v) in RATING_VALUES]
+			low = int(p.rating_min or DEFAULT_RATING_SCALE["min"])
+			high = int(p.rating_max or DEFAULT_RATING_SCALE["max"])
+			nums = [int(v) for v in values if str(v).isdigit() and low <= int(v) <= high]
 			summary["average"] = round(sum(nums) / len(nums), 2) if nums else None
-			summary["counts"] = {str(i): nums.count(i) for i in range(1, 6)}
+			summary["counts"] = {str(i): nums.count(i) for i in range(low, high + 1)}
 		elif p.response_type in CHOICE_TYPES:
 			counts: dict[str, int] = {}
 			for val in values:
