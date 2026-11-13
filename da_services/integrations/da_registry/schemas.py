@@ -83,7 +83,8 @@ class LifecycleOutcome:
 
 @dataclass(frozen=True)
 class ProfileUpdate:
-	"""A Supervisor-approved change to a DA's own profile fields (FSD 3.7)."""
+	"""A change to a DA's profile, approved in DA Services by the Supervisor and then the
+	Administrator (FSD 3.7). ``changes`` keys are mapper.PROFILE_FIELDS keys."""
 
 	da_id: str
 	changes: dict  # registry field name -> new value
@@ -100,3 +101,4 @@ class IntegrationResult:
 	message: str | None = None
 	retryable: bool = False
 	raw: dict = field(default_factory=dict)
+	error_code: str | None = None  # the registry's response_error_code on a refusal

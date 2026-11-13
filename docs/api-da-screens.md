@@ -451,7 +451,7 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 | Element | API | Source |
 |---|---|---|
 | Header, stats, learning summary | `GET /profile/me` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
-| Edit demographics | `POST /profile/change-requests {changes {mobile, email, language, photo}}` → Supervisor approval | ours: DA Profile Change Request (data-model 4.4) |
+| Edit profile (Contact, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`) | ours: DA Profile Change Request (data-model 4.4) |
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |

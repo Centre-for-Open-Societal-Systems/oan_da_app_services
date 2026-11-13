@@ -141,6 +141,8 @@ class HttpDARegistryClient(DARegistryClient):
 		self.import_data_model_id = import_data_model_id
 		self.timeout = timeout
 		self.sender_app = sender_app
+		settle = frappe.conf.get("da_registry_cr_readback_seconds")
+		self.change_request_settle_seconds = float(6 if settle is None else settle)
 
 	@classmethod
 	def from_conf(cls, auth_mode: str | None = None) -> HttpDARegistryClient:
@@ -387,10 +389,14 @@ class HttpDARegistryClient(DARegistryClient):
 	# ------------------------------------------------------------------ commands
 
 	def push_profile_update(self, update: ProfileUpdate) -> IntegrationResult:
-		"""Open a registry change request; it applies after the registry's two-stage approval.
+		"""Open a registry change request for one section of the DA record.
 
-		The registry allows one pending change per DA and section, which also stops a
-		replay of the same update from opening a second request.
+		DA Services has already approved the change at both of its levels. Once the
+		registry's own approval stage is switched off it applies the change a few seconds
+		later; until then it waits there. The create answer says PENDING either way, so
+		the outcome is read back with change_request_status. The registry allows one
+		pending change per DA and section, which also stops a replay from opening a
+		second request.
 		"""
 		try:
 			section_id, fields = profile_changes_to_change_request(update.changes)
@@ -419,7 +425,9 @@ class HttpDARegistryClient(DARegistryClient):
 		except DARegistryUnavailable:
 			raise
 		except DARegistryError as exc:
-			return IntegrationResult(accepted=False, message=str(exc), retryable=False)
+			return IntegrationResult(
+				accepted=False, message=str(exc), retryable=False, error_code=getattr(exc, "code", None)
+			)
 
 		payload = body.get("response_payload") or {}
 		if not payload.get("change_request_id"):
@@ -491,6 +499,15 @@ class HttpDARegistryClient(DARegistryClient):
 			"items": body.get("response_payload") or [],
 			"total": (body.get("pagination_response") or {}).get("number_of_items") or 0,
 		}
+
+	def attribute_values(self, attribute_id: str) -> dict[str, str]:
+		"""A Master Data code list, read with the labels the profile already uses."""
+		if not self.master_data_url:
+			raise DARegistryError("da_registry_master_data_url is not set in site_config.json")
+		values = self._labels().get(attribute_id)
+		if values is None:
+			raise DARegistryUnavailable(f"Master Data list {attribute_id} could not be read")
+		return values
 
 	def change_request_status(self, reference: str) -> str:
 		body = self._post(
@@ -595,7 +612,15 @@ class HttpDARegistryClient(DARegistryClient):
 		if header.get("response_status") != "SUCCESS":
 			if not_found and any(m in message.lower() for m in _NOT_FOUND_MARKERS):
 				raise DANotFound(not_found)
-			raise DARegistryError(f"DA Registry refused to {action}: {message or 'no reason given'}")
+			code = str(header.get("response_error_code") or "").strip() or None
+			# A refusal is HTTP 200: log it here, or nothing records why a call failed.
+			_log_error(
+				title="DA Registry refused request",
+				message=f"{action}: {code or 'no code'} {path}\n{message[:300]}",
+			)
+			raise DARegistryError(
+				f"DA Registry refused to {action}: {message or 'no reason given'}", code=code
+			)
 		return data.get("response_body") or {}
 
 	# ------------------------------------------------------------------ auth

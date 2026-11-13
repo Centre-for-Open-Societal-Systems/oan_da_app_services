@@ -106,6 +106,55 @@ FIXTURE_GEO = (
 )
 
 
+# Master Data code lists of the demo site, {attribute_id: {value_id: label}}
+FIXTURE_ATTRIBUTES: dict[str, dict[str, str]] = {
+	"DA_EDUCATION_LEVEL": {
+		"CERTIFICATE": "Certificate",
+		"DIPLOMA": "Diploma",
+		"DEGREE": "Degree",
+		"MASTERS": "Masters",
+	},
+	"DA_SPECIALISATION": {
+		"CROP_PRODUCTION": "Crop production",
+		"LIVESTOCK": "Livestock",
+		"NATURAL_RESOURCES": "Natural resources",
+	},
+	"DA_POSITION": {"DEVELOPMENT_AGENT": "Development agent", "SENIOR_DA": "Senior DA"},
+	"PREFIX": {"ATO": "Ato", "WROS": "W/ro", "DR": "Dr"},
+	"GENDER": {"MALE": "Male", "FEMALE": "Female"},
+	"MARITAL_STATUS": {
+		"SINGLE": "Single",
+		"MARRIED": "Married",
+		"DIVORCED": "Divorced",
+		"WIDOWED": "Widowed",
+	},
+}
+COUNTRY = ("ET", "Ethiopia")
+
+# ProfileUpdate.changes key -> (fixture key, Master Data list whose label the fixture holds)
+_PROFILE_KEYS = {
+	"phone": ("phone", None),
+	"telegram_number": ("telegram_number", None),
+	"alternate_number": ("alternate_number", None),
+	"email": ("email", None),
+	"education_tier": ("education_tier", "DA_EDUCATION_LEVEL"),
+	"specialisation": ("specialisation", "DA_SPECIALISATION"),
+	"position": ("position", "DA_POSITION"),
+	"joined_date": ("joined_at", None),
+	"prefix": ("salutation", "PREFIX"),
+	"first_name": ("first_name", None),
+	"father_name": ("father_name", None),
+	"grandfather_name": ("grandfather_name", None),
+	"fayda_id": ("fayda_id", None),
+	"gender": ("gender", "GENDER"),
+	"marital_status": ("marital_status", "MARITAL_STATUS"),
+	"birth_month_ec": ("birth_month_ec", None),
+	"birth_year_ec": ("birth_year_ec", None),
+	"language": ("language", None),
+	"photo_url": ("photo_url", None),
+}
+
+
 class MockDARegistryClient(DARegistryClient):
 	_instance: MockDARegistryClient | None = None
 
@@ -115,6 +164,7 @@ class MockDARegistryClient(DARegistryClient):
 		self._outcomes: dict[str, IntegrationResult] = {}
 		self.imports: list[tuple[str, bytes]] = []
 		self.import_exceptions: list[dict] = []
+		self.pushed: list[ProfileUpdate] = []  # every profile change request created
 
 	@classmethod
 	def shared(cls) -> MockDARegistryClient:
@@ -149,8 +199,9 @@ class MockDARegistryClient(DARegistryClient):
 		payload = self._records.get(update.da_id)
 		if not payload:
 			raise DANotFound(update.da_id)
-		payload.update(update.changes)
+		self._apply_profile_changes(payload, update.changes)
 		payload["version"] = int(payload.get("version") or 0) + 1
+		self.pushed.append(update)
 		result = IntegrationResult(
 			accepted=True,
 			external_reference=f"MOCK-{update.reference}",
@@ -159,6 +210,26 @@ class MockDARegistryClient(DARegistryClient):
 		)
 		self._outcomes[update.reference] = result
 		return result
+
+	@staticmethod
+	def _apply_profile_changes(payload: dict, changes: dict) -> None:
+		"""Write the registry-side change onto the fixture, as the registry would."""
+		for key, value in changes.items():
+			if key == "kebele":
+				payload["assigned_kebele"] = value
+			elif key == "geo_code_hierarchy_json":
+				for row in (value or {}).get("hierarchy") or []:
+					if row.get("level") in ("region", "zone", "woreda"):
+						payload[row["level"]] = row.get("level_value_id")
+			elif key in _PROFILE_KEYS:
+				field, attribute = _PROFILE_KEYS[key]
+				labels = FIXTURE_ATTRIBUTES.get(attribute) or {}
+				payload[field] = labels.get(value, value)
+			else:
+				payload[key] = value
+		names = [payload.get(k) for k in ("first_name", "father_name", "grandfather_name")]
+		if any(k in changes for k in ("first_name", "father_name", "grandfather_name")) and any(names):
+			payload["full_name"] = " ".join(n for n in names if n)
 
 	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
 		if outcome.reference in self._outcomes:
@@ -203,6 +274,9 @@ class MockDARegistryClient(DARegistryClient):
 			raise DANotFound(reference)
 		return "Approved"
 
+	def attribute_values(self, attribute_id: str) -> dict[str, str]:
+		return dict(FIXTURE_ATTRIBUTES.get(attribute_id) or {})
+
 	def geo_levels(self) -> list[dict]:
 		return [{"level_id": "l0", "mnemonic": "country", "parent_level_id": None}] + [
 			{"level_id": f"l{i + 1}", "mnemonic": mnemonic, "parent_level_id": f"l{i}"}
@@ -211,6 +285,8 @@ class MockDARegistryClient(DARegistryClient):
 
 	def geo_level_values(self, level_id: str, parent: str | None = None) -> list[dict]:
 		index = int(str(level_id).lstrip("l")) - 1
+		if index == -1:
+			return [{"code": COUNTRY[0], "name": COUNTRY[1], "parent": None}]
 		if not 0 <= index < len(GEO_LEVELS):
 			return []
 		return [

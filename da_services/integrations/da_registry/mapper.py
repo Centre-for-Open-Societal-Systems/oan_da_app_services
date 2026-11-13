@@ -15,14 +15,17 @@ from da_services.services import constants as C
 
 from .schemas import DAReference
 
-# Staff API: the DA register's one profile tab and its editable sections. Identity
-# (da_identity_section_01: name, Fayda ID, gender, birth) is never sent from here; the
-# registry would accept it from the service account, so the block lives in DA Services.
+# Staff API: the DA register's one profile tab and its four sections. DA Services
+# approves every change at two levels (Supervisor, then Administrator) before it is sent;
+# the registry checks formats and duplicates, never who asked, so the allow-list below
+# and the checks in services/profile_fields.py are the guard.
 DA_TAB = "da_details_tab"
-SECTION_CONTACT = "da_contact_section_04"
+SECTION_IDENTITY = "da_identity_section_01"
 SECTION_SERVICE = "da_service_section_02"
+SECTION_LOCATION = "da_location_section_03"
+SECTION_CONTACT = "da_contact_section_04"
 
-# ProfileUpdate.changes key (services/profile.py EDITABLE) -> (section, registry field)
+# ProfileUpdate.changes key (services/profile_fields.py) -> (section, registry field)
 PROFILE_FIELDS: dict[str, tuple[str, str]] = {
 	"phone": (SECTION_CONTACT, "mobile_number"),
 	"telegram_number": (SECTION_CONTACT, "telegram_number"),
@@ -30,18 +33,28 @@ PROFILE_FIELDS: dict[str, tuple[str, str]] = {
 	"email": (SECTION_CONTACT, "email"),
 	"education_tier": (SECTION_SERVICE, "education_level"),
 	"specialisation": (SECTION_SERVICE, "specialisation"),
+	"position": (SECTION_SERVICE, "position"),
+	"joined_date": (SECTION_SERVICE, "joined_date"),
+	"prefix": (SECTION_IDENTITY, "prefix"),
+	"first_name": (SECTION_IDENTITY, "first_name"),
+	"father_name": (SECTION_IDENTITY, "middle_name"),
+	"grandfather_name": (SECTION_IDENTITY, "last_name"),
+	"fayda_id": (SECTION_IDENTITY, "foundational_id"),
+	"gender": (SECTION_IDENTITY, "gender"),
+	"marital_status": (SECTION_IDENTITY, "marital_status"),
+	"birth_month_ec": (SECTION_IDENTITY, "birth_month_ec"),
+	"birth_year_ec": (SECTION_IDENTITY, "birth_year_ec"),
+	# The registry derives region / zone / woreda / kebele names and codes itself.
+	"kebele": (SECTION_LOCATION, "geo_lowest_level_value_id"),
+	"geo_code_hierarchy_json": (SECTION_LOCATION, "geo_code_hierarchy_json"),
 }
-# Master Data coded fields: DA Services keeps labels ("Crop production"), the registry codes
-_CODED_FIELDS = ("education_level", "specialisation")
+_INT_FIELDS = ("birth_month_ec", "birth_year_ec")
+# Coded fields (education level, position, gender ...) arrive as Master Data codes:
+# services/profile_fields.py checks each against its list. They are sent unchanged.
 
 # The registry has ACTIVE / INACTIVE / ARCHIVED only; leave and the rest of the DA
 # lifecycle stay in DA Services. A record that is not ACTIVE is out of service.
 _RECORD_STATUS = {"ACTIVE": C.ACTIVE_STATUS_ACTIVE}
-
-
-def _to_code(label: str) -> str:
-	"""'Crop production' -> 'CROP_PRODUCTION' (Master Data value_id)."""
-	return re.sub(r"[\s\-.]+", "_", str(label).strip()).upper()
 
 
 def _to_label(code: str | None) -> str | None:
@@ -63,13 +76,17 @@ def _geo_row(record: dict, level: str) -> dict:
 
 
 def _geo_level(record: dict, level: str) -> str | None:
-	"""Code of one level, for records without *_code columns."""
-	return _geo_row(record, level).get("level_value_id")
+	"""Code of one level: from the chain first, then the flat *_code column.
+
+	The chain is what a change request writes. Until the registry re-derives the flat
+	columns on a location change, they keep the old values, so they are the fallback.
+	"""
+	return _geo_row(record, level).get("level_value_id") or record.get(f"{level}_code")
 
 
 def _geo_name(record: dict, level: str) -> str | None:
-	"""Name of one level (the registry's *_name columns are often empty)."""
-	return record.get(f"{level}_name") or _geo_row(record, level).get("level_value_mnemonic")
+	"""Name of one level, chain first (the *_name columns are often empty or stale)."""
+	return _geo_row(record, level).get("level_value_mnemonic") or record.get(f"{level}_name")
 
 
 # Master Data attribute of each coded DA field
@@ -129,9 +146,9 @@ def registry_record_to_da_reference(record: dict, labels: dict[str, dict] | None
 		active_status=_RECORD_STATUS.get(record.get("record_status") or "", C.ACTIVE_STATUS_SEPARATED),
 		# Only approved records reach the register; submissions are not DAs yet.
 		approval_status="Published",
-		region=record.get("region_code") or _geo_level(record, "region"),
-		zone=record.get("zone_code") or _geo_level(record, "zone"),
-		woreda=record.get("woreda_code") or _geo_level(record, "woreda"),
+		region=_geo_level(record, "region"),
+		zone=_geo_level(record, "zone"),
+		woreda=_geo_level(record, "woreda"),
 		kebele=record.get("geo_lowest_level_value_id") or _geo_level(record, "kebele"),
 		education_tier=label("education_level"),
 		# The registry checks Fayda ID uniqueness only; it holds no verification status.
@@ -168,8 +185,8 @@ def registry_record_to_da_reference(record: dict, labels: dict[str, dict] | None
 def profile_changes_to_change_request(changes: dict) -> tuple[str, dict]:
 	"""ProfileUpdate.changes -> (section_id, registry fields) for one change request.
 
-	Raises ValueError for a field the registry does not hold or the DA may not change,
-	and for changes spanning two sections (the registry takes one section per request).
+	Raises ValueError for a field outside PROFILE_FIELDS and for changes spanning two
+	sections (the registry takes one section per request).
 	"""
 	unknown = sorted(set(changes) - set(PROFILE_FIELDS))
 	if unknown:
@@ -177,11 +194,16 @@ def profile_changes_to_change_request(changes: dict) -> tuple[str, dict]:
 	sections = {PROFILE_FIELDS[f][0] for f in changes}
 	if len(sections) != 1:
 		raise ValueError("Profile changes must stay within one registry section")
+	section = sections.pop()
+	if section == SECTION_LOCATION and set(changes) != {"kebele", "geo_code_hierarchy_json"}:
+		raise ValueError("A location change needs the Kebele and its full geo chain")
 	fields = {}
 	for key, value in changes.items():
 		field = PROFILE_FIELDS[key][1]
-		fields[field] = _to_code(value) if field in _CODED_FIELDS and value else value
-	return sections.pop(), fields
+		if field in _INT_FIELDS and value not in (None, ""):
+			value = int(value)
+		fields[field] = value
+	return section, fields
 
 
 def to_da_reference(payload: dict) -> DAReference:
@@ -205,6 +227,16 @@ def to_da_reference(payload: dict) -> DAReference:
 		alternate_number=payload.get("alternate_number"),
 		language=payload.get("language"),
 		photo_url=payload.get("photo_url"),
+		salutation=payload.get("salutation"),
+		first_name=payload.get("first_name"),
+		father_name=payload.get("father_name"),
+		grandfather_name=payload.get("grandfather_name"),
+		fayda_id=payload.get("fayda_id"),
+		gender=payload.get("gender"),
+		marital_status=payload.get("marital_status"),
+		birth_month_ec=_int(payload.get("birth_month_ec")),
+		birth_year_ec=_int(payload.get("birth_year_ec")),
+		position=payload.get("position"),
 		source_version=str(payload["version"]) if payload.get("version") is not None else None,
 		fetched_at=datetime.now(UTC),
 	)
