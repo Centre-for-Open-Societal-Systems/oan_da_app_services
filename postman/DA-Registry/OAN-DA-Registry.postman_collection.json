@@ -79,7 +79,7 @@
     },
     {
       "key": "cr_status",
-      "value": "Pending"
+      "value": "Pending Supervisor"
     },
     {
       "key": "da_id",
@@ -152,6 +152,18 @@
     {
       "key": "page_size",
       "value": "50"
+    },
+    {
+      "key": "queue_status",
+      "value": "Pending Supervisor"
+    },
+    {
+      "key": "test_user",
+      "value": ""
+    },
+    {
+      "key": "test_password",
+      "value": ""
     }
   ],
   "item": [
@@ -429,6 +441,60 @@
               }
             }
           ]
+        },
+        {
+          "name": "0.6 Password sign-in (local mock site only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "For a local site with da_registry_backend = mock (no Keycloak, no registry): signs in with a DA Services password and saves access_token for folders 1 to 3. Set test_user and test_password in the collection variables first; never save a real password in the collection. A site on the http backend refuses this token for registry calls: use 0.1 to 0.4 there.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{test_user}}\",\n  \"pwd\": \"{{test_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Signed in', function () { pm.expect(pm.response.code).to.eql(200); });",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "if (d.access_token) {",
+                  "    pm.collectionVariables.set('access_token', d.access_token);",
+                  "    pm.collectionVariables.set('csrf_token', 'local-mock');",
+                  "}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -579,7 +645,7 @@
                 "change-requests"
               ]
             },
-            "description": "The DA asks to change their own contact fields (here Telegram and alternate number). Goes to the Woreda supervisor; on approval DA Services opens a change request in the DA Registry with the approver's token. Identity fields are refused. client_op_id is generated per run.",
+            "description": "One section per request (Contact, Qualifications, Identity or Location), only the fields that change. It goes to the DA's Woreda Supervisor (level 1), then an OAN Administrator (level 2); only then is it sent to the DA Registry. A change of a name or the Fayda ID needs a reason of 10+ characters; a location change sends region, zone, woreda and kebele codes.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"changes\": {\n    \"telegram\": \"{{new_telegram}}\",\n    \"alternate_mobile\": \"{{new_alternate_mobile}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
@@ -1129,7 +1195,7 @@
           ]
         },
         {
-          "name": "2.5 Pending change requests (approval queue)",
+          "name": "2.5 Change requests waiting for me (approval queue)",
           "request": {
             "method": "GET",
             "header": [
@@ -1149,7 +1215,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests?status=Pending&limit={{limit}}&start={{start}}",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests?status={{queue_status}}&limit={{limit}}&start={{start}}",
               "host": [
                 "{{base_url}}"
               ],
@@ -1163,8 +1229,20 @@
               "query": [
                 {
                   "key": "status",
-                  "value": "Pending",
-                  "description": "Approval queue"
+                  "value": "{{queue_status}}",
+                  "description": "One or more, comma-separated. Supervisor: Pending Supervisor. Administrator: Pending Administrator,Registry failed"
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "description": "One or more Woreda codes, comma-separated",
+                  "disabled": true
+                },
+                {
+                  "key": "section",
+                  "value": "Contact",
+                  "description": "Contact, Qualifications, Identity or Location",
+                  "disabled": true
                 },
                 {
                   "key": "da_id",
@@ -1184,7 +1262,7 @@
                 }
               ]
             },
-            "description": "Change requests of the DAs in the supervisor's Woreda. Saves the first pending one as change_request_id for 2.6."
+            "description": "Supervisor: the requests of the DAs in their Woreda waiting for level 1 (queue_status = Pending Supervisor). Administrator: requests waiting for level 2 (queue_status = Pending Administrator). Saves the first one as change_request_id for 2.6."
           },
           "event": [
             {
@@ -1209,7 +1287,7 @@
           ]
         },
         {
-          "name": "2.6 Decide a change request (Approve opens a registry change request)",
+          "name": "2.6 Decide a change request (level 1 Supervisor, level 2 Administrator)",
           "request": {
             "method": "POST",
             "header": [
@@ -1247,7 +1325,7 @@
                 "decide"
               ]
             },
-            "description": "Supervisor (or Admin) of the DA's Woreda. decision: Approve, Reject or Request changes (note of 5+ characters needed for the last two). Approve sends the change to the DA Registry with the supervisor's own token, where it waits for the registry's two-stage approval. A user cannot decide their own request.",
+            "description": "Level 1, status Pending Supervisor: a Supervisor of the DA's Woreda; Approve, Reject or Request changes. Level 2, status Pending Administrator: an OAN Administrator, never the level-1 approver; Approve or Reject. A note of 5+ characters is needed to reject or request changes. Only the level-2 Approve sends the change to the DA Registry, with the Administrator's own token; the answer says Applied, Sent to registry (the registry still decides) or Registry failed (reason in registry_error). Nobody decides their own request.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"decision\": \"{{decision}}\",\n  \"note\": \"{{decision_note}}\"\n}",
@@ -1268,7 +1346,302 @@
                   "    pm.expect(pm.response.code).to.be.oneOf([200]);",
                   "});",
                   "const d = (pm.response.json() || {}).data || {};",
-                  "if (d.registry_sync_state) pm.test('Registry sync recorded', function () { pm.expect(d.registry_sync_state).to.be.oneOf(['Accepted', 'Failed', 'Not sent']); });"
+                  "pm.test('Known status', function () { pm.expect(d.status).to.be.oneOf(['Pending Administrator', 'Sent to registry', 'Applied', 'Registry failed', 'Rejected', 'Changes requested']); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.6b Decide several change requests (bulk Approve / Reject)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/bulk-decide",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests",
+                "bulk-decide"
+              ]
+            },
+            "description": "The same decision on up to 20 requests, each with every rule of 2.6. A request that cannot be decided (outside the Woreda, already decided, own request) is reported in results and the others go on. An Administrator's Approve sends each change to the registry without waiting for its answer: still PENDING shows as Sent to registry.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\"{{change_request_id}}\"],\n  \"decision\": \"{{decision}}\",\n  \"note\": \"{{decision_note}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.expect(pm.response.code).to.be.oneOf([200]); });",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "pm.test('Results per request', function () { pm.expect(d.results).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.7 A DA's profile (Supervisor of the Woreda, Administrator)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/agents/{{da_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "agents",
+                "{{da_id}}"
+              ]
+            },
+            "description": "The DA's registry record, the editable fields per section and the DA's open requests. can_request is true for a Supervisor of the DA's Woreda."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.8 Supervisor: request a change for a DA of my Woreda",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests"
+              ]
+            },
+            "description": "A Supervisor names the DA (da_id). The request skips level 1 (the Supervisor is level 1) and waits for an OAN Administrator. The DA is told.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"changes\": {\"telegram\": \"+251911222333\"},\n  \"reason\": \"{{change_reason}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.expect(pm.response.code).to.be.oneOf([201]); });",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "if (d.name) pm.collectionVariables.set('change_request_id', d.name);",
+                  "pm.test('Waits for an Administrator', function () { pm.expect(d.status).to.eql('Pending Administrator'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.9 Administrator: retry a request the registry did not apply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{change_request_id}}/retry",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests",
+                "{{change_request_id}}",
+                "retry"
+              ]
+            },
+            "description": "Only for status Registry failed (refused or registry unavailable). Sends the change again with the Administrator's token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.10 Administrator: close a request the registry did not apply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{change_request_id}}/close",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "change-requests",
+                "{{change_request_id}}",
+                "close"
+              ]
+            },
+            "description": "Only for status Registry failed. A note of 5+ characters is needed; the DA can then send a corrected request for that section.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"{{decision_note}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
                 ]
               }
             }
