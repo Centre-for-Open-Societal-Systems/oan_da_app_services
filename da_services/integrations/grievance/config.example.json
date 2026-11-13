@@ -1,0 +1,11 @@
+{
+  "grievance_backend": "http",
+  "grievance_base_url": "https://grievance.example.com/api",
+  "grievance_timeout_seconds": 20,
+  "grievance_iam": {
+    "login_key": "agent",
+    "return_url": "https://grievance.example.com/api",
+    "username": "<service account>",
+    "password": "<secret>"
+  }
+}

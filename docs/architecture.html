@@ -1,0 +1,451 @@
+<title>DA Platform Architecture</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: a single reading column (72ch) for prose and tables; figures break out to 1000px and scroll sideways on phones. */
+  :root {
+    --bg: #f6f7f4;
+    --surface: #ffffff;
+    --fg: #1d2a22;
+    --muted: #5d6b63;
+    --rule: #d8ded9;
+    --svc: #1f7a4d;        /* DA Services (ours) */
+    --svc-soft: #e3f2e9;
+    --reg: #2457a6;        /* DA Registry (Yash) */
+    --reg-soft: #e4ecf9;
+    --ext: #6b6f76;        /* External systems */
+    --ext-soft: #eceef0;
+    --gw: #b26a00;         /* Gateway / auth */
+    --gw-soft: #fbefd9;
+    --warn: #a3411b;
+    --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141916; --surface: #1c231f; --fg: #e6ebe7; --muted: #a3b0a8; --rule: #2f3a33;
+      --svc: #5fc48f; --svc-soft: #1d3a2b; --reg: #7ea6e6; --reg-soft: #1f2d45; --ext: #aeb4bb; --ext-soft: #2a2f34;
+      --gw: #e0a850; --gw-soft: #3d3020; --warn: #e8906c; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141916; --surface: #1c231f; --fg: #e6ebe7; --muted: #a3b0a8; --rule: #2f3a33;
+    --svc: #5fc48f; --svc-soft: #1d3a2b; --reg: #7ea6e6; --reg-soft: #1f2d45; --ext: #aeb4bb; --ext-soft: #2a2f34;
+    --gw: #e0a850; --gw-soft: #3d3020; --warn: #e8906c; color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.55; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 64px; }
+  header h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 6px; text-wrap: balance; }
+  header p.lede { color: var(--muted); margin: 0; max-width: 72ch; }
+  .meta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-top: 10px; }
+  h2 { font-size: 1.35rem; margin: 44px 0 10px; text-wrap: balance; }
+  h3 { font-size: 1.05rem; margin: 24px 0 6px; }
+  p, li { max-width: 72ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; margin: 14px 0 0; padding: 0; list-style: none; }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; }
+  .sw-svc { background: var(--svc-soft); border-color: var(--svc); }
+  .sw-reg { background: var(--reg-soft); border-color: var(--reg); }
+  .sw-ext { background: var(--ext-soft); border-color: var(--ext); }
+  .sw-gw  { background: var(--gw-soft);  border-color: var(--gw); }
+  figure { margin: 18px 0 0; }
+  .scroll { overflow-x: auto; }
+  figure svg { display: block; width: 1000px; max-width: 100%; height: auto; font-family: var(--font-body); }
+  figcaption { font-size: 14px; color: var(--muted); margin-top: 8px; max-width: 72ch; }
+  /* SVG classes (styled from tokens; SVG itself carries no style) */
+  .n-svc rect { fill: var(--svc-soft); stroke: var(--svc); }
+  .n-reg rect { fill: var(--reg-soft); stroke: var(--reg); }
+  .n-ext rect { fill: var(--ext-soft); stroke: var(--ext); }
+  .n-gw  rect { fill: var(--gw-soft);  stroke: var(--gw); }
+  .n-ch  rect { fill: var(--surface);  stroke: currentColor; }
+  svg rect { stroke-width: 1.5; rx: 6; }
+  svg text { fill: currentColor; font-size: 13px; }
+  svg text.t { font-weight: 700; }
+  svg text.s { font-size: 11.5px; fill: var(--muted); }
+  svg text.lbl { font-size: 11px; font-family: var(--font-mono); }
+  svg text.lbl.sm { font-size: 9.5px; }
+  svg text.owner { font-size: 11px; font-family: var(--font-mono); font-weight: 500; }
+  svg .edge { stroke: currentColor; stroke-width: 1.4; fill: none; }
+  svg .edge.dashed { stroke-dasharray: 5 4; }
+  svg .svc-text { fill: var(--svc); }
+  svg .reg-text { fill: var(--reg); }
+  svg .gw-text  { fill: var(--gw); }
+  svg .ext-text { fill: var(--ext); }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; margin-top: 12px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  td code, p code, li code { font-family: var(--font-mono); font-size: 13px; background: var(--ext-soft); padding: 1px 5px; border-radius: 3px; }
+  .tag { display: inline-block; font-family: var(--font-mono); font-size: 11.5px; padding: 1px 7px; border-radius: 10px; border: 1px solid; }
+  .tag.svc { color: var(--svc); border-color: var(--svc); background: var(--svc-soft); }
+  .tag.reg { color: var(--reg); border-color: var(--reg); background: var(--reg-soft); }
+  .tag.ext { color: var(--ext); border-color: var(--ext); background: var(--ext-soft); }
+  .tag.gw  { color: var(--gw);  border-color: var(--gw);  background: var(--gw-soft); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+  .panel h3 { margin: 0 0 8px; }
+  .panel ul { margin: 0; padding-left: 18px; }
+  .panel.svc { border-top: 3px solid var(--svc); }
+  .panel.reg { border-top: 3px solid var(--reg); }
+  .open li { margin-bottom: 6px; }
+  .open strong { color: var(--warn); }
+  pre.mermaid { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px; overflow-x: auto; }
+  pre.mermaid.compact { max-width: 640px; }
+  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+  .status div { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; font-size: 14px; min-width: 0; }
+  .status b { display: block; font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  footer { margin-top: 48px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 12px; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>DA Platform Architecture</h1>
+  <p class="lede">How the Development Agent portal reaches the DA Services backend, how DA Services depends on the DA Registry, and which external systems it integrates with. Compiled from the FSD (D3), the Part 1 HLD, the team's architecture diagram (3 Oct) and the staging UI.</p>
+  <div class="meta">OAN Ethiopia · Development Agent Registry &amp; Services · draft for team review · 6 Oct 2026</div>
+  <ul class="legend">
+    <li><span class="swatch sw-svc"></span> DA Services (Frappe) — Nikky &amp; Pushkar</li>
+    <li><span class="swatch sw-reg"></span> DA Registry (OpenG2P Gen 2) — Yash</li>
+    <li><span class="swatch sw-gw"></span> Gateway and authentication</li>
+    <li><span class="swatch sw-ext"></span> External systems (owned by other teams)</li>
+  </ul>
+</header>
+
+<h2>1. System context</h2>
+<p>The UI never talks to a database or to another system directly. Every request goes through Kong to DA Services. DA Services owns the operational data (visits, tasks, leave, KPIs) and fetches the DA's identity and posting from the DA Registry. Farmer, grievance and survey data stay in the systems that own them; DA Services keeps only references.</p>
+
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 1000 770" role="img" aria-label="DA web portal and mobile app call Kong, which routes to DA Services on Frappe. DA Services reads DA identity and posting from the DA Registry on OpenG2P and pushes lifecycle outcomes back. DA Services also calls the auth service, Farmer Registry, Grievance Service, ODK Central, Access to Credit, master data and GIS, SMS and Telegram gateways, weather provider and Agrilearn. The Registry receives DAs from CSV import, webintake and MoA sync and verifies identity with Fayda.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+    </marker>
+  </defs>
+
+  <!-- Channels -->
+  <g class="n-ch">
+    <rect x="330" y="20" width="160" height="52"></rect>
+    <text x="410" y="42" text-anchor="middle" class="t">DA Web Portal</text>
+    <text x="410" y="60" text-anchor="middle" class="s">Next.js · 5 roles</text>
+    <rect x="510" y="20" width="160" height="52"></rect>
+    <text x="590" y="42" text-anchor="middle" class="t">DA Mobile App</text>
+    <text x="590" y="60" text-anchor="middle" class="s">Flutter · offline-first</text>
+  </g>
+  <path class="edge" d="M410,72 L470,112" marker-end="url(#arrow)"></path>
+  <path class="edge" d="M590,72 L530,112" marker-end="url(#arrow)"></path>
+  <text x="500" y="96" text-anchor="middle" class="lbl">HTTPS · /api/v1/* · Bearer JWT</text>
+
+  <!-- Kong -->
+  <g class="n-gw">
+    <rect x="400" y="114" width="200" height="46"></rect>
+    <text x="500" y="134" text-anchor="middle" class="t">Kong API Gateway</text>
+    <text x="500" y="151" text-anchor="middle" class="s">routing · token check · rate limit</text>
+  </g>
+  <path class="edge" d="M500,160 L500,198" marker-end="url(#arrow)"></path>
+
+  <!-- Auth -->
+  <g class="n-gw">
+    <rect x="740" y="114" width="230" height="46"></rect>
+    <text x="855" y="134" text-anchor="middle" class="t">Auth: oan_auth_service</text>
+    <text x="855" y="151" text-anchor="middle" class="s">interim · OAN IAM / Fayda sign-in later</text>
+  </g>
+  <path class="edge dashed" d="M740,137 L600,137" marker-end="url(#arrow)"></path>
+  <text x="670" y="130" text-anchor="middle" class="lbl">issues / validates JWT</text>
+
+  <!-- DA Services -->
+  <g class="n-svc">
+    <rect x="330" y="200" width="340" height="440"></rect>
+  </g>
+  <text x="500" y="226" text-anchor="middle" class="t svc-text">DA Services (Frappe)</text>
+  <text x="500" y="243" text-anchor="middle" class="owner svc-text">Nikky · Pushkar · repo DA-services-backend</text>
+  <text x="350" y="276" class="s">API layer  /api/v1 · RBAC &amp; scope · audit</text>
+  <text x="350" y="300" class="t">Field services</text>
+  <text x="350" y="318" class="s">dashboard · profile · visits &amp; tasks · farmer links</text>
+  <text x="350" y="334" class="s">beneficiaries · device sync · notifications</text>
+  <text x="350" y="360" class="t">Supervision &amp; lifecycle (Part 2)</text>
+  <text x="350" y="378" class="s">leave · transfer · promotion · retirement</text>
+  <text x="350" y="394" class="s">KPI · goals · reviews · training · advisors</text>
+  <text x="350" y="420" class="t">Adapters</text>
+  <text x="350" y="438" class="s">registry client · farmer · grievance · ODK · messaging</text>
+  <text x="350" y="464" class="t">Internal feedback · knowledge · broadcast</text>
+  <text x="350" y="490" class="t">Offline sync</text>
+  <text x="350" y="508" class="s">device queue · idempotent commands · conflict actions</text>
+  <text x="350" y="534" class="t">Credit &amp; marketplace (status mirror)</text>
+  <text x="350" y="566" class="s">Stores only operational data and references.</text>
+  <text x="350" y="582" class="s">Never a second DA master. API access only.</text>
+  <text x="350" y="598" class="s">Every mutation carries idempotency key + correlation ID.</text>
+
+  <!-- Services DB -->
+  <path class="edge" d="M500,640 L500,678" marker-end="url(#arrow)"></path>
+  <g class="n-svc">
+    <rect x="410" y="680" width="180" height="50"></rect>
+    <text x="500" y="701" text-anchor="middle" class="t">MariaDB</text>
+    <text x="500" y="718" text-anchor="middle" class="s">visits · leave · KPI · RBAC · audit</text>
+  </g>
+
+  <!-- Intake -->
+  <g class="n-reg">
+    <rect x="20" y="114" width="215" height="46"></rect>
+    <text x="127" y="134" text-anchor="middle" class="t">CSV import · Webintake form</text>
+    <text x="127" y="151" text-anchor="middle" class="s">sample CSV from Blen</text>
+  </g>
+  <path class="edge" d="M127,160 L127,198" marker-end="url(#arrow)"></path>
+  <text x="134" y="184" class="lbl">intake</text>
+
+  <!-- Registry -->
+  <g class="n-reg">
+    <rect x="20" y="200" width="215" height="150"></rect>
+  </g>
+  <text x="127" y="226" text-anchor="middle" class="t reg-text">DA Registry</text>
+  <text x="127" y="243" text-anchor="middle" class="owner reg-text">OpenG2P Gen 2 · Yash</text>
+  <text x="36" y="270" class="s">DA master: name, DA-ID, Fayda link</text>
+  <text x="36" y="286" class="s">education, position, posting</text>
+  <text x="36" y="302" class="s">Active status · Approval status</text>
+  <text x="36" y="322" class="s">Onboarding: auto checks, then</text>
+  <text x="36" y="338" class="s">Supervisor approve / reject / changes</text>
+
+  <!-- Registry <-> Services -->
+  <path class="edge" d="M235,250 L328,250" marker-end="url(#arrow)"></path>
+  <text x="282" y="229" text-anchor="middle" class="lbl">reads identity</text>
+  <text x="282" y="242" text-anchor="middle" class="lbl">and posting</text>
+  <path class="edge" d="M330,300 L237,300" marker-end="url(#arrow)"></path>
+  <text x="282" y="318" text-anchor="middle" class="lbl">pushes status</text>
+  <text x="282" y="331" text-anchor="middle" class="lbl">and Kebele</text>
+
+  <!-- Fayda / MoA under Registry -->
+  <g class="n-ext">
+    <rect x="20" y="400" width="100" height="46"></rect>
+    <text x="70" y="420" text-anchor="middle" class="t">Fayda ID</text>
+    <text x="70" y="437" text-anchor="middle" class="s">national ID</text>
+    <rect x="135" y="400" width="100" height="46"></rect>
+    <text x="185" y="420" text-anchor="middle" class="t">MoA registry</text>
+    <text x="185" y="437" text-anchor="middle" class="s">ministry master</text>
+  </g>
+  <path class="edge" d="M70,400 L70,352" marker-end="url(#arrow)"></path>
+  <text x="78" y="380" class="lbl">verify</text>
+  <path class="edge" d="M178,352 L178,398" marker-end="url(#arrow)"></path>
+  <path class="edge" d="M192,398 L192,352" marker-end="url(#arrow)"></path>
+  <text x="200" y="380" class="lbl">publish / sync</text>
+
+  <!-- Registry DB -->
+  <g class="n-reg">
+    <rect x="20" y="680" width="215" height="50"></rect>
+    <text x="127" y="701" text-anchor="middle" class="t">OpenG2P DB</text>
+    <text x="127" y="718" text-anchor="middle" class="s">single source of truth for DAs</text>
+  </g>
+  <path class="edge" d="M127,446 L127,678" marker-end="url(#arrow)"></path>
+
+  <!-- External systems column (pitch 58, height 44) -->
+  <g class="n-ext">
+    <rect x="740" y="200" width="230" height="44"></rect>
+    <text x="855" y="219" text-anchor="middle" class="t">Farmer Registry</text>
+    <text x="855" y="235" text-anchor="middle" class="s">OpenG2P · farmer master</text>
+    <rect x="740" y="258" width="230" height="44"></rect>
+    <text x="855" y="277" text-anchor="middle" class="t">Grievance Service</text>
+    <text x="855" y="293" text-anchor="middle" class="s">oan_grievance_service · case master</text>
+    <rect x="740" y="316" width="230" height="44"></rect>
+    <text x="855" y="335" text-anchor="middle" class="t">ODK Collect / Central</text>
+    <text x="855" y="351" text-anchor="middle" class="s">crop &amp; livestock surveys</text>
+    <rect x="740" y="374" width="230" height="44"></rect>
+    <text x="855" y="393" text-anchor="middle" class="t">Access to Credit (A2C)</text>
+    <text x="855" y="409" text-anchor="middle" class="s">credit applications · bank decides</text>
+    <rect x="740" y="432" width="230" height="44"></rect>
+    <text x="855" y="451" text-anchor="middle" class="t">Master data &amp; GIS</text>
+    <text x="855" y="467" text-anchor="middle" class="s">Region · Zone · Woreda · Kebele · boundaries</text>
+    <rect x="740" y="490" width="230" height="44"></rect>
+    <text x="855" y="509" text-anchor="middle" class="t">SMS / Telegram gateways</text>
+    <text x="855" y="525" text-anchor="middle" class="s">notifications · broadcast</text>
+    <rect x="740" y="548" width="230" height="44"></rect>
+    <text x="855" y="567" text-anchor="middle" class="t">Weather provider</text>
+    <text x="855" y="583" text-anchor="middle" class="s">alert source only</text>
+    <rect x="740" y="606" width="230" height="44"></rect>
+    <text x="855" y="625" text-anchor="middle" class="t">Agrilearn (LMS)</text>
+    <text x="855" y="641" text-anchor="middle" class="s">training certificates</text>
+  </g>
+  <path class="edge" d="M670,222 L738,222" marker-end="url(#arrow)"></path>
+  <text x="704" y="214" text-anchor="middle" class="lbl sm">farmer link</text>
+  <path class="edge" d="M670,280 L738,280" marker-end="url(#arrow)"></path>
+  <text x="704" y="272" text-anchor="middle" class="lbl sm">raise/track</text>
+  <path class="edge" d="M738,338 L672,338" marker-end="url(#arrow)"></path>
+  <text x="704" y="330" text-anchor="middle" class="lbl sm">submissions</text>
+  <path class="edge" d="M670,396 L738,396" marker-end="url(#arrow)"></path>
+  <text x="704" y="388" text-anchor="middle" class="lbl sm">apply/status</text>
+  <path class="edge dashed" d="M738,454 L672,454" marker-end="url(#arrow)"></path>
+  <text x="704" y="446" text-anchor="middle" class="lbl sm">lookup/GIS</text>
+  <path class="edge" d="M670,512 L738,512" marker-end="url(#arrow)"></path>
+  <text x="704" y="504" text-anchor="middle" class="lbl sm">send</text>
+  <path class="edge dashed" d="M738,570 L672,570" marker-end="url(#arrow)"></path>
+  <text x="704" y="562" text-anchor="middle" class="lbl sm">signals</text>
+  <path class="edge dashed" d="M738,628 L672,628" marker-end="url(#arrow)"></path>
+  <text x="704" y="620" text-anchor="middle" class="lbl sm">read-only</text>
+
+  <!-- Future -->
+  <g class="n-ext">
+    <rect x="740" y="680" width="230" height="50" stroke-dasharray="4 3"></rect>
+    <text x="855" y="700" text-anchor="middle" class="t">Land Registry (future)</text>
+    <text x="855" y="717" text-anchor="middle" class="s">plot boundaries · API not yet defined</text>
+  </g>
+</svg>
+</div>
+<figcaption>Figure 1. The portal and mobile app reach only DA Services (through Kong). DA Services reads DA identity and posting from the Registry and pushes approved status or Kebele changes back; all other systems are reached through adapters and hold their own master data. Solid arrows are request/response; dashed arrows are periodic sync or read-only. Fayda and MoA are reached through the Registry, not by DA Services. Land Registry is planned but its API is still under discussion.</figcaption>
+</figure>
+
+<h2>2. Who owns which data</h2>
+<p>The rule from the HLD: a fact lives in exactly one authoritative system; everyone else keeps a reference. DA Services therefore stores what it creates and fetches what it only displays.</p>
+<table>
+  <thead><tr><th>Data</th><th>Authoritative owner</th><th>What DA Services keeps</th></tr></thead>
+  <tbody>
+    <tr><td>DA identity: name, DA-ID, Fayda link, gender, birth date (EC), contacts</td><td><span class="tag reg">DA Registry</span></td><td>Only <code>da_id</code> as a reference; fetched per request (short cache allowed)</td></tr>
+    <tr><td>DA posting: Region, Zone, Woreda, Kebele assignment</td><td><span class="tag reg">DA Registry</span></td><td>Codes on the RBAC assignment for scope checks</td></tr>
+    <tr><td>Active status (Active / On-leave / Separated)</td><td><span class="tag reg">DA Registry</span></td><td>Sets it through lifecycle outcomes (leave, retirement, reactivation)</td></tr>
+    <tr><td>Approval status, Fayda status, onboarding workflow</td><td><span class="tag reg">DA Registry</span></td><td>Reads it; shows Supervisor queue as pass-through</td></tr>
+    <tr><td>Users, roles, Region/Woreda scope, DA-ID binding</td><td><span class="tag svc">DA Services</span></td><td><code>DA RBAC Assignment</code> (built)</td></tr>
+    <tr><td>Visits, tasks, outcomes, GPS, attachments</td><td><span class="tag svc">DA Services</span></td><td>Own tables</td></tr>
+    <tr><td>Leave requests and balances, lifecycle transitions</td><td><span class="tag svc">DA Services</span></td><td>Own tables; approved outcome pushed to Registry</td></tr>
+    <tr><td>KPIs, goals, reviews, training records, certificates, incentives</td><td><span class="tag svc">DA Services</span></td><td>Own tables</td></tr>
+    <tr><td>Internal feedback issues, notifications, device sync queue, audit</td><td><span class="tag svc">DA Services</span></td><td>Own tables</td></tr>
+    <tr><td>Farmer profile, household, plots</td><td><span class="tag ext">Farmer Registry</span></td><td><code>farmer_id</code> + DA–farmer link; beneficiary classification history</td></tr>
+    <tr><td>Grievance case, status, responses</td><td><span class="tag ext">Grievance Service</span></td><td><code>external_case_id</code> + status mirror + offline queue</td></tr>
+    <tr><td>Crop and livestock survey submissions</td><td><span class="tag ext">ODK Central</span></td><td>Visit ↔ submission correlation and validation result</td></tr>
+    <tr><td>Region / Zone / Woreda / Kebele lists, Kebele boundaries</td><td><span class="tag ext">Master data / GIS</span></td><td>Read-only lookup table, refreshed by sync; geofence result stored on the assignment</td></tr>
+    <tr><td>Credit applications, marketplace payments</td><td><span class="tag ext">Access to Credit / payment providers</span></td><td>Application reference + status mirror; the bank decides, DA Services only displays</td></tr>
+    <tr><td>Training and certification records</td><td><span class="tag ext">Agrilearn</span></td><td>Read-only mirror with verification status; uploaded external certificates are DA Services' own</td></tr>
+    <tr><td>Weather and emergency signals</td><td><span class="tag ext">Weather provider</span></td><td>Inbound signal in the alert inbox; the broadcast built from it is DA Services' own</td></tr>
+    <tr><td>Plot boundaries</td><td><span class="tag ext">Land Registry (future)</span></td><td>Boundary captured in the app stays "Awaiting sync" until the API exists</td></tr>
+    <tr><td>Login, tokens, password reset</td><td><span class="tag gw">oan_auth_service</span></td><td>Maps the token's user to role, scope and DA-ID</td></tr>
+  </tbody>
+</table>
+
+<h2>3. Three requests, end to end</h2>
+<p>Where the data comes from is easiest to see on real pages.</p>
+
+<h3>3.1 DA opens the dashboard</h3>
+<pre class="mermaid">
+sequenceDiagram
+  participant UI as DA Web Portal
+  participant K as Kong
+  participant S as DA Services (Frappe)
+  participant R as DA Registry (OpenG2P)
+  participant F as Farmer Registry
+  UI->>K: GET /api/v1/dashboard/summary (JWT)
+  K->>S: forward (token valid)
+  S->>S: resolve user → role, scope, da_id (RBAC)
+  S->>R: GET DA by da_id (name, photo, assigned Kebeles)
+  S->>S: count visits, tasks, sync queue from own DB
+  S->>F: farmer names for today's visits
+  S-->>UI: one response: header, tiles, today's plan
+</pre>
+<p>About 90% of the dashboard is DA Services' own data. The Registry contributes only the DA's name and posting.</p>
+
+<h3>3.2 Supervisor approves a leave request</h3>
+<pre class="mermaid">
+sequenceDiagram
+  participant DA as DA (mobile)
+  participant S as DA Services
+  participant SV as Supervisor (portal)
+  participant R as DA Registry
+  participant M as MoA registry
+  DA->>S: POST /api/v1/leave/requests
+  S->>S: validate balance, save request (own DB)
+  SV->>S: POST /api/v1/leave/requests/{id}/approve
+  S->>S: decrement balance, write audit, notify DA (SMS + app)
+  S->>R: push lifecycle outcome: active_status = On-leave (idempotent)
+  R-->>S: receipt
+  R->>M: sync status change (Registry's job)
+</pre>
+<p>Leave is DA Services' record. The Registry only learns the resulting status, because the Active Status column on the master registry is defined by the FSD as "set by Part 2 lifecycle".</p>
+
+<h3>3.3 DA raises a grievance for a farmer</h3>
+<pre class="mermaid">
+sequenceDiagram
+  participant DA as DA (mobile, maybe offline)
+  participant S as DA Services
+  participant G as Grievance Service
+  DA->>S: POST /api/v1/grievances (category, subject, farmer_id, photo)
+  alt online
+    S->>G: create case (Grievance Service API)
+    G-->>S: external_case_id, status
+    S->>S: store link {da_id, farmer_id, external_case_id, status}
+  else offline / API down
+    S->>S: queue operation (Awaiting sync), retry later
+  end
+  S-->>DA: ticket id or "queued offline"
+  G-->>S: status updates (polled or webhook) → SMS to submitter
+</pre>
+<p>Triage, response, escalation and closure happen in the Grievance Service. DA Services shows them read-only and keeps only the link and the offline queue.</p>
+
+<h2>4. How a DA gets into the system</h2>
+<p>Onboarding is the Registry's workflow (Yash). DA Services only picks up the result: an approved, active DA becomes a user with a role, a scope and a DA-ID.</p>
+<pre class="mermaid compact" id="onboarding">
+flowchart TD
+  A[CSV import / Webintake / MoA sync] --> B[Auto checks: Fayda match, duplicate, mandatory fields]
+  B -->|pass| C[DA-ID issued, record in shadow state]
+  B -->|fail| X[Exception queue: resolve manually]
+  C --> D{Supervisor review}
+  D -->|Approve| E[Publish to Registry Gen 2]
+  D -->|Reject| R[Closed]
+  D -->|Request changes| A
+  E --> F[Publish to MoA, separate step with retry]
+  F --> G[DA Active, SMS sent]
+  G --> H[DA Services: user + RBAC assignment with da_id and Woreda scope]
+</pre>
+<p>Machines do the checks; a person makes the decision. Approval and publication are separate states, and MoA publication has its own retry and reconciliation.</p>
+
+<h2>5. Roles and scope</h2>
+<p>Authorisation is deny-by-default and enforced in the backend on every call. A role says which actions exist; the RBAC assignment says over which Region, Woreda or DA.</p>
+<table>
+  <thead><tr><th>Role</th><th>Scope</th><th>Can</th><th>Cannot</th></tr></thead>
+  <tbody>
+    <tr><td>Development Agent</td><td>Own DA-ID</td><td>Own profile, farmers, visits, leave requests, feedback, grievances</td><td>Approve anything, see other DAs</td></tr>
+    <tr><td>Supervisor</td><td>Own Woreda</td><td>Approve onboarding and lifecycle, assign Kebeles, approve leave, team views</td><td>Act outside own Woreda, manage users</td></tr>
+    <tr><td>Executive</td><td>Own Region</td><td>Regional dashboards, SLA roll-ups, reports</td><td>Any edit, approval or assignment</td></tr>
+    <tr><td>OAN Administrator</td><td>All</td><td>Users, roles, scopes, settings, sync config, audit</td><td>Delete immutable audit records</td></tr>
+    <tr><td>Communications Officer</td><td>Broadcast domain</td><td>Broadcasts, alerts, knowledge articles</td><td>See or edit DA identity, approvals</td></tr>
+  </tbody>
+</table>
+
+<h2>6. Team ownership</h2>
+<div class="grid2">
+  <div class="panel reg">
+    <h3>Yash — DA Registry (OpenG2P)</h3>
+    <ul>
+      <li>DA entity and validation rules (Shikha's field list)</li>
+      <li>Webintake form, CSV import, MoA sync</li>
+      <li>Fayda verification, duplicate check, DA-ID issuance</li>
+      <li>Supervisor review workflow and publication</li>
+      <li>Registry table, search, filter, exceptions</li>
+      <li>Registry APIs consumed by DA Services</li>
+    </ul>
+  </div>
+  <div class="panel svc">
+    <h3>Nikky &amp; Pushkar — DA Services (Frappe)</h3>
+    <ul>
+      <li>All APIs behind the portal and mobile app (~150 endpoints estimated)</li>
+      <li>Auth integration, RBAC and scope (DA-27)</li>
+      <li>Dashboard, profile, visits, tasks, farmers, sync, notifications</li>
+      <li>Leave, lifecycle, KPI, reviews, training, advisors, surveys</li>
+      <li>Adapters: Registry, Farmer Registry, Grievance, ODK, messaging</li>
+    </ul>
+  </div>
+</div>
+
+<h2>7. Open decisions</h2>
+<ul class="open">
+  <li><strong>Registry integration path.</strong> Does DA Services call OpenG2P directly or a Registry API layer? Determines the registry client, status push-back and whether events or polling are used.</li>
+  <li><strong>Login.</strong> <code>oan_auth_service</code> as interim (same as Grievance) vs central OAN IAM. Does Kong validate the token or only route?</li>
+  <li><strong>Fayda sign-in.</strong> Needs relying-party credentials, a sandbox and HTTPS on staging. Planned as a second sign-in once available.</li>
+  <li><strong>Registry pages in the portal</strong> (<code>/agents</code>, <code>/approvals</code>, <code>/assignments</code>, <code>/registry-sync</code>). Served through DA Services as pass-through, or by OpenG2P's own UI?</li>
+  <li><strong>Field list.</strong> Fayda ID, mandatory fields, dropdown values, Zone level, joining date; naming (Name / Father / Grandfather vs First / Last) and birth date (EC month-year vs full Gregorian) differ between Shikha's list and the UI.</li>
+  <li><strong>Supervisors per Woreda</strong> and whether any one of them may approve, or a primary approver exists.</li>
+  <li><strong>Master data source</strong> for Region / Zone / Woreda / Kebele.</li>
+</ul>
+
+<h2>8. Where things stand</h2>
+<div class="status">
+  <div><b>Environment</b>Frappe v16 bench in Docker, site da-services.localhost, SETUP.md for the team</div>
+  <div><b>Code</b>5 roles, DA RBAC Assignment, scope checks, permission hooks, mock Registry client, first endpoint, 25 tests</div>
+  <div><b>Delivery</b>PR #1 to develop open for review; Jira DA-27 subtasks created (4 done, 9 to do)</div>
+  <div><b>Next</b>Wire oan_auth_service + /me, RBAC admin API, then DA-role APIs (dashboard, profile, visits)</div>
+</div>
+
+<footer>Sources: EOAN_SPEC_FRS_DA_Registry_D3 (study guide), EOAN_SPEC_Design_DA_Registry_Part1_D1, DA Services Part 2 brief, team architecture diagram, DA Registry Fields (Shikha), staging portal. Numbers of users per role are estimates, not from the documents.</footer>
+</div>

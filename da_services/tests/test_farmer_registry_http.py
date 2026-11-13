@@ -1,0 +1,758 @@
+"""Farmer Registry HTTP client against the real Staff API contract (read path).
+
+requests.post is stubbed with canned OpenG2P envelopes shaped like the
+registry's SearchResultData / RecordData / RegisterTabRecordData, so the
+client, mappers and error mapping are exercised without a live registry.
+"""
+
+from unittest.mock import Mock, patch
+
+import frappe
+from frappe.tests import IntegrationTestCase
+
+from da_services.integrations.farmer_registry.client import (
+	FarmerRegistryClientError,
+	FarmerRegistryError,
+	FarmerRegistryServerError,
+)
+from da_services.integrations.farmer_registry.mapper import (
+	cache_registration_state,
+	farmer_to_reference_dict,
+	merge_tab_records,
+	registry_record_to_farmer,
+	search_row_to_list_item,
+	updates_to_change_requests,
+)
+
+REGISTER_ID = "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd"
+SSO_HEADERS = {"Authorization": "Bearer sso-user-token", "X-CSRF-Token": "sso-csrf"}
+CONF_KEYS = (
+	"farmer_registry_url",
+	"farmer_registry_api_key",
+	"farmer_registry_keycloak",
+	"farmer_registry_ingest",
+	"farmer_registry_backend",
+)
+
+
+def _envelope(payload, *, status="SUCCESS", error=None, error_code=None, total=None):
+	return {
+		"response_header": {
+			"request_id": "r",
+			"response_status": status,
+			"response_error_code": error_code if error_code is not None else ("E" if error else None),
+			"response_error_message": error,
+			"response_timestamp": "2026-10-22T10:00:00",
+		},
+		"response_body": {
+			"pagination_response": {
+				"number_of_items": total if total is not None else 0,
+				"number_of_pages": 1,
+			},
+			"response_payload": payload,
+		},
+	}
+
+
+class _Resp:
+	def __init__(self, body, status_code=200, url="https://registry.test/x"):
+		self._body = body
+		self.status_code = status_code
+		self.url = url
+		self.text = str(body)
+
+	def json(self):
+		if isinstance(self._body, Exception):
+			raise self._body
+		return self._body
+
+
+SUBJECT = {
+	"internal_record_id": "frm-1",
+	"functional_record_id": "FR-000101",
+	"record_name": "Abebe Kebede Tesfaye",
+	"first_name": "Abebe",
+	"middle_name": "Kebede",
+	"last_name": "Tesfaye",
+	"state": "APPROVED",
+	"created_at": "2026-06-01T10:30:00",
+	"last_approved_at": "2026-06-02T09:00:00",
+	"documents": [],
+}
+FARMER_TAB = [
+	{
+		"section_register_id": REGISTER_ID,
+		"is_list": False,
+		"records": [{"birth_date": "1985-04-12", "gender": "MALE"}],
+	},
+	{
+		"section_register_id": REGISTER_ID,
+		"is_list": False,
+		"records": [
+			{"source_of_income": "CROP_PRODUCTION", "education_level": "PRIMARY", "is_psnp_user": False}
+		],
+	},
+	{
+		"section_register_id": "phone-register",
+		"is_list": True,
+		"records": [
+			{"phone_number": "922000000", "phone_type": "SECONDARY", "is_primary": False},
+			{"phone_number": "911234567", "phone_type": "PRIMARY", "is_primary": True},
+		],
+	},
+]
+LOCATION_TAB = [
+	{
+		"section_register_id": REGISTER_ID,
+		"is_list": False,
+		"records": [
+			{
+				"region_name": "Oromia",
+				"zone_name": "West Shewa",
+				"woreda_name": "Bako Tibe",
+				"kebele_name": "Bako 01",
+			}
+		],
+	}
+]
+HOUSEHOLD_TAB = [
+	{
+		"section_register_id": REGISTER_ID,
+		"is_list": False,
+		"records": [{"is_household_head": True, "size_of_group": 5}],
+	}
+]
+LAND_TAB = [
+	{
+		# The Lands tab also returns the farmer's own land summary row; it is not a plot.
+		"section_register_id": REGISTER_ID,
+		"is_list": False,
+		"records": [{"internal_record_id": "frm-1", "total_land_area": 2.25}],
+	},
+	{
+		"section_register_id": "land-register",
+		"is_list": True,
+		"records": [
+			{
+				"land_id": "LND-1",
+				"area_in_hectare": 1.5,
+				"land_ownership_type": "OWNER",
+				"certificate_provided": True,
+			},
+			{
+				"land_id": "LND-2",
+				"area_in_hectare": 0.75,
+				"land_ownership_type": "TENANT",
+				"certificate_provided": False,
+			},
+		],
+	},
+]
+SEARCH_ROWS = [
+	{
+		"internal_record_id": "frm-1",
+		"functional_record_id": "FR-000101",
+		"record_name": "Abebe Kebede",
+		"record_image_url": "https://minio/photo-1?X-Amz-Expires=3600",
+		"created_at": "2026-06-01T10:30:00",
+		"display_fields": [
+			{"field_name": "woreda_name", "value": "Bako Tibe", "order": 1},
+			{"field_name": "kebele_name", "value": "Bako 01", "order": 2},
+			{"field_name": "state", "value": "APPROVED", "order": 3},
+		],
+	},
+	{
+		"internal_record_id": "frm-2",
+		"functional_record_id": "FR-000102",
+		"record_name": "Almaz Tesfaye",
+		"display_fields": [{"field_name": "kebele_name", "value": "Bako 02", "order": 2}],
+	},
+]
+
+
+CHANGE_REQUESTS = {
+	"farmer_farmer_tab": [
+		{
+			"change_request_id": "cr-old",
+			"tab_id": "farmer_farmer_tab",
+			"section_id": "farmer_name",
+			"approval_status": "APPROVED",
+			"created_at": "2026-10-20T09:00:00",
+		}
+	],
+	"farmer_location_tab": [
+		{
+			"change_request_id": "cr-new",
+			"tab_id": "farmer_location_tab",
+			"section_id": "farmer_location",
+			"approval_status": "PENDING",
+			"created_at": "2026-10-28T14:30:00",
+		}
+	],
+}
+REGISTERS = [
+	{"register_id": "hh-reg", "register_mnemonic": "Household"},
+	{"register_id": REGISTER_ID, "register_mnemonic": "Farmer"},
+]
+INTAKE_FORMS = [
+	{"form_id": "other-form", "form_mnemonic": "farmer_partner_intake", "register_id": REGISTER_ID},
+	{"form_id": "the-form", "form_mnemonic": "farmer_ingestion_intake", "register_id": REGISTER_ID},
+	{"form_id": "hh-form", "form_mnemonic": "farmer_ingestion_intake", "register_id": "hh-reg"},
+]
+
+
+def _route(url, json=None, **_):
+	"""Fake Staff API: answer by path."""
+	if url.endswith("/register-data/get_subject_record"):
+		rid = json["request_body"]["request_payload"]["subject_record_id"]
+		if rid == "missing":
+			return _Resp(_envelope(None, status="ERROR", error="Record not found"))
+		if rid == "code-only":
+			return _Resp(_envelope(None, status="ERROR", error_code="REGISTER_DATA_NOT_FOUND"))
+		return _Resp(_envelope(SUBJECT))
+	if url.endswith("/register-data/get_tab_records"):
+		tab = json["request_body"]["request_payload"]["tab_id"]
+		if tab in getattr(_route, "failing_tabs", ()):
+			return _Resp({"detail": "gateway"}, 503)
+		return _Resp(
+			_envelope(
+				{
+					"farmer_farmer_tab": FARMER_TAB,
+					"farmer_location_tab": LOCATION_TAB,
+					"farmer_household_link_tab": HOUSEHOLD_TAB,
+					"farmer_land_tab": LAND_TAB,
+				}.get(tab, [])
+			)
+		)
+	if url.endswith("/register-data/search_in_a_register"):
+		_route.last_search = json
+		return _Resp(_envelope(SEARCH_ROWS, total=2))
+	if url.endswith("/change-requests/create_change_request"):
+		_route.last_change = json
+		return _Resp(_envelope({"change_request_id": "CR-77"}))
+	if url.endswith("/change-requests/get_change_requests"):
+		payload = json["request_body"]["request_payload"]
+		_route.change_request_tabs.append(payload["tab_id"])
+		return _Resp(_envelope(CHANGE_REQUESTS.get(payload["tab_id"], [])))
+	if url.endswith("/register-metadata/get_all_registers"):
+		_route.register_calls += 1
+		return _Resp(_envelope(REGISTERS))
+	if url.endswith("/intake-form-metadata/get_all_intake_forms"):
+		return _Resp(_envelope(INTAKE_FORMS))
+	if url.endswith("/intake-form-data/delete_intake_form_submission"):
+		sid = json["request_body"]["request_payload"]["submission_id"]
+		if sid == "gone":
+			return _Resp(_envelope(None, status="ERROR", error=f"INTAKE_FORM_NOT_FOUND: {sid}"))
+		return _Resp(_envelope({"submission_id": sid}))
+	if url.endswith("/forbidden"):
+		return _Resp(
+			_envelope(None, status="ERROR", error="Forbidden. Insufficient resource_access roles."), 403
+		)
+	if url.endswith("/down"):
+		return _Resp({"detail": "gateway"}, 503)
+	raise AssertionError(f"unexpected url {url}")
+
+
+_route.register_calls = 0
+_route.change_request_tabs = []
+
+
+def _search_row(n: int, kebele: str | None, woreda: str | None = "Bako Tibe") -> dict:
+	fields = [{"field_name": "woreda_name", "value": woreda, "order": 1}] if woreda else []
+	if kebele:
+		fields.append({"field_name": "kebele_name", "value": kebele, "order": 2})
+	return {
+		"internal_record_id": f"frm-p{n}",
+		"functional_record_id": f"FR-9{n:05d}",
+		"display_fields": fields,
+	}
+
+
+# Nine farmers over three registry pages of three; five are in Bako 01. One
+# Bako 01 row names no Woreda and one row names no Kebele.
+PAGED_ROWS = [
+	_search_row(0, "Bako 01"),
+	_search_row(1, "Bako 02"),
+	_search_row(2, "Bako 01"),
+	_search_row(3, None),
+	_search_row(4, "Bako 01"),
+	_search_row(5, "Bako 01"),
+	_search_row(6, "Bako 03"),
+	_search_row(7, "Bako 01", woreda=None),
+	_search_row(8, "Bako 01"),
+]
+
+
+def _paged_route(rows: list[dict]):
+	"""_route, except that search pages through rows and ignores filter_by, as the dev registry does."""
+
+	def route(url, json=None, **kwargs):
+		if not url.endswith("/register-data/search_in_a_register"):
+			return _route(url, json=json, **kwargs)
+		pag = json["request_body"]["pagination_request"]
+		route.pages_read.append(pag["current_page"])
+		size = pag["page_size"]
+		body = _envelope(rows[(pag["current_page"] - 1) * size : pag["current_page"] * size], total=len(rows))
+		body["response_body"]["pagination_response"]["number_of_pages"] = -(-len(rows) // size)
+		return _Resp(body)
+
+	route.pages_read = []
+	return route
+
+
+class TestHttpReadPath(IntegrationTestCase):
+	def setUp(self):
+		self._saved = {k: frappe.conf.get(k) for k in CONF_KEYS}
+		frappe.conf.update(
+			{
+				"farmer_registry_url": "https://registry.test",
+				"farmer_registry_api_key": "static-test-token",
+				"farmer_registry_keycloak": {},
+				"farmer_registry_ingest": {"register_id": REGISTER_ID, "data_model": "FARMER_ODK_MODEL"},
+			}
+		)
+		from da_services.integrations.farmer_registry.http import (
+			SUMMARY_CACHE_PREFIX,
+			HTTPFarmerRegistryClient,
+		)
+
+		frappe.cache.delete_keys(SUMMARY_CACHE_PREFIX)
+		self.client = HTTPFarmerRegistryClient()
+		# Staff calls forward the caller's SSO headers; tests have no live request.
+		self.request_headers = dict(SSO_HEADERS)
+		header_patch = patch(
+			"da_services.integrations.farmer_registry.http.frappe.get_request_header",
+			side_effect=lambda key, default=None: self.request_headers.get(key, default),
+		)
+		header_patch.start()
+		self.addCleanup(header_patch.stop)
+
+	def tearDown(self):
+		for k, v in self._saved.items():
+			if v is None:
+				frappe.conf.pop(k, None)
+			else:
+				frappe.conf[k] = v
+
+	# -- config -----------------------------------------------------------
+
+	def test_config_fails_fast_without_auth(self):
+		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+
+		frappe.conf.update({"farmer_registry_api_key": None, "farmer_registry_keycloak": {}})
+		with self.assertRaises(FarmerRegistryError):
+			HTTPFarmerRegistryClient()
+
+	def test_config_fails_fast_on_partial_keycloak(self):
+		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+
+		frappe.conf.update({"farmer_registry_keycloak": {"token_url": "https://kc/token", "client_id": "x"}})
+		with self.assertRaises(FarmerRegistryError):
+			HTTPFarmerRegistryClient()
+
+	# -- get_farmer ---------------------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_merges_identity_and_tabs(self, _post):
+		farmer = self.client.get_farmer("frm-1")
+		self.assertEqual(farmer.farmer_id, "frm-1")
+		self.assertEqual(farmer.reg_id, "FR-000101")
+		self.assertEqual(farmer.given_name, "Abebe")
+		self.assertEqual(farmer.father_first_name, "Kebede")
+		self.assertEqual(farmer.family_name, "Tesfaye")
+		self.assertEqual(farmer.phone, "911234567")  # primary wins over the first row
+		self.assertTrue(farmer.has_personal_phone)
+		self.assertEqual(str(farmer.birth_date), "1985-04-12")
+		self.assertEqual(farmer.gender, "male")
+		self.assertEqual(farmer.kebele_name, "Bako 01")
+		self.assertEqual(farmer.woreda_name, "Bako Tibe")
+		self.assertTrue(farmer.is_household_head)
+		self.assertEqual(farmer.household_size, 5)
+		self.assertEqual(farmer.source_of_income, "CROP_PRODUCTION")
+		self.assertEqual(farmer.state, "APPROVED")
+		self.assertEqual(farmer.registration_date.isoformat(), "2026-06-02T09:00:00")
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_not_found_returns_none(self, _post):
+		self.assertIsNone(self.client.get_farmer("missing"))
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_photo_reads_the_signed_link(self, _post):
+		"""The record's image link and document id; None without a photo or a record."""
+		self.assertIsNone(self.client.get_farmer_photo("frm-1"))
+		self.assertIsNone(self.client.get_farmer_photo("missing"))
+		photo = {
+			"record_image_url": "https://minio/doc-1?X-Amz-Expires=3600",
+			"record_image_document_id": "doc-1",
+		}
+		with patch.dict(SUBJECT, photo):
+			self.assertEqual(
+				self.client.get_farmer_photo("frm-1"),
+				{"url": "https://minio/doc-1?X-Amz-Expires=3600", "document_id": "doc-1"},
+			)
+
+	def test_register_data_not_found_code_is_not_found(self):
+		from da_services.integrations.farmer_registry.http import StaffResponse
+
+		res = StaffResponse(
+			status="ERROR",
+			error_code="REGISTER_DATA_NOT_FOUND",
+			error_message="REGISTER_DATA_NOT_FOUND",
+			payload=None,
+		)
+		self.assertTrue(res.not_found)
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_find_internal_id_matches_the_farmer_number(self, _post):
+		self.assertEqual(self.client.find_internal_id("FR-000101"), "frm-1")
+		self.assertIsNone(self.client.find_internal_id("FR-missing"))
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_register_data_not_found_code_returns_none(self, _post):
+		"""REGISTER_DATA_NOT_FOUND is a missing subject, not a validation failure."""
+		self.assertIsNone(self.client.get_farmer("code-only"))
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_reports_sections_it_could_not_fetch(self, _post):
+		"""A tab failure yields a partial record that says so, not a silently blank one."""
+		self.assertEqual(self.client.get_farmer("frm-1").incomplete_sections, [])
+		_route.failing_tabs = ("farmer_household_link_tab", "farmer_location_tab")
+		try:
+			farmer = self.client.get_farmer("frm-1")
+		finally:
+			_route.failing_tabs = ()
+		self.assertEqual(farmer.farmer_id, "frm-1")
+		self.assertEqual(farmer.given_name, "Abebe")  # identity row still came back
+		self.assertEqual(farmer.incomplete_sections, ["location", "household"])
+		self.assertIsNone(farmer.kebele_name)
+		self.assertFalse(farmer.is_household_head)
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_requests_carry_token_csrf_and_envelope(self, post):
+		self.client.get_farmer("frm-1")
+		_, kwargs = post.call_args_list[0]
+		# The caller's SSO token is forwarded; the static API key is not sent.
+		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sso-user-token")
+		self.assertEqual(kwargs["headers"]["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(kwargs["cookies"], {"X-CSRF-Token": "sso-csrf"})
+		self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
+		env = kwargs["json"]
+		self.assertEqual(env["request_header"]["sender_app_mnemonic"], "DA_SERVICES")
+		self.assertEqual(env["request_body"]["request_payload"]["subject_register_id"], REGISTER_ID)
+
+	def test_missing_sso_header_is_a_401_before_any_call(self):
+		for headers in ({"Authorization": "Bearer sso-user-token"}, {"X-CSRF-Token": "sso-csrf"}, {}):
+			with self.subTest(headers=headers):
+				self.request_headers = headers
+				with (
+					patch("da_services.integrations.farmer_registry.http.requests.post") as post,
+					self.assertRaises(FarmerRegistryClientError) as cm,
+				):
+					self.client.get_farmer("frm-1")
+				self.assertEqual(cm.exception.status_code, 401)
+				post.assert_not_called()
+
+	def test_upload_forwards_sso_headers_without_json_content_type(self):
+		post = Mock(return_value=_Resp(_envelope([{"document_id": "doc-1"}])))
+		with patch("da_services.integrations.farmer_registry.http.requests.post", post):
+			self.assertEqual(self.client.upload_document("photo.jpg", b"jpg", "image/jpeg"), "doc-1")
+		_, kwargs = post.call_args
+		self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sso-user-token")
+		self.assertEqual(kwargs["cookies"], {"X-CSRF-Token": "sso-csrf"})
+		self.assertNotIn("Content-Type", kwargs["headers"])
+		self.assertEqual(kwargs["files"]["documents"], ("photo.jpg", b"jpg", "image/jpeg"))
+
+	# -- list_farmers -------------------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_list_farmers_filters_and_paginates(self, _post):
+		items, total = self.client.list_farmers(woreda="Bako Tibe", state="APPROVED", limit=20, offset=40)
+		self.assertEqual(total, 2)
+		self.assertEqual([i.farmer_id for i in items], ["frm-1", "frm-2"])
+		self.assertEqual(items[0].kebele, "Bako 01")
+		self.assertEqual(items[0].state, "APPROVED")
+		self.assertEqual(items[1].state, "UNKNOWN")
+		pag = _route.last_search["request_body"]["pagination_request"]
+		self.assertEqual(pag["current_page"], 3)
+		self.assertEqual(pag["page_size"], 20)
+		self.assertEqual(pag["filter_by"], {"woreda_name": "Bako Tibe", "state": "APPROVED"})
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_list_farmers_narrows_by_kebele_client_side(self, _post):
+		items, _ = self.client.list_farmers(kebele="Bako 02")
+		self.assertEqual([i.farmer_id for i in items], ["frm-2"])
+
+	# -- search_farmers (DA-272) -------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_passes_text_and_returns_page_metadata(self, _post):
+		page = self.client.search_farmers(
+			search_text="Abebe", filter_by={"state": "APPROVED"}, page=2, page_size=10
+		)
+		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1", "frm-2"])
+		# The search row's photo link is passed on; a row without one has none.
+		self.assertEqual(
+			[i.photo_url for i in page["items"]], ["https://minio/photo-1?X-Amz-Expires=3600", None]
+		)
+		self.assertEqual(
+			(page["page"], page["page_size"], page["total"], page["number_of_pages"]), (2, 10, 2, 1)
+		)
+		self.assertFalse(page["filtered_client_side"])
+		pag = _route.last_search["request_body"]["pagination_request"]
+		self.assertEqual(pag["search_text"], "Abebe")
+		self.assertEqual((pag["current_page"], pag["page_size"]), (2, 10))
+		self.assertEqual(pag["filter_by"], {"state": "APPROVED"})
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_fills_phone_and_land_from_the_record(self, _post):
+		"""Search rows carry no phone, land area or plot count; they come from the record and the Lands tab."""
+		record = {
+			"phone_numbers": [
+				{"type": "other", "number": "+251911000000", "is_primary": False},
+				{"type": "primary", "number": "+251964815374", "is_primary": True},
+			],
+			"total_land_area": "4.250000",
+		}
+		with patch.dict(SUBJECT, record):
+			items = self.client.search_farmers(search_text="FR-")["items"]
+		plots = len(self.client.get_farmer_plots("frm-1"))
+		self.assertGreater(plots, 0)
+		self.assertEqual(
+			[(i.phone, i.total_land_area, i.total_plots) for i in items], [("+251964815374", 4.25, plots)] * 2
+		)
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_reapplies_area_filters_and_fails_closed(self, _post):
+		"""The registry may ignore filter_by: rows outside the asked Woreda, or with no Woreda, are dropped."""
+		page = self.client.search_farmers(filter_by={"woreda": "Bako Tibe"})
+		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-1"])
+		self.assertTrue(page["filtered_client_side"])
+		# One registry page: the count is what is left of it, not the registry's total.
+		self.assertEqual((page["total"], page["number_of_pages"]), (1, 1))
+		self.assertEqual(
+			_route.last_search["request_body"]["pagination_request"]["filter_by"],
+			{"woreda_name": "Bako Tibe"},
+		)
+		self.assertEqual(self.client.search_farmers(filter_by={"woreda": "Nowhere"})["items"], [])
+		self.assertEqual(
+			[i.farmer_id for i in self.client.search_farmers(filter_by={"kebele": "Bako 02"})["items"]],
+			["frm-2"],
+		)
+
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_PAGE_SIZE", 3)
+	def test_search_farmers_counts_an_area_across_every_registry_page(self):
+		"""The registry ignores filter_by over 3 pages: total and pages count only the Kebele's farmers."""
+		route = _paged_route(PAGED_ROWS)
+		with patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=route):
+			first = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=1, page_size=2)
+			self.assertEqual(route.pages_read, [1, 2, 3])
+			second = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=2, page_size=2)
+			last = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=3, page_size=2)
+			beyond = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page=4, page_size=2)
+
+		ids = lambda page: [i.farmer_id for i in page["items"]]  # noqa: E731
+		# frm-p7 names Bako 01 but no Woreda; it still matches a Kebele-only filter.
+		self.assertEqual(ids(first), ["frm-p0", "frm-p2"])
+		self.assertEqual(ids(second), ["frm-p4", "frm-p5"])
+		self.assertEqual(ids(last), ["frm-p7", "frm-p8"])
+		for page in (first, second, last):
+			self.assertEqual((page["total"], page["number_of_pages"]), (6, 3))
+			self.assertTrue(page["filtered_client_side"])
+		self.assertEqual(ids(beyond), [])
+
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_PAGE_SIZE", 3)
+	def test_search_farmers_area_scan_fails_closed(self):
+		"""Woreda and Kebele together: a row naming no Woreda or no Kebele is dropped."""
+		with patch(
+			"da_services.integrations.farmer_registry.http.requests.post",
+			side_effect=_paged_route(PAGED_ROWS),
+		):
+			page = self.client.search_farmers(
+				filter_by={"woreda": "Bako Tibe", "kebele": "Bako 01"}, page_size=10
+			)
+			several = self.client.search_farmers(filter_by={"kebeles": ["Bako 02", "Bako 03"]}, page_size=10)
+		self.assertEqual(
+			[i.farmer_id for i in page["items"]], ["frm-p0", "frm-p2", "frm-p4", "frm-p5", "frm-p8"]
+		)
+		self.assertEqual((page["total"], page["number_of_pages"]), (5, 1))
+		self.assertEqual([i.farmer_id for i in several["items"]], ["frm-p1", "frm-p6"])
+		self.assertEqual(several["total"], 2)
+
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_PAGE_SIZE", 3)
+	@patch("da_services.integrations.farmer_registry.http.SEARCH_SCAN_MAX_PAGES", 2)
+	def test_search_farmers_area_scan_stops_at_the_page_bound(self):
+		route = _paged_route(PAGED_ROWS)
+		with patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=route):
+			page = self.client.search_farmers(filter_by={"kebele": "Bako 01"}, page_size=10)
+		self.assertEqual(route.pages_read, [1, 2])
+		self.assertEqual(page["total"], 4)
+
+	def test_search_farmers_without_area_filter_reads_one_registry_page(self):
+		"""An unscoped caller gets the registry's page and its figures, as before."""
+		route = _paged_route(PAGED_ROWS)
+		with patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=route):
+			page = self.client.search_farmers(filter_by={"state": "APPROVED"}, page=2, page_size=3)
+		self.assertEqual(route.pages_read, [2])
+		self.assertEqual([i.farmer_id for i in page["items"]], ["frm-p3", "frm-p4", "frm-p5"])
+		self.assertEqual((page["total"], page["number_of_pages"]), (9, 3))
+		self.assertFalse(page["filtered_client_side"])
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_search_farmers_clamps_page_size(self, _post):
+		page = self.client.search_farmers(page=0, page_size=5000)
+		self.assertEqual((page["page"], page["page_size"]), (1, 500))
+
+	# -- change requests (DA-272) ------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_change_requests_reads_every_tab_newest_first(self, _post):
+		_route.change_request_tabs = []
+		rows = self.client.get_change_requests("frm-1")
+		self.assertEqual([r["change_request_id"] for r in rows], ["cr-new", "cr-old"])
+		self.assertEqual(len(_route.change_request_tabs), 6)
+		payload = _post.call_args_list[0][1]["json"]["request_body"]["request_payload"]
+		self.assertEqual(payload["subject_register_id"], REGISTER_ID)
+		self.assertEqual(payload["subject_record_id"], "frm-1")
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_change_requests_filters_by_tab_and_status(self, _post):
+		_route.change_request_tabs = []
+		rows = self.client.get_change_requests("frm-1", tab="location", status="pending")
+		self.assertEqual([r["change_request_id"] for r in rows], ["cr-new"])
+		self.assertEqual(_route.change_request_tabs, ["farmer_location_tab"])
+		self.assertEqual(self.client.get_change_requests("frm-1", tab="location", status="APPROVED"), [])
+
+	def test_get_change_requests_rejects_unknown_tab(self):
+		with self.assertRaises(FarmerRegistryClientError):
+			self.client.get_change_requests("frm-1", tab="passport")
+
+	# -- discovered ids (DA-272) -------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_register_and_intake_form_ids_are_discovered_and_cached(self, _post):
+		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+
+		frappe.conf.farmer_registry_ingest = {"data_model": "FARMER_ODK_MODEL"}
+		HTTPFarmerRegistryClient.clear_id_cache()
+		_route.register_calls = 0
+		client = HTTPFarmerRegistryClient()
+		self.assertEqual(client.register_id, REGISTER_ID)
+		self.assertEqual(client.intake_form_id, "the-form")
+		# A second client on the same host reads the cache, not the registry.
+		HTTPFarmerRegistryClient().register_id
+		self.assertEqual(_route.register_calls, 1)
+		HTTPFarmerRegistryClient.clear_id_cache()
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_intake_form_discovery_needs_one_match(self, _post):
+		from da_services.integrations.farmer_registry.http import HTTPFarmerRegistryClient
+
+		frappe.conf.farmer_registry_ingest = {"data_model": "FARMER_ODK_MODEL"}
+		frappe.conf.farmer_registry_intake_form_contains = "farmer"
+		HTTPFarmerRegistryClient.clear_id_cache()
+		try:
+			with self.assertRaises(FarmerRegistryError) as ctx:
+				HTTPFarmerRegistryClient().intake_form_id
+			self.assertIn("2 form(s) match", str(ctx.exception))
+		finally:
+			frappe.conf.pop("farmer_registry_intake_form_contains", None)
+			HTTPFarmerRegistryClient.clear_id_cache()
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_delete_intake_submission(self, _post):
+		self.assertTrue(self.client.delete_intake_submission("draft-1"))
+		self.assertFalse(self.client.delete_intake_submission("gone"))
+		payload = _post.call_args_list[0][1]["json"]["request_body"]["request_payload"]
+		self.assertEqual(payload, {"submission_id": "draft-1"})
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_intake_forms_queries_the_farmer_register(self, _post):
+		forms = self.client.get_intake_forms()
+		self.assertEqual(len(forms), 3)
+		payload = _post.call_args_list[-1][1]["json"]["request_body"]["request_payload"]
+		self.assertEqual(payload, {"register_id": REGISTER_ID})
+
+	# -- plots --------------------------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_get_farmer_plots(self, _post):
+		plots = self.client.get_farmer_plots("frm-1")
+		self.assertEqual([p.plot_id for p in plots], ["LND-1", "LND-2"])
+		self.assertEqual(plots[0].area_in_hectare, 1.5)
+		self.assertTrue(plots[0].certificate_provided)
+		self.assertEqual(plots[1].land_ownership_type, "TENANT")
+
+	# -- update -------------------------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_update_farmer_creates_change_request(self, _post):
+		result = self.client.update_farmer(
+			"frm-1", {"income_source": "LIVESTOCK", "education_level": "SECONDARY"}
+		)
+		self.assertTrue(result["success"])
+		self.assertFalse(result["conflict"])
+		self.assertEqual(result["version"], "CR-77")
+		payload = _route.last_change["request_body"]["request_payload"]
+		self.assertEqual(payload["internal_record_id"], "frm-1")
+		self.assertEqual(payload["section_id"], "farmer_farmer_socio_economic_and_health_section_04")
+		self.assertEqual(payload["tab_id"], "farmer_farmer_tab")
+		self.assertEqual(
+			payload["change_payload"], {"source_of_income": "LIVESTOCK", "education_level": "SECONDARY"}
+		)
+
+	def test_update_farmer_rejects_unsupported_fields(self):
+		with self.assertRaises(FarmerRegistryClientError) as cm:
+			self.client.update_farmer("frm-1", {"phone": "911", "income_source": "LIVESTOCK"})
+		self.assertIn("phone", str(cm.exception))
+
+	# -- error mapping ------------------------------------------------------
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_4xx_is_client_error(self, _post):
+		with self.assertRaises(FarmerRegistryClientError) as cm:
+			self.client._staff_post("/forbidden", {}, action="probe")
+		self.assertEqual(cm.exception.status_code, 403)
+		self.assertIn("Insufficient resource_access roles", str(cm.exception))
+
+	@patch("da_services.integrations.farmer_registry.http.requests.post", side_effect=_route)
+	def test_5xx_is_server_error(self, _post):
+		with self.assertRaises(FarmerRegistryServerError):
+			self.client._staff_post("/down", {}, action="probe")
+
+
+class TestReadMappers(IntegrationTestCase):
+	def test_merge_keeps_identity_row_and_collects_phones(self):
+		record = dict(SUBJECT)
+		merge_tab_records(record, FARMER_TAB)
+		self.assertEqual(record["first_name"], "Abebe")
+		self.assertEqual(record["gender"], "MALE")
+		self.assertEqual(len(record["_phones"]), 2)
+		self.assertNotIn("documents", record.get("_lists", {}))
+
+	def test_active_registry_state_is_stored_as_approved(self):
+		from da_services.integrations.farmer_registry.schemas import Farmer
+
+		self.assertEqual(cache_registration_state("ACTIVE"), "APPROVED")
+		self.assertEqual(cache_registration_state("REJECTED"), "REJECTED")
+		ref = farmer_to_reference_dict(Farmer(farmer_id="frm-1", state="ACTIVE"))
+		self.assertEqual(ref["registration_state"], "APPROVED")
+
+	def test_record_to_farmer_tolerates_missing_tabs(self):
+		farmer = registry_record_to_farmer(dict(SUBJECT), "frm-1")
+		self.assertEqual(farmer.record_name, "Abebe Kebede Tesfaye")
+		self.assertIsNone(farmer.phone)
+		self.assertFalse(farmer.has_personal_phone)
+		self.assertEqual(farmer.state, "APPROVED")
+
+	def test_search_row_without_display_fields(self):
+		item = search_row_to_list_item({"internal_record_id": "x"})
+		self.assertEqual(item.name, "x")
+		self.assertEqual(item.state, "UNKNOWN")
+
+	def test_updates_split_by_section(self):
+		groups, unsupported = updates_to_change_requests(
+			{"income_source": "A", "marital_status": "B", "phone": "1", "client_op_id": "op"}
+		)
+		self.assertEqual(unsupported, ["phone"])
+		self.assertEqual(len(groups), 1)
+		self.assertEqual(groups[0]["payload"], {"source_of_income": "A", "marital_status": "B"})

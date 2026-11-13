@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+wheels/
+.eggs/
+.installed.cfg
+MANIFEST
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+.tox/
+.nox/
+
+# Translations (compiled)
+*.mo
+*.pot
+
+# Environments and secrets. Credentials come from site_config.json /
+# environment variables inside the bench, never from the repository.
+.env
+.env.*
+!.env.example
+.venv
+env/
+venv/
+
+# Frappe / bench artefacts that must never land in an app repository
+node_modules/
+*.log
+*.pid
+*.rdb
+*.aof
+sites/
+logs/
+config/pids/
+locks/
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pdm-python
+.pdm-build/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+tempCodeRunnerFile.py
+
+# Local scratch
+scripts/
+.agents/
+DEMO_PRESENTATION.html
+.claude/
+
+# Local Cursor skills and notes. Do not commit.
+.cursor/
+

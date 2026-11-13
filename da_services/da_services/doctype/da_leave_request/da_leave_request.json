@@ -1,0 +1,287 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DA-LVR-{YYYY}-{#######}",
+ "creation": "2026-10-23 00:30:00.000000",
+ "description": "A Development Agent's leave request (FSD 3.2.1 lifecycle: Active Status is set by Part 2). The Woreda Supervisor approves; when the leave starts the DA becomes On-leave in the DA Registry and Kebele coverage shows 'Agent on leave'; when it ends the DA is reactivated.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "da_id",
+  "leave_type",
+  "status",
+  "col_main",
+  "requested_by",
+  "reason",
+  "sec_dates",
+  "from_date",
+  "col_dates",
+  "to_date",
+  "days",
+  "sec_scope",
+  "region",
+  "zone",
+  "col_scope",
+  "woreda",
+  "sec_decision",
+  "approver",
+  "decided_at",
+  "col_decision",
+  "decision_note",
+  "sec_registry",
+  "registry_sync_state",
+  "registry_reference",
+  "col_registry",
+  "registry_error",
+  "activated_at",
+  "completed_at",
+  "sec_device",
+  "client_op_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "da_id",
+   "fieldtype": "Data",
+   "label": "DA-ID",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "leave_type",
+   "fieldtype": "Select",
+   "label": "Leave Type",
+   "options": "Annual\nSick\nMaternity\nStudy\nOther",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nApproved\nActive\nCompleted\nRejected\nCancelled",
+   "default": "Pending",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "col_main",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "label": "Requested By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sec_dates",
+   "fieldtype": "Section Break",
+   "label": "Dates"
+  },
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "col_dates",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "label": "To",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "days",
+   "fieldtype": "Int",
+   "label": "Days",
+   "read_only": 1,
+   "description": "Calendar days, inclusive."
+  },
+  {
+   "fieldname": "sec_scope",
+   "fieldtype": "Section Break",
+   "label": "Scope",
+   "description": "Stamped from the DA Registry when the request is made; drives the Supervisor queue."
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Data",
+   "label": "Region",
+   "read_only": 1
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Data",
+   "label": "Zone",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_scope",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Data",
+   "label": "Woreda",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_decision",
+   "fieldtype": "Section Break",
+   "label": "Decision"
+  },
+  {
+   "fieldname": "approver",
+   "fieldtype": "Link",
+   "label": "Approver",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "decided_at",
+   "fieldtype": "Datetime",
+   "label": "Decided At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_decision",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "decision_note",
+   "fieldtype": "Small Text",
+   "label": "Decision Note",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_registry",
+   "fieldtype": "Section Break",
+   "label": "DA Registry",
+   "description": "Lifecycle outcome pushed when the leave starts (On-leave) and ends (Active)."
+  },
+  {
+   "fieldname": "registry_sync_state",
+   "fieldtype": "Select",
+   "label": "Registry Sync",
+   "options": "Not sent\nAccepted\nFailed",
+   "default": "Not sent",
+   "read_only": 1
+  },
+  {
+   "fieldname": "registry_reference",
+   "fieldtype": "Data",
+   "label": "Registry Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_registry",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "registry_error",
+   "fieldtype": "Small Text",
+   "label": "Registry Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "activated_at",
+   "fieldtype": "Datetime",
+   "label": "Activated At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_device",
+   "fieldtype": "Section Break",
+   "label": "Device"
+  },
+  {
+   "fieldname": "client_op_id",
+   "fieldtype": "Data",
+   "label": "Client Op ID",
+   "unique": 1,
+   "description": "Idempotency key of the device operation that created this row."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-23 00:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Leave Request",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor"
+  },
+  {
+   "read": 1,
+   "role": "Development Agent"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

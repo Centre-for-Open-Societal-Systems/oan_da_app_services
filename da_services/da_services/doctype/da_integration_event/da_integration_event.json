@@ -1,0 +1,147 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DA-INT-{#####}",
+ "creation": "2026-10-06 00:00:00.000000",
+ "description": "Persistent queue for outbound integration calls (grievance submit, action, etc.). Rows survive worker restarts and are visible in Desk for operational debugging.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "event_type",
+  "status",
+  "col_header",
+  "reference_id",
+  "external_reference",
+  "sec_payload",
+  "payload",
+  "sec_retry",
+  "attempts",
+  "max_attempts",
+  "col_retry",
+  "next_retry_at",
+  "completed_at",
+  "sec_error",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Event Type",
+   "options": "Grievance Submit\nGrievance Action\nGrievance Note\nGrievance Reassign\nFarmer Update\nFarmer Registration\nAgent Import",
+   "reqd": 1
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nProcessing\nCompleted\nFailed\nConflict",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_header",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Caller-defined key for idempotency and correlation (e.g. a local grievance draft name).",
+   "fieldname": "reference_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reference ID"
+  },
+  {
+   "description": "Upstream identifier returned on success (e.g. grievance ticket ID).",
+   "fieldname": "external_reference",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "External Reference"
+  },
+  {
+   "fieldname": "sec_payload",
+   "fieldtype": "Section Break",
+   "label": "Payload"
+  },
+  {
+   "description": "JSON-serialized request body. Replayed verbatim on retry.",
+   "fieldname": "payload",
+   "fieldtype": "JSON",
+   "label": "Payload",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sec_retry",
+   "fieldtype": "Section Break",
+   "label": "Retry"
+  },
+  {
+   "default": "0",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Attempts"
+  },
+  {
+   "default": "5",
+   "fieldname": "max_attempts",
+   "fieldtype": "Int",
+   "label": "Max Attempts"
+  },
+  {
+   "fieldname": "col_retry",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "next_retry_at",
+   "fieldtype": "Datetime",
+   "label": "Next Retry At"
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  },
+  {
+   "fieldname": "sec_error",
+   "fieldtype": "Section Break",
+   "label": "Error"
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Long Text",
+   "label": "Last Error"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-31 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Integration Event",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

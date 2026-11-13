@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-11-09 12:00:00.000000",
+ "description": "One send of a KB Article to one recipient. KB Article.send_count is derived from these rows.",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "article",
+  "recipient",
+  "channel",
+  "col_a",
+  "sent_by",
+  "sent_on"
+ ],
+ "fields": [
+  {
+   "fieldname": "article",
+   "fieldtype": "Link",
+   "label": "Article",
+   "options": "KB Article",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "recipient",
+   "fieldtype": "Data",
+   "label": "Recipient",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Phone number, Telegram id or farmer reference."
+  },
+  {
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "label": "Channel",
+   "options": "SMS\nTelegram\nWhatsApp",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_a",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sent_by",
+   "fieldtype": "Link",
+   "label": "Sent By",
+   "options": "User",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "sent_on",
+   "fieldtype": "Datetime",
+   "label": "Sent On",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-09 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "KB Send Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "export": 1
+  },
+  {
+   "role": "OAN Administrator",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "export": 1
+  },
+  {
+   "role": "Communications Officer",
+   "read": 1,
+   "report": 1,
+   "create": 1,
+   "export": 1
+  },
+  {
+   "role": "Development Agent",
+   "read": 1,
+   "report": 1,
+   "create": 1
+  },
+  {
+   "role": "Supervisor",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Executive",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "format:KB-SND-{#######}",
+ "title_field": "article",
+ "naming_rule": "Expression"
+}

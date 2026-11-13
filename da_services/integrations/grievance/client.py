@@ -1,0 +1,350 @@
+"""OAN Grievance Service client boundary.
+
+DA Services never owns grievance data. It talks to the Grievance Service through this
+interface only. Two implementations exist:
+
+- ``MockGrievanceClient`` (mock.py): in-memory fixtures for local development and tests.
+- ``HttpGrievanceClient``: the Development Agent flow in the grievance Postman collection.
+  Login is K1-K5 (agent realm). Reads and the walk-in submit use that bearer token only.
+
+Select the backend per site in ``site_config.json``. See ``docs/grievance-da-http.md``.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+import requests
+
+from .auth import AgentLoginError, AgentTokenProvider
+from .mapper import (
+	error_text,
+	normalize_case,
+	normalize_event,
+	normalize_summary,
+	ticket_from_duplicate,
+	to_grievance_detail,
+	to_grievance_result,
+	to_grievance_summary,
+	to_options,
+	to_timeline_entry,
+	to_upstream_submission,
+	unwrap_data,
+)
+from .schemas import (
+	GrievanceAction,
+	GrievanceDetail,
+	GrievanceResult,
+	GrievanceSubmission,
+	GrievanceSummary,
+)
+
+
+class GrievanceServiceError(Exception):
+	pass
+
+
+class GrievanceNotFound(GrievanceServiceError):
+	pass
+
+
+class GrievanceServiceUnavailable(GrievanceServiceError):
+	"""Transient: timeout, connection error, 5xx. Callers may retry."""
+
+	http_status_code = 503
+
+
+class GrievanceRejected(GrievanceServiceError):
+	"""Upstream refused the call (4xx). Not queued."""
+
+
+class GrievanceAlreadyFiled(GrievanceServiceError):
+	"""Same client_submission_uuid. ``ticket_number`` is the original case."""
+
+	def __init__(self, ticket_number: str):
+		super().__init__(ticket_number)
+		self.ticket_number = ticket_number
+
+
+class GrievanceClient(ABC):
+	@abstractmethod
+	def submit_grievance(self, submission: GrievanceSubmission) -> GrievanceResult:
+		"""Create a grievance (draft → submit). Returns the ticket reference."""
+
+	@abstractmethod
+	def list_grievances(
+		self,
+		*,
+		region: str | list[str] | None = None,
+		woreda: str | list[str] | None = None,
+		complainant_id: str | list[str] | None = None,
+		status: str | None = None,
+		page: int = 1,
+		page_size: int = 20,
+		service_category: str | None = None,
+		grievance_type: str | None = None,
+		search: str | None = None,
+		administrative_area: str | None = None,
+		from_date: str | None = None,
+		to_date: str | None = None,
+		**filters,
+	) -> tuple[list[GrievanceSummary], int]:
+		"""Scoped grievance list. Returns (items, total_count).
+
+		``filters`` carries the rest of the upstream list query: category, type,
+		department, zone, kebele, channel, escalated, submitter, sort, and limit.
+		"""
+
+	@abstractmethod
+	def get_grievance(self, ticket_id: str) -> GrievanceDetail:
+		"""Fetch full grievance detail. Raises GrievanceNotFound."""
+
+	@abstractmethod
+	def take_action(self, action: GrievanceAction) -> GrievanceResult:
+		"""Resolve, escalate, reassign, or add a note."""
+
+	@abstractmethod
+	def get_timeline(self, ticket_id: str) -> list[dict]:
+		"""Fetch the timeline of events for a ticket."""
+
+	@abstractmethod
+	def get_options(self, **params) -> dict:
+		"""Fetch category and status options for form dropdowns."""
+
+	@abstractmethod
+	def get_summary(self) -> dict:
+		"""KPI cards from the grievance service. The payload is not remapped."""
+
+
+def _query_param(value) -> str | None:
+	"""One query value. Lists are comma-separated, which the upstream parser accepts."""
+	if isinstance(value, bool):
+		return "1" if value else "0"
+	if value is None:
+		return None
+	if isinstance(value, (list, tuple)):
+		parts = [str(item).strip() for item in value if str(item).strip()]
+		return ",".join(parts) or None
+	text = str(value).strip()
+	return text or None
+
+
+class HttpGrievanceClient(GrievanceClient):
+	"""Live client. Paths and the walk-in body follow the grievance collection."""
+
+	def __init__(self, base_url: str, timeout: int = 20, tokens: AgentTokenProvider | None = None):
+		self.base_url = base_url.rstrip("/")
+		self.timeout = timeout
+		self.tokens = tokens or AgentTokenProvider(base_url=self.base_url, timeout=timeout)
+
+	def _url(self, path: str) -> str:
+		return f"{self.base_url}{path}"
+
+	def _request(self, method: str, path: str, *, params=None, json_body=None, auth: bool = True):
+		headers = {"Accept": "application/json"}
+		if json_body is not None:
+			headers["Content-Type"] = "application/json"
+		if auth:
+			try:
+				headers["Authorization"] = f"Bearer {self.tokens.get_token()}"
+			except AgentLoginError as exc:
+				if exc.unavailable:
+					raise GrievanceServiceUnavailable(str(exc)) from exc
+				raise GrievanceServiceError(str(exc)) from exc
+		try:
+			response = requests.request(
+				method,
+				self._url(path),
+				params=params,
+				json=json_body,
+				headers=headers,
+				timeout=self.timeout,
+			)
+		except (requests.ConnectionError, requests.Timeout) as exc:
+			raise GrievanceServiceUnavailable(str(exc)) from exc
+		return self._handle_response(response)
+
+	def _handle_response(self, response: requests.Response):
+		text = response.text or ""
+		try:
+			body = response.json()
+		except ValueError:
+			body = {}
+		if response.status_code == 404:
+			raise GrievanceNotFound(text)
+		if response.status_code >= 500:
+			raise GrievanceServiceUnavailable(f"HTTP {response.status_code}")
+		duplicate = ticket_from_duplicate(error_text(body, text))
+		if duplicate and (
+			response.status_code >= 400 or (isinstance(body, dict) and body.get("status") == "error")
+		):
+			raise GrievanceAlreadyFiled(duplicate)
+		if response.status_code >= 400 or (isinstance(body, dict) and body.get("status") == "error"):
+			raise GrievanceRejected(error_text(body, text) or f"HTTP {response.status_code}")
+		data = unwrap_data(body)
+		return data if data is not None else {}
+
+	def submit_grievance(self, submission: GrievanceSubmission) -> GrievanceResult:
+		try:
+			data = self._request("POST", "/v1/grievances", json_body=to_upstream_submission(submission))
+		except GrievanceAlreadyFiled as exc:
+			return to_grievance_result(
+				{
+					"accepted": True,
+					"ticket_id": exc.ticket_number,
+					"ticket_number": exc.ticket_number,
+					"message": "Already submitted",
+				}
+			)
+		if not isinstance(data, dict):
+			data = {}
+		return to_grievance_result({"accepted": True, "message": "Grievance submitted", **data})
+
+	def list_grievances(
+		self,
+		*,
+		region: str | list[str] | None = None,
+		woreda: str | list[str] | None = None,
+		complainant_id: str | list[str] | None = None,
+		status: str | None = None,
+		page: int = 1,
+		page_size: int = 20,
+		service_category: str | None = None,
+		grievance_type: str | None = None,
+		search: str | None = None,
+		administrative_area: str | None = None,
+		from_date: str | None = None,
+		to_date: str | None = None,
+		**filters,
+	) -> tuple[list[GrievanceSummary], int]:
+		# complainant_id is a DA Registry id. The agent token's own scope is the list.
+		del complainant_id
+		params: dict = {"page": page, "page_size": page_size}
+		named = {
+			"region": region,
+			"woreda": woreda,
+			"status": status,
+			"service_category": service_category,
+			"grievance_type": grievance_type,
+			"search": search,
+			"administrative_area": administrative_area,
+			"from_date": from_date,
+			"to_date": to_date,
+			**filters,
+		}
+		params["sort_order"] = _query_param(named.pop("sort_order", None)) or "desc"
+		for key, value in named.items():
+			encoded = _query_param(value)
+			if encoded is not None:
+				params[key] = encoded
+		data = self._request("GET", "/v1/grievances", params=params)
+		if not isinstance(data, dict):
+			data = {}
+		rows = data.get("grievances") or data.get("items") or data.get("results") or []
+		items = [to_grievance_summary(normalize_summary(row)) for row in rows]
+		pagination = data.get("pagination") or {}
+		total = int(pagination.get("total_count", pagination.get("total", data.get("total", len(items)))))
+		return items, total
+
+	def get_grievance(self, ticket_id: str) -> GrievanceDetail:
+		"""The case is the timeline envelope. There is no ticket GET."""
+		data = self._request("GET", f"/v1/grievances/{ticket_id}/timeline")
+		if not isinstance(data, dict):
+			raise GrievanceNotFound(ticket_id)
+		return to_grievance_detail(normalize_case(data))
+
+	def take_action(self, action: GrievanceAction) -> GrievanceResult:
+		"""Officer action. Not exposed on the DA routes. Body matches collection K11/K13."""
+		data = self._request(
+			"POST",
+			f"/v1/grievances/{action.ticket_id}/action",
+			json_body={
+				"action": action.action_type,
+				"reason": action.comment or action.resolution or "",
+			},
+		)
+		if not isinstance(data, dict):
+			data = {}
+		return to_grievance_result({"accepted": True, "ticket_id": action.ticket_id, **data})
+
+	def get_timeline(self, ticket_id: str) -> list[dict]:
+		data = self._request("GET", f"/v1/grievances/{ticket_id}/timeline")
+		entries = data.get("timeline") if isinstance(data, dict) else data
+		if not isinstance(entries, list):
+			entries = []
+		return [
+			to_timeline_entry(normalize_event(entry)).to_dict()
+			for entry in entries
+			if isinstance(entry, dict)
+		]
+
+	def get_options(self, **params) -> dict:
+		"""Intake lists are public. Queue statuses come from the authenticated options route."""
+		service_category = _query_param(params.get("service_category") or params.get("category"))
+		intake_params: dict[str, str] = {}
+		if service_category:
+			intake_params["service_category"] = service_category
+		for name in ("search_country", "country", "include_phone_extensions"):
+			encoded = _query_param(params.get(name))
+			if encoded is not None:
+				intake_params[name] = encoded
+		intake = self._request("GET", "/v1/submitters/options", params=intake_params or None, auth=False)
+		if not isinstance(intake, dict):
+			intake = {}
+		staff_params: dict[str, str] = {}
+		for name in ("service_category", "category", "department", "administrative_area"):
+			encoded = _query_param(params.get(name))
+			if encoded is not None:
+				staff_params[name] = encoded
+		staff = self._request("GET", "/v1/grievances/options", params=staff_params or None)
+		if isinstance(staff, dict):
+			if staff.get("statuses"):
+				intake["statuses"] = staff["statuses"]
+			for key in ("departments", "submission_channels", "officers"):
+				if key in staff:
+					intake[key] = staff[key]
+		return to_options(intake)
+
+	def get_summary(self) -> dict:
+		"""GET /v1/grievances/summary. A 200 body with an error is refused, not forwarded."""
+		data = self._request("GET", "/v1/grievances/summary")
+		if isinstance(data, dict) and (data.get("exception") or data.get("exc") or data.get("exc_type")):
+			raise GrievanceRejected(error_text(data) or "Grievance summary failed")
+		if not isinstance(data, dict):
+			raise GrievanceServiceError("Grievance summary response was not an object")
+		return data
+
+
+def get_client() -> GrievanceClient:
+	"""Build the configured client. Defaults to mock outside production."""
+	import frappe
+
+	backend = (frappe.conf.get("grievance_backend") or "mock").lower()
+	if backend == "mock":
+		from .mock import MockGrievanceClient
+
+		return MockGrievanceClient.shared()
+	if backend == "http":
+		base_url = frappe.conf.get("grievance_base_url")
+		if not base_url:
+			raise GrievanceServiceError("grievance_base_url is not set in site_config.json")
+		iam = frappe.conf.get("grievance_iam") or {}
+		timeout = int(frappe.conf.get("grievance_timeout_seconds") or 20)
+		static = frappe.conf.get("grievance_api_token") or ""
+		if isinstance(static, str) and static.startswith("Bearer "):
+			static = static.removeprefix("Bearer ").strip()
+		return HttpGrievanceClient(
+			base_url,
+			timeout,
+			AgentTokenProvider(
+				base_url=base_url,
+				timeout=timeout,
+				login_key=iam.get("login_key") or "agent",
+				# K1 sends the grievance base URL as return_url, not the Keycloak hint in the environment.
+				return_url=iam.get("return_url") or base_url,
+				username=iam.get("username") or "",
+				password=iam.get("password") or "",
+				static_token=static,
+			),
+		)
+	raise GrievanceServiceError(f"Unknown grievance_backend: {backend!r}")

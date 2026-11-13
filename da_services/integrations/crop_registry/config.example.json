@@ -1,0 +1,19 @@
+{
+  "crop_registry_backend": "mock",
+  "crop_registry_staff_url": "https://staff-crop.development.oanstaging.com",
+  "crop_registry_timeout": 30,
+  "crop_registry_register_mnemonic": "CropSown",
+  "_comment_register_id": "Optional Crop Sown register UUID. When set, list and form reads skip get_all_registers. This is not the Farmer register id.",
+  "crop_registry_register_id": "",
+  "crop_registry_form_name_contains": "Planning",
+  "crop_registry_sender_app": "OAN_REGISTRY_API_TEST",
+  "_comment_master_data": "Required on the site that serves the Crop Report. Catalog rows and geography are skipped while this is empty. The development host below is the one used by the 2026-10-30 planning run. Keep crop_registry_backend as mock for local tests; set it to http only where the staff username and password are configured.",
+  "crop_registry_master_data_url": "https://master-data.development.oanstaging.com",
+  "crop_registry_keycloak": {
+    "token_url": "https://keycloak.development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+    "client_id": "staff-portal",
+    "client_secret": "replace-me",
+    "username": "replace-me",
+    "password": "replace-me"
+  }
+}

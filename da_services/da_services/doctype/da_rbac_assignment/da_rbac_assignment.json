@@ -1,0 +1,182 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DA-RBAC-{#####}",
+ "creation": "2026-10-01 00:00:00.000000",
+ "description": "Grants a user one DA Services role within a Region / Woreda scope for a date window. RBAC assignment entity of the FSD Part 1 data model; the same shape governs Part 2 authorization.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "role",
+  "active",
+  "col_identity",
+  "da_id",
+  "sec_scope",
+  "region_scope",
+  "zone_scope",
+  "col_scope",
+  "woreda_scope",
+  "sec_validity",
+  "effective_from",
+  "effective_to",
+  "col_validity",
+  "assigned_by",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Role",
+   "options": "Role",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "col_identity",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.role == 'Development Agent'",
+   "description": "DA-ID issued by the DA Registry. Required for the Development Agent role; it is the record relationship that limits a DA to their own data.",
+   "fieldname": "da_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "DA-ID",
+   "mandatory_depends_on": "eval:doc.role == 'Development Agent'"
+  },
+  {
+   "fieldname": "sec_scope",
+   "fieldtype": "Section Break",
+   "label": "Organisational scope"
+  },
+  {
+   "description": "Region code from the administrative master. Leave empty only for unrestricted roles.",
+   "fieldname": "region_scope",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Region"
+  },
+  {
+   "description": "Zone code (between Region and Woreda in the Ethiopian hierarchy). Optional until the field list is final.",
+   "fieldname": "zone_scope",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Zone"
+  },
+  {
+   "fieldname": "col_scope",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Woreda code. Required for Supervisor; a Supervisor acts only inside their Woreda (FSD 3.1.1).",
+   "fieldname": "woreda_scope",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Woreda"
+  },
+  {
+   "fieldname": "sec_validity",
+   "fieldtype": "Section Break",
+   "label": "Validity"
+  },
+  {
+   "fieldname": "effective_from",
+   "fieldtype": "Date",
+   "label": "Effective From",
+   "reqd": 1
+  },
+  {
+   "fieldname": "effective_to",
+   "fieldtype": "Date",
+   "label": "Effective To"
+  },
+  {
+   "fieldname": "col_validity",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "assigned_by",
+   "fieldtype": "Link",
+   "label": "Assigned By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA RBAC Assignment",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

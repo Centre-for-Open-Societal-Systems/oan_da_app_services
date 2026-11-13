@@ -1,0 +1,68 @@
+# OAN Ethiopia - DA Services (Part 2) development stack.
+#
+# Adapted from frappe_docker/devcontainer-example, following the same layout the
+# oan_grievance_service team uses: the bench lives in this devcontainer folder
+# (../development/frappe-bench) and the app repository is bind-mounted into the
+# bench's apps/ directory so the repo stays a plain Frappe app.
+#
+# Start:   docker compose -p oan_da_services_dev up -d
+# Ports are offset from the grievance stack (8100/9100) so both can run at once.
+services:
+  mariadb:
+    image: docker.io/mariadb:11.8
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MYSQL_ROOT_PASSWORD: 123
+      MARIADB_AUTO_UPGRADE: 1
+    volumes:
+      - mariadb-data:/var/lib/mysql
+
+  redis-cache:
+    image: docker.io/redis:alpine
+
+  redis-queue:
+    image: docker.io/redis:alpine
+
+  # Dev-only mail sink for notification testing. UI at http://127.0.0.1:8026
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "127.0.0.1:8026:8025"
+      - "127.0.0.1:1026:1025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  frappe:
+    image: docker.io/frappe/bench:latest
+    command: sleep infinity
+    environment:
+      - SHELL=/bin/bash
+      - FRAPPE_BIND_ADDR=0.0.0.0
+      # uv hangs when the venv sits on a Windows bind mount; pip is the safe default.
+      - BENCH_DISABLE_UV=1
+      - UV_LINK_MODE=copy
+    ports:
+      - "127.0.0.1:8200-8205:8000-8005"
+      - "127.0.0.1:9200-9205:9000-9005"
+    volumes:
+      - ..:/workspace:cached
+      # The bench (frappe clone, virtualenv, node_modules, sites) lives in a named
+      # volume mounted over development/. On Docker Desktop a Windows bind mount is
+      # far too slow for the tens of thousands of small files bench init and yarn
+      # write, and uv/pip hang. Mounting the parent lets `bench init frappe-bench`
+      # create the bench directory itself (it refuses a pre-existing path).
+      - bench-data:/workspace/development
+      # The DA-services-backend repository IS the da_services Frappe app. It is
+      # mounted at a neutral path and linked into the bench after `bench init`
+      # (apps/da_services -> /workspace/da_services_repo). Mounting straight into
+      # apps/ would pre-create frappe-bench/ and make bench init refuse to run.
+      - ${DA_SERVICES_REPO:-../../DA-services-backend}:/workspace/da_services_repo:cached
+    working_dir: /workspace/development
+
+volumes:
+  mariadb-data:
+  bench-data:

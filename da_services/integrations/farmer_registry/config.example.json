@@ -1,0 +1,65 @@
+{
+  "_comment": "Farmer Registry Integration Configuration Example",
+  "_comment2": "Copy relevant settings to sites/<your-site>/site_config.json",
+
+  "farmer_registry_backend": "http",
+  "farmer_registry_url": "https://staff-farmer.development.oanstaging.com",
+  "farmer_registry_api_key": "your-secret-api-key-here",
+  "farmer_registry_timeout": 30,
+
+  "_comment_register": "How POST /farmers reaches the registry: ingest (default, ingest-data) or intake (intake form, section by section). intake also needs farmer_registry_master_data_url and farmer_registry_ingest.intake_form_id.",
+  "farmer_registry_register_mode": "intake",
+  "farmer_registry_master_data_url": "https://master-data.development.oanstaging.com",
+
+  "_comment_read": "Reads use the OpenG2P Staff API (POST + request_header/request_body envelope): register-data/get_subject_record, get_tab_records, search_in_a_register; updates become change-requests/create_change_request. No per-endpoint path config.",
+
+  "_comment_ingest": "Farmer register / intake form / tab ids. register_id and intake_form_id are optional: when omitted they are discovered from register-metadata/get_all_registers and intake-form-metadata/get_all_intake_forms (form mnemonic containing farmer_registry_intake_form_contains) and cached for an hour. The dev values are shown for reference.",
+  "farmer_registry_intake_form_contains": "Farmer Ingestion",
+  "farmer_registry_ingest": {
+    "data_model": "FARMER_ODK_MODEL",
+    "register_id": "a1a4d25a-1cd4-4356-abac-985a0b3c6bcd",
+    "intake_form_id": "a1a4d25a-1cd4-4356-abac-8782382649",
+    "tabs": {
+      "farmer": "farmer_farmer_tab",
+      "location": "farmer_location_tab",
+      "household": "farmer_household_link_tab",
+      "land": "farmer_land_tab",
+      "crop": "farmer_crop_tab",
+      "livestock": "farmer_livestock_tab"
+    }
+  },
+
+  "_comment_keycloak": "Prefer staff-user IAM login when username and password are set (callback cookies X-Access-Token and X-CSRF-Token; login_provider_id defaults to 1). Otherwise client_credentials (token_url, client_id, client_secret) or farmer_registry_api_key. Put username and password only in site_config.json.",
+  "farmer_registry_keycloak": {
+    "iam_base_url": "https://staff-iam.development.oanstaging.com",
+    "kc_realm_url": "https://keycloak.development.oanstaging.com/realms/staff",
+    "login_provider_id": "1",
+    "token_url": "https://keycloak.development.oanstaging.com/realms/staff/protocol/openid-connect/token",
+    "client_id": "da-services",
+    "client_secret": "ask-asmit-for-dev-secret"
+  },
+
+  "_comment_environments": "Documentation only. The client reads the top-level keys from site_config.json and does not load _environments.",
+  "_environments": {
+    "development": {
+      "farmer_registry_backend": "mock"
+    },
+    "staging": {
+      "farmer_registry_backend": "http",
+      "farmer_registry_url": "https://staff-farmer.staging.example.com",
+      "farmer_registry_keycloak": {
+        "iam_base_url": "https://staff-iam.staging.example.com",
+        "kc_realm_url": "https://keycloak.staging.example.com/realms/staff",
+        "login_provider_id": "1",
+        "token_url": "https://keycloak.staging.example.com/realms/staff/protocol/openid-connect/token",
+        "client_id": "da-services",
+        "client_secret": "staging-client-secret"
+      }
+    },
+    "production": {
+      "farmer_registry_backend": "http",
+      "farmer_registry_url": "https://farmer-registry.production.com",
+      "farmer_registry_api_key": "production-key"
+    }
+  }
+}

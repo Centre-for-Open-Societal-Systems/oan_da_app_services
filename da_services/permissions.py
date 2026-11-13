@@ -1,0 +1,344 @@
+"""Frappe permission hooks for the app's own doctypes (deny-by-default).
+
+The query condition filters list views, reports and the REST API uniformly;
+has_permission mirrors it for a single document. Both are registered in hooks.py.
+"""
+
+import frappe
+
+from da_services.services import constants as C
+from da_services.utils.permissions import get_officer_scope_context, get_scope_context
+
+DENY = "1=0"
+
+
+def _is_unrestricted(user: str) -> bool:
+	return bool(set(frappe.get_roles(user)) & C.UNRESTRICTED_ROLES)
+
+
+def _sql_in(values) -> str:
+	return ", ".join(frappe.db.escape(v) for v in sorted(values))
+
+
+def _officer_scope_clause(table: str, ctx) -> str:
+	"""SQL mirror of ScopeContext.scope_decision for Supervisor / Executive lists.
+
+	A Woreda grant matches rows in that Woreda, a Zone grant rows in that Zone, and the
+	two are OR-ed when a user holds both. A Region grant only applies when the user holds
+	no narrower grant (same rule as scope_decision: a Region grant next to a Zone / Woreda
+	grant is never widened). Rows whose `zone` / `woreda` is empty never match a narrow
+	grant, so missing registry data denies rather than widens.
+	"""
+	clauses = []
+	if ctx.woreda_scopes:
+		clauses.append(f"{table}.`woreda` in ({_sql_in(ctx.woreda_scopes)})")
+	if ctx.zone_scopes:
+		clauses.append(f"{table}.`zone` in ({_sql_in(ctx.zone_scopes)})")
+	if not clauses and ctx.region_scopes:
+		clauses.append(f"{table}.`region` in ({_sql_in(ctx.region_scopes)})")
+	if not clauses:
+		return DENY
+	return clauses[0] if len(clauses) == 1 else "(" + " or ".join(clauses) + ")"
+
+
+def da_scoped_query_conditions(doctype: str, user: str | None = None) -> str:
+	"""List filter for operational doctypes that carry `da_id`, `region`, `zone`, `woreda`.
+
+	Same rule as utils.permissions.ScopeContext: a DA sees rows for their own DA-ID; a
+	Supervisor / Executive sees rows whose posting codes fall inside their grants (see
+	_officer_scope_clause); Communications Officer and anyone without a grant see
+	nothing. Unrestricted roles see everything.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = f"`tab{doctype}`"
+	if ctx.has_any_role(C.ROLE_DA):
+		if not ctx.da_ids:
+			return DENY
+		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return _officer_scope_clause(t, ctx)
+	return DENY
+
+
+def has_da_scoped_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""Single-document mirror of da_scoped_query_conditions. Executive is read-only."""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	if ctx.has_any_role(C.ROLE_DA):
+		return ctx.owns_da(doc.da_id)
+	if ctx.has_any_role(C.ROLE_SUPERVISOR):
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
+	if ctx.has_any_role(C.ROLE_EXECUTIVE):
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
+	return False
+
+
+def da_task_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Task", user)
+
+
+def has_da_task_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	return has_da_scoped_permission(doc, ptype, user)
+
+
+def da_kebele_assignment_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Kebele Assignment", user)
+
+
+def has_da_kebele_assignment_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	return has_da_scoped_permission(doc, ptype, user)
+
+
+def da_profile_change_request_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Profile Change Request", user)
+
+
+def has_da_profile_change_request_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	# Writes go through services/profile.py; Desk/REST stays read-only for everyone in scope.
+	if ptype != "read" and not _is_unrestricted(user or frappe.session.user):
+		return False
+	return has_da_scoped_permission(doc, ptype, user)
+
+
+def da_leave_request_query_conditions(user: str | None = None) -> str:
+	return da_scoped_query_conditions("DA Leave Request", user)
+
+
+def has_da_leave_request_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	# Writes go through services/leave.py; Desk/REST stays read-only for everyone in scope.
+	if ptype != "read" and not _is_unrestricted(user or frappe.session.user):
+		return False
+	return has_da_scoped_permission(doc, ptype, user)
+
+
+def da_visit_query_conditions(user: str | None = None) -> str:
+	"""DA Visit list filter (DA-211 Phase 6).
+
+	A Development Agent sees their own DA-ID rows and visits in Kebeles they hold an
+	Effective assignment for. Officers stay on Region / Zone / Woreda grants.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Visit`"
+	if ctx.has_any_role(C.ROLE_DA):
+		if not ctx.da_ids:
+			return DENY
+		own = f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
+		from da_services.services.farmers import _get_da_assigned_kebeles
+
+		kebeles = _get_da_assigned_kebeles(list(ctx.da_ids))
+		if not kebeles:
+			return own
+		return f"({own} or {t}.`kebele` in ({_sql_in(kebeles)}))"
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return _officer_scope_clause(t, ctx)
+	return DENY
+
+
+def da_notification_query_conditions(user: str | None = None) -> str:
+	"""Everyone sees only their own notifications; administrators see all."""
+	user = user or frappe.session.user
+	if _is_unrestricted(user):
+		return ""
+	return "`tabDA Notification`.`user` = {user}".format(user=frappe.db.escape(user))
+
+
+def has_da_notification_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	user = user or frappe.session.user
+	if _is_unrestricted(user):
+		return True
+	return doc.user == user and ptype in ("read", "write")
+
+
+def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""Single-document mirror of da_visit_query_conditions. Writes stay own-DA only."""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	if ctx.has_any_role(C.ROLE_DA):
+		if ctx.owns_da(doc.da_id):
+			return True
+		if ptype != "read":
+			return False
+		if not doc.kebele or not ctx.da_ids:
+			return False
+		from da_services.services.farmers import _get_da_assigned_kebeles
+
+		return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
+	if ctx.has_any_role(C.ROLE_SUPERVISOR):
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
+	if ctx.has_any_role(C.ROLE_EXECUTIVE):
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
+	return False
+
+
+def rbac_assignment_query_conditions(user: str | None = None) -> str:
+	"""Administrators see every grant; everyone else sees only their own rows."""
+	user = user or frappe.session.user
+	if _is_unrestricted(user):
+		return ""
+	return "`tabDA RBAC Assignment`.`user` = {user}".format(user=frappe.db.escape(user))
+
+
+def has_rbac_assignment_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	user = user or frappe.session.user
+	if _is_unrestricted(user):
+		return True
+	# Non-administrators may only read, and only their own grants.
+	return ptype == "read" and doc.user == user
+
+
+def da_farmer_link_query_conditions(user: str | None = None) -> str:
+	"""DA Farmer Link: DAs see only their own links, Supervisors/Executives see by scope.
+
+	DAs are read-only through this hook; writes go through services that check scope.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Farmer Link`"
+	if ctx.has_any_role(C.ROLE_DA):
+		if not ctx.da_ids:
+			return DENY
+		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return _officer_scope_clause(t, ctx)
+	return DENY
+
+
+def has_da_farmer_link_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""DA Farmer Link: DAs read-only, Supervisors can write in their Woreda."""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	if ctx.has_any_role(C.ROLE_DA):
+		# DA can only read their own links, not create/write
+		return ptype == "read" and ctx.owns_da(doc.da_id)
+	if ctx.has_any_role(C.ROLE_SUPERVISOR):
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
+	if ctx.has_any_role(C.ROLE_EXECUTIVE):
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
+	return False
+
+
+def da_farmer_reference_query_conditions(user: str | None = None) -> str:
+	"""DA Farmer Reference: DAs see linked farmers, Supervisors/Executives see by scope.
+
+	This is the cache layer for farmer data from the registry.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Farmer Reference`"
+	if ctx.has_any_role(C.ROLE_DA):
+		# DA sees only linked farmers
+		if not ctx.da_ids:
+			return DENY
+		# Get linked farmer IDs
+		linked_farmer_ids = frappe.get_all(
+			"DA Farmer Link",
+			filters={"da_id": ("in", list(ctx.da_ids)), "is_active": 1},
+			pluck="farmer_id",
+		)
+		if not linked_farmer_ids:
+			return DENY
+		return f"{t}.`farmer_id` in ({_sql_in(linked_farmer_ids)})"
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return _officer_scope_clause(t, ctx)
+	return DENY
+
+
+def has_da_farmer_reference_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""DA Farmer Reference: Read-only for most users."""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	if ctx.has_any_role(C.ROLE_DA):
+		# DA can read if farmer is linked to them
+		if not ctx.da_ids:
+			return False
+		is_linked = frappe.db.exists(
+			"DA Farmer Link",
+			{"farmer_id": doc.farmer_id, "da_id": ("in", list(ctx.da_ids)), "is_active": 1},
+		)
+		return ptype == "read" and is_linked
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
+	return False
+
+
+def da_survey_template_query_conditions(user: str | None = None) -> str:
+	"""Survey templates are scoped by region/zone/woreda (no da_id on the row)."""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Survey Template`"
+	if ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return _officer_scope_clause(t, ctx)
+	return DENY
+
+
+def has_da_survey_template_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""Writes go through services/surveys.py; Desk/REST stays read-only in scope."""
+	user = user or frappe.session.user
+	if ptype != "read" and not _is_unrestricted(user):
+		return False
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	if ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return ctx.covers(doc.region, doc.woreda, doc.zone)
+	return False
+
+
+def da_survey_response_query_conditions(user: str | None = None) -> str:
+	"""Survey-response read scope, with active-officer precedence over the DA role.
+
+	A dual-role user (DA + Supervisor/Executive) is treated as the officer for reads,
+	matching ``list_responses`` / ``export_responses``. A pure DA still sees only rows
+	they collected. Officer precedence requires a *live* officer assignment, not just
+	the role string: the RBAC controller attaches roles add-only, so an expired grant
+	must not widen a DA to Woreda-wide rows through the scope on the DA grant itself.
+	"""
+	user = user or frappe.session.user
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return ""
+	t = "`tabDA Survey Response`"
+	officer = get_officer_scope_context(user)
+	if officer is not None:
+		return _officer_scope_clause(t, officer)
+	if ctx.has_any_role(C.ROLE_DA):
+		if not ctx.da_ids:
+			return DENY
+		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
+	return DENY
+
+
+def has_da_survey_response_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
+	"""Single-document mirror of ``da_survey_response_query_conditions``."""
+	user = user or frappe.session.user
+	if ptype != "read" and not _is_unrestricted(user):
+		return False
+	ctx = get_scope_context(user)
+	if ctx.unrestricted:
+		return True
+	officer = get_officer_scope_context(user)
+	if officer is not None:
+		return officer.covers(doc.region, doc.woreda, doc.zone)
+	if ctx.has_any_role(C.ROLE_DA):
+		return ctx.owns_da(doc.da_id)
+	return False
