@@ -16,9 +16,6 @@ from da_services.integrations.crop_registry.client import (
 	CropRegistryClientError,
 	CropRegistryError,
 	CropRegistryServerError,
-	_parse_config_ids,
-	get_crop_list_sources,
-	get_crop_register_tab_ids,
 )
 from da_services.integrations.crop_registry.http import HTTPCropRegistryClient
 from da_services.integrations.crop_registry.intake import (
@@ -561,32 +558,6 @@ class TestMockCropRegistry(unittest.TestCase):
 		self.assertEqual(detail["tab_id"], "cropsown_cropsown_tab")
 		self.assertNotIn("location", detail)
 		self.assertEqual(detail["tabs"][0]["tab_id"], "cropsown_cropsown_tab")
-
-
-class TestCropSettingsConfig(unittest.TestCase):
-	def test_parse_config_ids_accepts_newlines_and_commas(self):
-		self.assertEqual(
-			_parse_config_ids("submission, register\nregister"),
-			frozenset({"submission", "register"}),
-		)
-		self.assertEqual(_parse_config_ids(""), frozenset())
-		self.assertEqual(_parse_config_ids("  \n , "), frozenset())
-
-	def test_settings_helpers_read_desk_values_and_reject_empty(self):
-		with patch("frappe.db.get_single_value", return_value=None):
-			with self.assertRaises(CropRegistryClientError):
-				get_crop_list_sources()
-			with self.assertRaises(CropRegistryClientError):
-				get_crop_register_tab_ids()
-		with patch(
-			"frappe.db.get_single_value",
-			side_effect=["submission", "cropsown_cropsown_tab\ncropsown_planning_tab"],
-		):
-			self.assertEqual(get_crop_list_sources(), frozenset({"submission"}))
-			self.assertEqual(
-				get_crop_register_tab_ids(),
-				frozenset({"cropsown_cropsown_tab", "cropsown_planning_tab"}),
-			)
 
 
 class TestCropMapper(unittest.TestCase):

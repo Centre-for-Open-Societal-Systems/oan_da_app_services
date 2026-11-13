@@ -350,7 +350,7 @@ class HTTPCropRegistryClient(CropRegistryClient):
 		register_id = self._discover_register_id()
 		submission_text = (reg_id or "").strip() or farmer_id
 		owned = {farmer_id, submission_text}
-		# Allowlist is enforced by the API; this client only knows these staff paths.
+		# Known staff search paths only; unknown source fails here.
 		if source == "submission":
 			path, action, search_text = (
 				"/intake-form-data/search_in_intake_form_submissions",

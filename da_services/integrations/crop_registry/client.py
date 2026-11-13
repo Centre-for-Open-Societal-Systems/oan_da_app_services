@@ -14,36 +14,6 @@ import frappe
 from .schemas import CropSubmission
 
 
-def _parse_config_ids(raw: object) -> frozenset[str]:
-	"""Comma- or newline-separated ids from DA Services Settings."""
-	text = str(raw or "").strip()
-	if not text:
-		return frozenset()
-	return frozenset(part.strip() for part in text.replace(",", "\n").splitlines() if part.strip())
-
-
-def get_crop_list_sources() -> frozenset[str]:
-	"""Allowed ``source`` values from DA Services Settings (Crop List Sources).
-
-	Defaults live on the DocType field — not duplicated here.
-	"""
-	sources = _parse_config_ids(frappe.db.get_single_value("DA Services Settings", "crop_list_sources"))
-	if not sources:
-		raise CropRegistryClientError("Crop List Sources is not set in DA Services Settings")
-	return sources
-
-
-def get_crop_register_tab_ids() -> frozenset[str]:
-	"""Allowed register ``tab_id`` values from DA Services Settings.
-
-	Defaults live on the DocType field — not duplicated here.
-	"""
-	tabs = _parse_config_ids(frappe.db.get_single_value("DA Services Settings", "crop_register_tab_ids"))
-	if not tabs:
-		raise CropRegistryClientError("Crop Register Tab Ids is not set in DA Services Settings")
-	return tabs
-
-
 class CropRegistryError(Exception):
 	"""Base exception for Crop Sown Registry integration errors."""
 

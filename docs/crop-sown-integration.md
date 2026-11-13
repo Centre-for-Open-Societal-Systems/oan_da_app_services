@@ -14,12 +14,7 @@ The planning form was read from Postman run `58813371-a25cffbb-4cc0-4ab5-8376-0f
 | `crop_registry_master_data_url` | `https://master-data.development.oanstaging.com` |
 | `crop_registry_backend` | `http` on the site that serves the Crop Report. `mock` is the local default. |
 
-Desk **DA Services Settings** (not site_config) owns crop list filters. Field defaults on the DocType are the single source of truth (seeded into existing Singles by migrate patch):
-
-| Field | Purpose | DocType default |
-| --- | --- | --- |
-| Crop List Sources | Allowed `?source=` values (newline or comma) | `submission`, `register` |
-| Crop Register Tab Ids | Allowed `?tab_id=` values for register detail | the six verified CropSown staff tabs |
+`source` and register `tab_id` are caller-supplied. DA requires them when the mode needs them, then forwards to staff; unknown values are rejected by the registry (or by the client when `source` is not a known staff path). They are not Desk allowlists.
 
 `config.example.json` keeps `crop_registry_backend` as `mock`. A copied example does not log in to staff. The serving site must set `http`, the staff URL, the staff username and password, and the master-data URL. An empty master-data URL leaves `catalog_loaded: false` and refuses the geography route.
 
@@ -96,7 +91,7 @@ Prefix: `/api/v1/da-services`
 | `POST /farmers/{id}/crops` | `save_intake_form_submission` |
 | `POST /farmers/{id}/crops/{submission_id}/finalize` | `finalize_intake_form_submission` |
 
-List without `source` returns 400. Allowed `source` and register `tab_id` values come only from **DA Services Settings**. Do not pass `submission_id` and `internal_record_id` together.
+List without `source` returns 400. Register detail without `tab_id` returns 400. Do not pass `submission_id` and `internal_record_id` together.
 
 GPS is not reshaped into a top-level `location` object. When present, it stays inside staff section `cropsown_cropsown_location_section_03` on `sections` / `tabs`.
 

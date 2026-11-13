@@ -5,42 +5,20 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "master_data_domain",
-  "crop_sown_section",
-  "crop_list_sources",
-  "crop_register_tab_ids"
+  "master_data_domain"
  ],
  "fields": [
   {
    "fieldname": "master_data_domain",
    "fieldtype": "Data",
    "label": "Master Data Domain"
-  },
-  {
-   "fieldname": "crop_sown_section",
-   "fieldtype": "Section Break",
-   "label": "Crop Sown"
-  },
-  {
-   "default": "submission\nregister",
-   "description": "Allowed values for GET /farmers/{id}/crops?source=. One per line or comma-separated. Default: submission and register.",
-   "fieldname": "crop_list_sources",
-   "fieldtype": "Small Text",
-   "label": "Crop List Sources"
-  },
-  {
-   "default": "cropsown_cropsown_tab\ncropsown_planning_tab\ncropsown_cultivation_tab\ncropsown_sowing_tab\ncropsown_harvest_tab\ncropsown_production_tab",
-   "description": "Allowed tab_id values for register detail. One per line or comma-separated. Default: the six verified CropSown staff tabs.",
-   "fieldname": "crop_register_tab_ids",
-   "fieldtype": "Small Text",
-   "label": "Crop Register Tab Ids"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-12 12:45:00.000000",
+ "modified": "2026-11-13 13:30:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",

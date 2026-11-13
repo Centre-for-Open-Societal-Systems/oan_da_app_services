@@ -24,8 +24,6 @@ from da_services.integrations.crop_registry import get_crop_registry_client
 from da_services.integrations.crop_registry.client import (
 	CropRegistryClientError,
 	CropRegistryServerError,
-	get_crop_list_sources,
-	get_crop_register_tab_ids,
 )
 from da_services.integrations.crop_registry.intake import _SCREEN_SECTIONS
 from da_services.integrations.crop_registry.schemas import CropSubmission
@@ -138,18 +136,12 @@ def get_farmer_crops(farmer_id: str):
 			tab_id = (frappe.form_dict.get("tab_id") or "").strip()
 			if not tab_id:
 				frappe.throw(_("tab_id is required with internal_record_id."), frappe.ValidationError)
-			if tab_id not in get_crop_register_tab_ids():
-				frappe.throw(_("tab_id is not a Crop Sown register tab."), frappe.ValidationError)
 			detail = client.get_register_tab(internal_record_id, tab_id)
 			return success_response(data={"farmer_id": requested_id, **detail})
 		if not submission_id:
 			source = (frappe.form_dict.get("source") or "").strip().lower()
-			allowed_sources = get_crop_list_sources()
-			if source not in allowed_sources:
-				frappe.throw(
-					_("source must be one of: {0}.").format(", ".join(sorted(allowed_sources))),
-					frappe.ValidationError,
-				)
+			if not source:
+				frappe.throw(_("source is required."), frappe.ValidationError)
 			search_id = farmer_id if in_registry else requested_id
 			reg_id = _submission_reg_id(requested_id, search_id, in_registry=in_registry)
 			crops = client.list_for_farmer(search_id, reg_id=reg_id, source=source)
