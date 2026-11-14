@@ -31,7 +31,7 @@ add_to_apps_screen = [
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/da_services/css/da_services.css"
-# app_include_js = "/assets/da_services/js/da_services.js"
+app_include_js = "/assets/da_services/js/geo_cascade.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/da_services/css/da_services.css"
@@ -204,9 +204,6 @@ scheduler_events = {
 		"da_services.services.kebele_user_permissions.sync_all_user_permissions",
 	],
 	"daily_long": [
-		# Region / Zone / Woreda / Kebele from Master Data: about a thousand calls, needs
-		# the long queue's timeout and the service identity.
-		"da_services.services.area_sync.sync_areas_scheduled",
 		# DA Country / Region / Zone / Woreda / Kebele masters, logged in with the
 		# Master Data Sync account of DA Services Settings.
 		"da_services.services.geo_master_sync.sync_geo_masters_scheduled",

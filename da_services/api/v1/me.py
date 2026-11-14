@@ -112,10 +112,15 @@ def scope_label_for(role: str | None, ctx: ScopeContext, agent: dict | None = No
 
 
 def profile_for(ctx: ScopeContext, include_agent: bool = True) -> dict:
-	da_id = next(iter(sorted(ctx.da_ids)), None)
 	codes = role_codes_for(ctx)
 	role = codes[0] if codes else None
-	full_name = frappe.db.get_value("User", ctx.user, "full_name") if ctx.user else None
+	user_row = (
+		frappe.db.get_value("User", ctx.user, ["full_name", "da_registry_id"], as_dict=True)
+		if ctx.user
+		else None
+	)
+	full_name = user_row.full_name if user_row else None
+	da_id = (user_row.da_registry_id if user_row else None) or None
 	data: dict = {
 		"user": {"id": ctx.user, "name": full_name or ctx.user, "email": ctx.user},
 		"role": role,

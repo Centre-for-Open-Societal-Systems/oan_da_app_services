@@ -9,6 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
+from da_services.tests.fixtures import ensure_da_user
 from da_services.utils.permissions import ScopeContext
 
 
@@ -20,20 +21,22 @@ class TestScheduleBlocking(IntegrationTestCase):
 		self.da_crop = "DA-BLOCK-CROP"
 		self.da_livestock = "DA-BLOCK-LIVESTOCK"
 		self.farmer_id = "FARMER-BLOCK-001"
+		self.user_crop = ensure_da_user(self.da_crop, email="da-crop@test.com")
+		self.user_livestock = ensure_da_user(self.da_livestock, email="da-livestock@test.com")
 
 		# Clean up
 		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
 
 		# Create DA context
 		self.ctx_crop = ScopeContext(
-			user="da-crop@test.com",
+			user=self.user_crop,
 			roles={"Development Agent"},
 			da_ids={self.da_crop},
 			unrestricted=False,
 		)
 
 		self.ctx_livestock = ScopeContext(
-			user="da-livestock@test.com",
+			user=self.user_livestock,
 			roles={"Development Agent"},
 			da_ids={self.da_livestock},
 			unrestricted=False,
@@ -111,6 +114,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -171,6 +175,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -212,6 +217,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Services",

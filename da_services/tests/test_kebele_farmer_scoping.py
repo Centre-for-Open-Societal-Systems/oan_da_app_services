@@ -1,4 +1,4 @@
-"""Tests for Kebele-based farmer scoping (DA-211 Phase 2)."""
+﻿"""Tests for Kebele-based farmer scoping (DA-211 Phase 2)."""
 
 from __future__ import annotations
 
@@ -6,8 +6,13 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
+from da_services.services import geo
+from da_services.tests.fixtures import cleanup_test_rows, ensure_kebele_assignment, resolve_test_geo
 from da_services.utils.permissions import ScopeContext
+
+# Rows this module creates; setUp / tearDown delete only these.
+DA_IDS = ("DA-TEST-SCOPE-001", "DA-TEST-SCOPE-002")
+FARMER_IDS = ("FARMER-A-001", "FARMER-A-002", "FARMER-B-001", "FARMER-A-NAME")
 
 
 class TestKebeleFarmerScoping(IntegrationTestCase):
@@ -15,46 +20,20 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
-		# Create administrative areas first
-		create_administrative_areas()
+		# Two Kebeles of one Woreda from the synced geography masters.
+		chain = resolve_test_geo()
+		self.da_id, self.da_id_other = DA_IDS
+		self.kebele_a = chain["kebele"]
+		self.kebele_b = chain["kebele_alt"]
+		self.woreda = chain["woreda"]
+		self.assertNotEqual(self.kebele_a, self.kebele_b, "the resolved Woreda needs two active Kebeles")
 
-		self.da_id = "DA-TEST-SCOPE-001"
-		self.da_id_other = "DA-TEST-SCOPE-002"
-		self.kebele_a = "ET04-W01-K03"
-		self.kebele_b = "ET04-W01-K04"
-		self.woreda = "ET04-W01"
+		# Clean up rows left by an earlier run of this module only.
+		cleanup_test_rows(da_ids=DA_IDS, farmer_ids=FARMER_IDS)
 
-		# Clean up
-		frappe.db.delete("DA Farmer Reference", {})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", [self.da_id, self.da_id_other]]})
-
-		# Create DA Kebele Assignment for Kebele A
-		frappe.get_doc(
-			{
-				"doctype": "DA Kebele Assignment",
-				"user": ensure_da_user(self.da_id),
-				"da_id": self.da_id,
-				"kebele": self.kebele_a,
-				"state": "Effective",
-				"mode": "Automatic",
-				"effective_date": "2026-10-01",
-				"woreda": self.woreda,
-			}
-		).insert(ignore_permissions=True, ignore_links=True)
-
-		# Create DA Kebele Assignment for Kebele B (different DA)
-		frappe.get_doc(
-			{
-				"doctype": "DA Kebele Assignment",
-				"user": ensure_da_user(self.da_id_other),
-				"da_id": self.da_id_other,
-				"kebele": self.kebele_b,
-				"state": "Effective",
-				"mode": "Automatic",
-				"effective_date": "2026-10-01",
-				"woreda": self.woreda,
-			}
-		).insert(ignore_permissions=True, ignore_links=True)
+		# One Effective assignment per DA: Kebele A and Kebele B
+		ensure_kebele_assignment(self.da_id, self.kebele_a)
+		ensure_kebele_assignment(self.da_id_other, self.kebele_b)
 
 		# Create farmers in different Kebeles
 		self.farmer_kebele_a_1 = self._create_farmer("FARMER-A-001", self.kebele_a)
@@ -71,8 +50,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 	def tearDown(self):
 		"""Clean up test data."""
-		frappe.db.delete("DA Farmer Reference", {})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", [self.da_id, self.da_id_other]]})
+		cleanup_test_rows(da_ids=DA_IDS, farmer_ids=FARMER_IDS)
 
 	def _create_farmer(self, farmer_id: str, kebele: str) -> str:
 		"""Create test farmer."""
@@ -103,7 +81,8 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 		# Should NOT see farmer in Kebele B
 		self.assertNotIn(self.farmer_kebele_b_1, farmer_ids)
 
-		self.assertEqual(total, 2)
+		# The site may hold its own farmers in this Kebele; ours are at least two of them.
+		self.assertGreaterEqual(total, 2)
 
 	def test_da_gets_403_for_another_kebele_filter(self):
 		"""An explicit out-of-scope Kebele is rejected, not silently emptied."""
@@ -143,7 +122,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 		self.assertIn(self.farmer_kebele_a_2, farmer_ids)
 		self.assertIn(self.farmer_kebele_b_1, farmer_ids)
 
-		self.assertEqual(total, 3)
+		self.assertGreaterEqual(total, 3)
 
 	def test_can_edit_farmer_in_assigned_kebele(self):
 		"""Test DA can edit farmers in assigned Kebele."""
@@ -159,7 +138,9 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 
 	def test_kebele_name_from_the_registry_matches_the_assigned_code(self):
 		"""The registry gives the Kebele's name; the assignment holds its code."""
-		self._create_farmer("FARMER-A-NAME", "Dambi Gobu")  # name of ET04-W01-K03
+		kebele_a_name = geo.display_name("DA Kebele", self.kebele_a)
+		self.assertTrue(kebele_a_name)
+		self._create_farmer("FARMER-A-NAME", kebele_a_name)
 
 		self.assertTrue(svc._is_farmer_in_da_kebele("FARMER-A-NAME", [self.da_id]))
 		self.assertFalse(svc._is_farmer_in_da_kebele("FARMER-A-NAME", [self.da_id_other]))
@@ -251,7 +232,7 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 		farmers_page1, total = svc.list_farmers(self.ctx_da, limit=1, start=0)
 		farmers_page2, _ = svc.list_farmers(self.ctx_da, limit=1, start=1)
 
-		self.assertEqual(total, 2)
+		self.assertGreaterEqual(total, 2)
 		self.assertEqual(len(farmers_page1), 1)
 		self.assertEqual(len(farmers_page2), 1)
 		self.assertNotEqual(farmers_page1[0]["farmer_id"], farmers_page2[0]["farmer_id"])

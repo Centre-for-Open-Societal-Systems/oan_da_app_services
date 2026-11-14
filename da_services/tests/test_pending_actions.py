@@ -20,6 +20,7 @@ from da_services.services.pending_actions import (
 	derive_pending_action,
 	derive_pending_actions_batch,
 )
+from da_services.tests.fixtures import ensure_da_user, resolve_test_geo
 
 
 class TestPendingActions(IntegrationTestCase):
@@ -28,22 +29,28 @@ class TestPendingActions(IntegrationTestCase):
 	def setUp(self):
 		"""Set up test data."""
 		self.farmer_id = "test-farmer-pending-001"
+		self.da_id = "DA-TEST-001"
+		self.da_id_livestock = "DA-TEST-002"
+		self.da_user = ensure_da_user(self.da_id)
+		self.da_user_livestock = ensure_da_user(self.da_id_livestock)
+		self.geo = resolve_test_geo()
 
 		# Clean up
 		frappe.db.delete("DA Farmer Reference", {"farmer_id": self.farmer_id})
 		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
 		frappe.db.commit()
 
-		# Create farmer reference
+		# Create farmer reference on a real master chain (Link fields).
 		self.farmer_ref = frappe.get_doc(
 			{
 				"doctype": "DA Farmer Reference",
 				"farmer_id": self.farmer_id,
 				"reg_id": "FR-TEST-001",
 				"farmer_name": "Test Farmer",
-				"kebele": "TEST-KEBELE",
-				"woreda": "TEST-WOREDA",
-				"region": "TEST-REGION",
+				"kebele": self.geo["kebele"],
+				"woreda": self.geo["woreda"],
+				"zone": self.geo["zone"],
+				"region": self.geo["region"],
 				"registration_state": "APPROVED",
 			}
 		).insert(ignore_permissions=True, ignore_links=True)
@@ -99,7 +106,8 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-TEST-001",
+				"user": self.da_user,
+				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
@@ -131,7 +139,8 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-TEST-001",
+				"user": self.da_user,
+				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
@@ -161,7 +170,8 @@ class TestPendingActions(IntegrationTestCase):
 		crop_visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-TEST-001",
+				"user": self.da_user,
+				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
@@ -178,7 +188,8 @@ class TestPendingActions(IntegrationTestCase):
 		livestock_visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-TEST-002",
+				"user": self.da_user_livestock,
+				"da_id": self.da_id_livestock,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
 				"physical_status": "Planned",
@@ -206,7 +217,8 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-TEST-001",
+				"user": self.da_user,
+				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
@@ -244,7 +256,8 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-TEST-001",
+				"user": self.da_user,
+				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
@@ -280,9 +293,10 @@ class TestPendingActions(IntegrationTestCase):
 				"farmer_id": farmer_id_2,
 				"reg_id": "FR-TEST-002",
 				"farmer_name": "Test Farmer 2",
-				"kebele": "TEST",
-				"woreda": "TEST",
-				"region": "TEST",
+				"kebele": self.geo["kebele"],
+				"woreda": self.geo["woreda"],
+				"zone": self.geo["zone"],
+				"region": self.geo["region"],
 				"registration_state": "PENDING_APPROVAL",
 			}
 		).insert(ignore_permissions=True, ignore_links=True)
@@ -347,9 +361,10 @@ class TestPendingActions(IntegrationTestCase):
 					"farmer_id": fid,
 					"reg_id": f"FR-{fid}",
 					"farmer_name": f"Farmer {fid}",
-					"kebele": "TEST",
-					"woreda": "TEST",
-					"region": "TEST",
+					"kebele": self.geo["kebele"],
+					"woreda": self.geo["woreda"],
+					"zone": self.geo["zone"],
+					"region": self.geo["region"],
 					"registration_state": "APPROVED",
 				}
 			).insert(ignore_permissions=True, ignore_links=True)

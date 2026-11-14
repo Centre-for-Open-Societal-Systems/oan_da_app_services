@@ -1,4 +1,4 @@
-"""Agent ↔ Kebele assignment: list, coverage, assign / reassign (FSD FR-05; DA-37, DA-38).
+﻿"""Agent Γåö Kebele assignment: list, coverage, assign / reassign (FSD FR-05; DA-37, DA-38).
 
 What is ours and what is not:
 
@@ -12,9 +12,8 @@ What is ours and what is not:
   posting in force; a Flagged row is a pending decision shown next to it.
 - Farmer counts come from the registry projection (`farmer_count`) until the Farmer
   Registry link exists; households are unknown today and returned as null.
-- Geofence: the DA position (sent by the client, or unknown) against the Kebele's
-  boundary from DA Administrative Area. No boundary → "Not checked", recorded, not
-  blocking.
+- Geofence: recorded as "Not checked" until Master Data supplies polygons on
+  DA Kebele (no DA Administrative Area). Not blocking.
 
 Consistency: the decision (new row + supersessions) is written under a per-DA lock and
 committed before the registry push and the notification, which are best-effort and
@@ -26,13 +25,10 @@ a DA reads their own row only.
 
 from __future__ import annotations
 
-import json
-
 import frappe
 from frappe import _
 from frappe.utils import getdate
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_kebele_assignment.da_kebele_assignment import LIVE_STATES
 from da_services.integrations.da_registry.client import (
 	DARegistryContractPending,
@@ -42,6 +38,7 @@ from da_services.integrations.da_registry.client import (
 )
 from da_services.integrations.da_registry.schemas import DAReference, LifecycleOutcome
 from da_services.services import constants as C
+from da_services.services import geo
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.notifications import notify_da
 from da_services.utils import geofence
@@ -79,33 +76,13 @@ ASSIGNMENT_FIELDS = [
 
 
 def areas(*, level: str | None = None, parent: str | None = None, q: str | None = None) -> list[dict]:
-	filters: dict = {"active": 1}
-	if level:
-		filters["level"] = level
-	if parent:
-		filters["parent_area"] = parent
-	if q:
-		# Parameterised by Frappe; only the LIKE wildcards need escaping so "Bako_01"
-		# matches literally.
-		needle = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")[:80]
-		filters["name_en"] = ("like", f"%{needle}%")
-	return frappe.get_all(
-		"DA Administrative Area",
-		filters=filters,
-		fields=["name as code", "level", "parent_area", "name_en", "name_am", "boundary_ref"],
-		order_by="name_en asc",
-		limit_page_length=0,
-	)
+	"""Active geography masters for cascading pickers (DA Region ΓåÆ DA Kebele)."""
+	return geo.list_masters(level=level, parent=parent, q=q)
 
 
 def _area_names(codes: set[str]) -> dict[str, str]:
-	codes = {c for c in codes if c}
-	if not codes:
-		return {}
-	rows = frappe.get_all(
-		"DA Administrative Area", filters={"name": ("in", list(codes))}, fields=["name", "name_en"]
-	)
-	return {r.name: r.name_en for r in rows}
+	"""Kebele display names from DA Kebele (assignment targets are always Kebeles)."""
+	return geo.display_names("DA Kebele", codes)
 
 
 # -- rows ---------------------------------------------------------------------------
@@ -193,9 +170,8 @@ def _resolve_officer_scope(ctx: ScopeContext, woreda: str | None) -> tuple[str |
 	if ctx.unrestricted:
 		return woreda, None
 	if woreda:
-		tree = ancestors_of(woreda)
-		if tree["woreda"] != woreda:
-			frappe.throw(_("{0} is not a Woreda in the administrative area master.").format(woreda))
+		geo.require_active_master("DA Woreda", woreda, _("Woreda"))
+		tree = geo.ancestors_of_woreda(woreda)
 		if not ctx.covers(tree["region"], woreda, tree["zone"]):
 			frappe.throw(_("Woreda {0} is outside your scope.").format(woreda), frappe.PermissionError)
 		return woreda, None
@@ -407,33 +383,16 @@ def assign(
 	ref = get_da_reference(da_id, ctx)  # the DA must be inside the officer's scope
 	if ref.active_status == C.ACTIVE_STATUS_SEPARATED:
 		frappe.throw(_("DA {0} is separated and cannot be assigned.").format(da_id), frappe.ValidationError)
-	# The assignment belongs to the User whose DA Registry ID is this DA-ID (its da_id is fetched from it).
-	user = frappe.db.get_value("User", {"da_registry_id": ref.da_id}, "name")
-	if not user:
-		frappe.throw(
-			_("No user has DA Registry ID {0}; set it on the DA's User before assigning a Kebele.").format(
-				ref.da_id
-			),
-			frappe.ValidationError,
-		)
 
-	area = frappe.db.get_value(
-		"DA Administrative Area", kebele, ["level", "active", "name_en", "boundary_geojson"], as_dict=True
-	)
-	if not area or area.level != "Kebele":
-		frappe.throw(_("{0} is not a Kebele in the administrative area master.").format(kebele))
-	tree = ancestors_of(kebele)
+	geo.require_active_master("DA Kebele", kebele, _("Kebele"))
+	tree = geo.ancestors_of_kebele(kebele)
 	if not ctx.unrestricted and not ctx.covers(tree["region"], tree["woreda"], tree["zone"]):
 		frappe.throw(_("Kebele {0} is outside your Woreda.").format(kebele), frappe.PermissionError)
 
-	boundary = area.boundary_geojson
-	if isinstance(boundary, str):
-		try:
-			boundary = json.loads(boundary) if boundary else None
-		except ValueError:
-			boundary = None
-	result, why = geofence.check(loc.get("lat"), loc.get("lng"), boundary, area.name_en)
-	state = "Flagged" if result == geofence.OUT_OF_BOUNDS else "Effective"
+	# Polygons are not on DA Kebele yet; geofence stays Not checked (plan decision 1C).
+	result, why = geofence.NOT_CHECKED, _("Boundary not available on geography masters.")
+	state = "Effective"
+	user = geo.require_user_for_da(ref.da_id)
 
 	# The decision itself is written under a per-DA lock and committed, so it is never
 	# lost to a later failure of the registry push or the notification.
@@ -443,7 +402,7 @@ def assign(
 			{
 				"doctype": "DA Kebele Assignment",
 				"user": user,
-				"da_id": ref.da_id,
+				"da_id": ref.da_id,  # known from registry; DocType also fetch_from user on Desk
 				"kebele": kebele,
 				"state": state,
 				"mode": mode,
@@ -470,7 +429,7 @@ def assign(
 
 	if state == "Effective":
 		_push_to_registry(doc, ref, reason, ctx)
-	_notify(doc, ref, area.name_en, state, why, reason)
+	_notify(doc, ref, geo.display_name("DA Kebele", kebele) or kebele, state, why, reason)
 	doc.reload()
 	return serialize(doc)
 

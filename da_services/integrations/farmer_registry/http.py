@@ -38,6 +38,7 @@ from frappe import _
 
 from da_services.integrations.staff_api.auth import auth_and_csrf_headers
 from da_services.integrations.staff_api.transport import http_failure, staff_envelope
+from da_services.services import geo
 
 from .client import (
 	FarmerRegistryClient,
@@ -336,19 +337,15 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 
 	@staticmethod
 	def _area_name(code_or_name: str | None) -> str | None:
-		"""Registry filters use administrative *names*; translate a DA code when we know it."""
+		"""Registry filters use geography *names*; translate a master code when we know it."""
 		if not code_or_name:
 			return code_or_name
-		try:
-			name = frappe.db.get_value("DA Administrative Area", {"code": code_or_name}, "name_en")
-		except Exception:
-			# A lookup failure must not turn a farmer search into a 500. The
-			# registry can still filter on the code the caller sent.
-			frappe.logger("da_services").warning(
-				"Could not resolve administrative area %s to a name", code_or_name, exc_info=True
-			)
-			name = None
-		return name or code_or_name
+		for doctype in ("DA Woreda", "DA Kebele", "DA Region", "DA Zone"):
+			name = geo.display_name(doctype, code_or_name)
+			if name:
+				return name
+		# Unknown to local masters: pass through so the registry can still try the value.
+		return code_or_name
 
 	# ------------------------------------------------------------------ registry ids
 
@@ -511,7 +508,7 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		"""Search the Farmer register.
 
 		The registry filters on whitelisted *_name fields, so DA codes are
-		translated to names through DA Administrative Area. kebele_name is not
+		translated to names through DA Region/Zone/Woreda/Kebele masters. kebele_name is not
 		yet whitelisted on the registry side, so Kebele is also applied here on
 		the returned rows.
 		"""

@@ -3,28 +3,38 @@
 Fixture DAs cover the states Part 2 has to handle: an active published DA, one on
 leave, one separated, and one still awaiting Woreda review (not yet Active, so no
 lifecycle action should be allowed on it).
+
+Geography on the fixtures is always rewritten from the site's synced ``DA Region`` /
+Zone / Woreda / Kebele masters (``geo_master_sync``). If masters are empty, alignment
+fails closed — no invented placeholder codes.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import frappe
+from frappe import _
+
 from da_services.services import constants as C
+from da_services.services.geo import masters_nonempty
 
 from .client import DANotFound, DARegistryClient
 from .mapper import to_da_reference
 from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
 
+# Identity + status fixtures. Geography fields are filled by ``fixture_das_aligned``
+# from live masters only (never invent codes here).
 FIXTURE_DAS: dict[str, dict] = {
 	"DA-000001": {
 		"da_id": "DA-000001",
 		"full_name": "Abebe Kebede",
 		"active_status": C.ACTIVE_STATUS_ACTIVE,
 		"approval_status": "Published",
-		"region": "ET04",
-		"zone": "ET04-Z01",
-		"woreda": "ET04-W01",
-		"assigned_kebele": "ET04-W01-K03",
+		"region": None,
+		"zone": None,
+		"woreda": None,
+		"assigned_kebele": None,
 		"education_tier": "Diploma",
 		"fayda_status": "Verified",
 		"phone": "+251911000001",
@@ -38,10 +48,10 @@ FIXTURE_DAS: dict[str, dict] = {
 		"full_name": "Marta Tesfaye",
 		"active_status": C.ACTIVE_STATUS_ON_LEAVE,
 		"approval_status": "Published",
-		"region": "ET04",
-		"zone": "ET04-Z01",
-		"woreda": "ET04-W01",
-		"assigned_kebele": "ET04-W01-K07",
+		"region": None,
+		"zone": None,
+		"woreda": None,
+		"assigned_kebele": None,
 		"education_tier": "Degree",
 		"fayda_status": "Verified",
 		"phone": "+251911000002",
@@ -55,9 +65,9 @@ FIXTURE_DAS: dict[str, dict] = {
 		"full_name": "Yonas Alemu",
 		"active_status": C.ACTIVE_STATUS_SEPARATED,
 		"approval_status": "Published",
-		"region": "ET03",
-		"zone": "ET03-Z02",
-		"woreda": "ET03-W02",
+		"region": None,
+		"zone": None,
+		"woreda": None,
 		"assigned_kebele": None,
 		"education_tier": "Diploma",
 		"fayda_status": "Verified",
@@ -72,10 +82,10 @@ FIXTURE_DAS: dict[str, dict] = {
 		"full_name": "Hana Girma",
 		"active_status": C.ACTIVE_STATUS_ACTIVE,
 		"approval_status": "Awaiting review",
-		"region": "ET03",
-		"zone": "ET03-Z02",
-		"woreda": "ET03-W02",
-		"assigned_kebele": "ET03-W02-K01",
+		"region": None,
+		"zone": None,
+		"woreda": None,
+		"assigned_kebele": None,
 		"education_tier": "Degree",
 		"fayda_status": "Pending",
 		"phone": "+251911000004",
@@ -87,10 +97,11 @@ FIXTURE_DAS: dict[str, dict] = {
 }
 
 
-# Master Data geography of the demo site; setup/seed_demo.py seeds the same list: (code, level, parent, name)
+# Invented codes from the retired Admin Area era. Not a geography source — only a
+# denylist for ``remove_unsynced_fixture_geo`` to delete leftover dummy Desk rows.
+# Live geography always comes from ``live_fixture_geo`` / synced masters.
 GEO_LEVELS = ("region", "zone", "woreda", "kebele")
-FIXTURE_GEO = (
-	("ET04", "region", None, "Oromia"),
+LEGACY_DUMMY_GEO = (
 	("ET04-Z01", "zone", "ET04", "West Shewa"),
 	("ET04-W01", "woreda", "ET04-Z01", "Bako Tibe"),
 	("ET04-W01-K01", "kebele", "ET04-W01", "Bako 01"),
@@ -99,19 +110,131 @@ FIXTURE_GEO = (
 	("ET04-W01-K04", "kebele", "ET04-W01", "Koye Feche"),
 	("ET04-W01-K05", "kebele", "ET04-W01", "Amarti Gibe"),
 	("ET04-W01-K07", "kebele", "ET04-W01", "Gombo"),
-	("ET03", "region", None, "Amhara"),
 	("ET03-Z02", "zone", "ET03", "North Shewa"),
 	("ET03-W02", "woreda", "ET03-Z02", "Ankober"),
 	("ET03-W02-K01", "kebele", "ET03-W02", "Ankober 01"),
 )
+
+_GEO_DOCTYPE = {
+	"region": ("DA Region", "region_name", None),
+	"zone": ("DA Zone", "zone_name", "region"),
+	"woreda": ("DA Woreda", "woreda_name", "zone"),
+	"kebele": ("DA Kebele", "kebele_name", "woreda"),
+}
+
+
+def _chain_from_woreda(woreda: str) -> dict | None:
+	zone = frappe.db.get_value("DA Woreda", woreda, "zone")
+	region = frappe.db.get_value("DA Zone", zone, "region") if zone else None
+	kebeles = frappe.get_all(
+		"DA Kebele",
+		filters={"is_active": 1, "woreda": woreda},
+		pluck="name",
+		order_by="name asc",
+		limit=2,
+	)
+	if not (region and zone and kebeles):
+		return None
+	return {
+		"region": region,
+		"zone": zone,
+		"woreda": woreda,
+		"kebele": kebeles[0],
+		"kebele_alt": kebeles[1] if len(kebeles) > 1 else kebeles[0],
+	}
+
+
+def live_fixture_geo() -> tuple[dict, dict]:
+	"""Primary + other geography chains from synced masters only.
+
+	Fails closed when masters are empty or no usable chain exists — never invents codes.
+	"""
+	if not masters_nonempty():
+		frappe.throw(
+			_(
+				"Geography masters are empty. Run "
+				"`bench --site <site> execute da_services.services.geo_master_sync.sync_geo_masters` "
+				"before using the mock DA Registry."
+			),
+			frappe.ValidationError,
+		)
+
+	# Prefer a Woreda with 2+ Kebeles under a Region that also has a second Zone.
+	counts = frappe.db.sql(
+		"""
+		SELECT woreda, COUNT(*) AS n
+		FROM `tabDA Kebele`
+		WHERE is_active = 1 AND IFNULL(woreda, '') != ''
+		GROUP BY woreda
+		ORDER BY n DESC, woreda ASC
+		LIMIT 20
+		""",
+		as_dict=True,
+	)
+	primary = None
+	other = None
+	for row in counts:
+		chain = _chain_from_woreda(row.woreda)
+		if not chain:
+			continue
+		if primary is None:
+			primary = chain
+			continue
+		if chain["region"] != primary["region"] or chain["zone"] != primary["zone"]:
+			other = chain
+			break
+	if primary is None:
+		frappe.throw(
+			_("No active Region→Zone→Woreda→Kebele chain in geography masters."),
+			frappe.ValidationError,
+		)
+	if other is None:
+		# Same region, different zone if possible; else reuse primary for "other".
+		zones = frappe.get_all(
+			"DA Zone",
+			filters={"is_active": 1, "region": primary["region"], "name": ("!=", primary["zone"])},
+			pluck="name",
+			limit=5,
+		)
+		for zone in zones:
+			woreda = frappe.get_all(
+				"DA Woreda", filters={"is_active": 1, "zone": zone}, pluck="name", limit=1
+			)
+			if not woreda:
+				continue
+			other = _chain_from_woreda(woreda[0])
+			if other:
+				break
+	if other is None:
+		other = dict(primary)
+	return primary, other
+
+
+def fixture_das_aligned() -> dict[str, dict]:
+	"""FIXTURE_DAS with region/zone/woreda/kebele from live masters (required)."""
+	primary, other = live_fixture_geo()
+	records = {k: dict(v) for k, v in FIXTURE_DAS.items()}
+	for da_id, geo in (
+		("DA-000001", primary),
+		("DA-000002", {**primary, "kebele": primary["kebele_alt"]}),
+		("DA-000003", {**other, "kebele": None}),
+		("DA-000004", other),
+	):
+		row = records[da_id]
+		row["region"] = geo["region"]
+		row["zone"] = geo["zone"]
+		row["woreda"] = geo["woreda"]
+		row["assigned_kebele"] = geo.get("kebele")
+	return records
 
 
 class MockDARegistryClient(DARegistryClient):
 	_instance: MockDARegistryClient | None = None
 
 	def __init__(self, records: dict[str, dict] | None = None):
-		# Copy so tests that mutate never leak into each other.
-		self._records = {k: dict(v) for k, v in (records or FIXTURE_DAS).items()}
+		# Copy so tests that mutate never leak into each other. Default records always
+		# come from live masters (``fixture_das_aligned``); empty masters fail closed.
+		self._records = {k: dict(v) for k, v in (records or fixture_das_aligned()).items()}
 		self._outcomes: dict[str, IntegrationResult] = {}
 		self.imports: list[tuple[str, bytes]] = []
 		self.import_exceptions: list[dict] = []
@@ -210,11 +333,20 @@ class MockDARegistryClient(DARegistryClient):
 		]
 
 	def geo_level_values(self, level_id: str, parent: str | None = None) -> list[dict]:
+		"""Active master rows for the named level (same tree as Desk Links)."""
 		index = int(str(level_id).lstrip("l")) - 1
 		if not 0 <= index < len(GEO_LEVELS):
 			return []
+		level = GEO_LEVELS[index]
+		doctype, name_field, parent_field = _GEO_DOCTYPE[level]
+		filters: dict = {"is_active": 1}
+		if parent_field and parent:
+			filters[parent_field] = parent
+		fields = ["name as code", f"{name_field} as name"]
+		if parent_field:
+			fields.append(f"{parent_field} as parent")
+		rows = frappe.get_all(doctype, filters=filters, fields=fields, order_by=f"{name_field} asc")
 		return [
-			{"code": code, "name": name, "parent": parent_code}
-			for code, level, parent_code, name in FIXTURE_GEO
-			if level == GEO_LEVELS[index] and (parent is None or parent_code == parent)
+			{"code": r.code, "name": r.name, "parent": r.get("parent") if parent_field else None}
+			for r in rows
 		]

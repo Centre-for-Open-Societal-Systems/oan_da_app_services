@@ -14,10 +14,10 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.integrations.da_registry.client import DARegistryUnavailable, get_client
 from da_services.integrations.da_registry.schemas import DAReference
 from da_services.services import constants as C
+from da_services.services import geo
 from da_services.utils.permissions import ScopeContext
 
 FIELDS = (
@@ -57,7 +57,7 @@ def _scoped_das(ctx: ScopeContext) -> list[DAReference]:
 			# cannot be resolved is skipped rather than widened to a full registry fetch.
 			regions = set(ctx.region_scopes)
 			for zone in ctx.zone_scopes:
-				region = ancestors_of(zone).get("region")
+				region = geo.ancestors_of_zone(zone).get("region")
 				if region:
 					regions.add(region)
 			rows = []

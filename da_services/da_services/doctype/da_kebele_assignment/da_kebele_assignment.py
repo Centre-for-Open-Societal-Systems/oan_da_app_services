@@ -23,6 +23,7 @@ PENDING_STATES = ("Proposed", "Validated", "Flagged")
 
 class DAKebeleAssignment(Document):
 	def validate(self):
+		# user + da_id: DocType reqd Link and fetch_from user.da_registry_id (Frappe).
 		kebele = frappe.db.get_value("DA Kebele", self.kebele, ["woreda", "is_active"], as_dict=True)
 		if not kebele:
 			frappe.throw(_("Kebele {0} is not in the DA Kebele master.").format(self.kebele))

@@ -15,7 +15,26 @@ import json
 import frappe
 from frappe.tests import IntegrationTestCase
 
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	require_geo_masters,
+)
+
+# Test users
+DA1 = "da1@da.local"
+DA2 = "da2@da.local"
+SUP = "sup@da.local"
+
+# Rows this module creates; tearDown deletes only these.
+USERS = (DA1, DA2, SUP)
+DA_IDS = ("DA-000001", "DA-000002")
+FARMER_IDS = ("farmer-uuid-001", "farmer-uuid-002", "farmer-uuid-003")
+# Queue rows inserted directly by the processor tests carry these reference ids.
+EVENT_REFERENCE_IDS = (*FARMER_IDS, "test-retry-sweep-001", "test-stale-001", "test-conflict-001")
 
 # Test helper functions
 
@@ -53,12 +72,6 @@ def _grant(user, role, **kw):
 	frappe.db.commit()
 
 
-# Test users
-DA1 = "da1@da.local"
-DA2 = "da2@da.local"
-SUP = "sup@da.local"
-
-
 class TestFarmerUpdates(IntegrationTestCase):
 	"""Test cases for DA-41 farmer profile updates."""
 
@@ -67,15 +80,35 @@ class TestFarmerUpdates(IntegrationTestCase):
 		"""Set up test data once for all tests."""
 		super().setUpClass()
 
+		# Grants left by an earlier run of this module only.
+		cleanup_test_rows(users=USERS, doctypes=("DA RBAC Assignment",))
+
+		# Geography is the mock DA Registry's, rewritten from the synced masters: DA-000001/2
+		# are posted in the primary Woreda; the third farmer lives in another Region.
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		cls.geo = aligned_mock_geo()
+		g = cls.geo
+
 		# Create test users
 		cls.da1_user = _user(DA1, [C.ROLE_DA])
 		cls.da2_user = _user(DA2, [C.ROLE_DA])
 		cls.sup_user = _user(SUP, [C.ROLE_SUPERVISOR])
+		# A DA's own DA-ID is read from User.da_registry_id.
+		bind_da_user(DA1, "DA-000001")
+		bind_da_user(DA2, "DA-000002")
 
 		# Grant scopes (need region_scope with woreda_scope)
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+
+	@classmethod
+	def tearDownClass(cls):
+		frappe.set_user("Administrator")
+		cleanup_test_rows(users=USERS, doctypes=("DA RBAC Assignment",))
+		frappe.db.commit()
+		super().tearDownClass()
 
 	def setUp(self):
 		"""Set up test data for each test."""
@@ -109,17 +142,22 @@ class TestFarmerUpdates(IntegrationTestCase):
 		frappe.form_dict = frappe.local("form_dict")
 		frappe.local.form_dict = frappe._dict()
 
-		# Clean up integration events
-		frappe.db.delete("DA Integration Event", {"event_type": "Farmer Update"})
-
-		# Clean up test data
-		frappe.db.delete("DA Farmer Link")
-		frappe.db.delete("DA Farmer Reference")
+		# Queue rows this module wrote (through the API as a test user, or directly for one
+		# of its farmers), then the links and farmers it created.
+		frappe.db.delete("DA Integration Event", {"event_type": "Farmer Update", "owner": ("in", USERS)})
+		frappe.db.delete(
+			"DA Integration Event",
+			{"event_type": "Farmer Update", "reference_id": ("in", EVENT_REFERENCE_IDS)},
+		)
+		cleanup_test_rows(
+			da_ids=DA_IDS, farmer_ids=FARMER_IDS, doctypes=("DA Farmer Link", "DA Farmer Reference")
+		)
 
 		frappe.db.commit()
 
 	def _create_test_farmers(self):
 		"""Create test farmers in DA Farmer Reference."""
+		g = self.geo
 		farmers = [
 			{
 				"farmer_id": "farmer-uuid-001",
@@ -127,9 +165,9 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"farmer_name": "Abebe Kebede",
 				"phone": "911234567",
 				"email": "abebe@example.com",
-				"kebele": "Bako 01",
-				"woreda": "ET04-W01",
-				"region": "ET04",
+				"kebele": g["kebele"],
+				"woreda": g["woreda"],
+				"region": g["region"],
 				"household_size": 4,
 				"total_land_hectares": 2.5,
 				"registration_state": "APPROVED",
@@ -140,9 +178,9 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"farmer_name": "Almaz Tesfaye",
 				"phone": "911234568",
 				"email": "almaz@example.com",
-				"kebele": "Bako 02",
-				"woreda": "ET04-W01",
-				"region": "ET04",
+				"kebele": g["kebele_alt"],
+				"woreda": g["woreda"],
+				"region": g["region"],
 				"household_size": 5,
 				"total_land_hectares": 3.0,
 				"registration_state": "APPROVED",
@@ -153,9 +191,9 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"farmer_name": "Chaltu Daba",
 				"phone": "911234569",
 				"email": "chaltu@example.com",
-				"kebele": "Bole 01",
-				"woreda": "ET03-W02",
-				"region": "ET03",
+				"kebele": g["other_kebele"],
+				"woreda": g["other_woreda"],
+				"region": g["other_region"],
 				"household_size": 6,
 				"total_land_hectares": 1.5,
 				"registration_state": "APPROVED",
@@ -171,14 +209,15 @@ class TestFarmerUpdates(IntegrationTestCase):
 
 	def _create_farmer_links(self):
 		"""Create farmer-DA links."""
+		g = self.geo
 		links = [
 			{
 				"da_id": "DA-000001",
 				"farmer_id": "farmer-uuid-001",
 				"farmer_name": "Abebe Kebede",
-				"kebele": "Bako 01",
-				"woreda": "ET04-W01",
-				"region": "ET04",
+				"kebele": g["kebele"],
+				"woreda": g["woreda"],
+				"region": g["region"],
 				"link_type": "Automatic",
 				"is_active": 1,
 			},
@@ -186,9 +225,9 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"da_id": "DA-000001",
 				"farmer_id": "farmer-uuid-002",
 				"farmer_name": "Almaz Tesfaye",
-				"kebele": "Bako 02",
-				"woreda": "ET04-W01",
-				"region": "ET04",
+				"kebele": g["kebele_alt"],
+				"woreda": g["woreda"],
+				"region": g["region"],
 				"link_type": "Manual",
 				"is_active": 1,
 			},
@@ -196,9 +235,9 @@ class TestFarmerUpdates(IntegrationTestCase):
 				"da_id": "DA-000002",
 				"farmer_id": "farmer-uuid-003",
 				"farmer_name": "Chaltu Daba",
-				"kebele": "Bole 01",
-				"woreda": "ET03-W02",
-				"region": "ET03",
+				"kebele": g["other_kebele"],
+				"woreda": g["other_woreda"],
+				"region": g["other_region"],
 				"link_type": "Automatic",
 				"is_active": 1,
 			},

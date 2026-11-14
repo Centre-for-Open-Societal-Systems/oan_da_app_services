@@ -1,4 +1,4 @@
-// Copyright (c) 2026, COSS - Centre for Open Societal Systems and contributors
+﻿// Copyright (c) 2026, COSS - Centre for Open Societal Systems and contributors
 // For license information, please see license.txt
 
 // Audience scope pickers, as on DA RBAC Assignment: active areas only, Zone within the

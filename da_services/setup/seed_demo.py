@@ -1,4 +1,4 @@
-"""Demo data for a development site: two users and a filled DA dashboard (DA-198).
+﻿"""Demo data for a development site: two users and a filled DA dashboard (DA-198).
 
     bench --site da-services.localhost execute da_services.setup.seed_demo.run
 
@@ -10,51 +10,28 @@ Woreda ET04-W01); with a real registry the posting lookup on insert decides the 
 
 from __future__ import annotations
 
-import json
-
 import frappe
 from frappe.utils import add_days, today
 
-from da_services.integrations.da_registry.mock import FIXTURE_GEO
-from da_services.services import assignments, notifications, tasks, visits
+from da_services.services import assignments, geo, notifications, tasks, visits
 from da_services.services import constants as C
 from da_services.utils.permissions import get_scope_context
 
 DEMO_PASSWORD = "Demo#2026"  # local demo only; the guard below keeps this off real sites
 
 USERS = [
-	# (email, first name, role, grant kwargs)
+	# (email, first name, role, grant kwargs) ΓÇö region/woreda filled from live masters in run()
 	(
 		"da.demo@da.local",
 		"Abebe",
 		C.ROLE_DA,
-		{"da_id": "DA-000001", "region_scope": "ET04", "woreda_scope": "ET04-W01"},
+		{"da_id": "DA-000001"},
 	),
-	("sup.demo@da.local", "Almaz", C.ROLE_SUPERVISOR, {"region_scope": "ET04", "woreda_scope": "ET04-W01"}),
+	("sup.demo@da.local", "Almaz", C.ROLE_SUPERVISOR, {}),
 ]
 
 DA_ID = "DA-000001"
 FARMERS = ["FRM-000101", "FRM-000102", "FRM-000103", "FRM-000104"]
-
-
-def _geo_masters() -> None:
-	"""DA Country / Region / Zone / Woreda / Kebele rows for the demo geography (missing ones only)."""
-	if not frappe.db.exists("DA Country", DEMO_COUNTRY[0]):
-		frappe.get_doc(
-			{"doctype": "DA Country", "country_code": DEMO_COUNTRY[0], "country_name": DEMO_COUNTRY[1]}
-		).insert(ignore_permissions=True)
-	for code, level, parent, name in FIXTURE_GEO:  # parents come before their children
-		doctype, parent_field = GEO_DOCTYPES[level]
-		if frappe.db.exists(doctype, code):
-			continue
-		frappe.get_doc(
-			{
-				"doctype": doctype,
-				f"{level}_code": code,
-				f"{level}_name": name,
-				parent_field: parent or DEMO_COUNTRY[0],
-			}
-		).insert(ignore_permissions=True)
 
 
 def _user(email: str, first_name: str, role: str, grant: dict) -> None:
@@ -68,20 +45,19 @@ def _user(email: str, first_name: str, role: str, grant: dict) -> None:
 	u = frappe.get_doc("User", email)
 	if role not in frappe.get_roles(email):
 		u.add_roles(role)
-	if grant.get("da_id") and u.get("da_registry_id") != grant["da_id"]:
-		# The grant's DA-ID is fetched from the user's DA Registry ID (unique): the demo
-		# user takes it over from any other user on this developer site.
-		frappe.db.sql(
-			"update `tabUser` set da_registry_id = null where da_registry_id = %s and name != %s",
-			(grant["da_id"], email),
-		)
+	if grant.get("da_id"):
+		# User.da_registry_id is unique; release any other User that still holds it.
+		for other in frappe.get_all(
+			"User", filters={"da_registry_id": grant["da_id"], "name": ("!=", email)}, pluck="name"
+		):
+			frappe.db.set_value("User", other, "da_registry_id", None)
 		frappe.db.set_value("User", email, "da_registry_id", grant["da_id"])
 	if not frappe.db.exists("DA RBAC Assignment", {"user": email, "role": role, "active": 1}):
 		doc = frappe.new_doc("DA RBAC Assignment")
 		doc.user = email
 		doc.role = role
 		doc.effective_from = today()
-		doc.update(grant)
+		doc.update({k: v for k, v in grant.items() if k != "da_id"})
 		doc.insert(ignore_permissions=True)
 
 
@@ -143,52 +119,14 @@ def _tasks(ctx) -> None:
 			tasks.complete_task(out["name"], ctx=ctx)
 
 
-# Region > Zone > Woreda > Kebele codes match the mock DA Registry fixtures (ET04-W01-K03 ...).
-# Names are placeholders until the administrative master is synced.
-# The demo geography is the mock registry's Master Data (one list, two readers).
-AREAS = [(code, level.capitalize(), parent, name) for code, level, parent, name in FIXTURE_GEO]
-# The same geography in the geo masters, which RBAC scopes and Kebele postings link to:
-# level -> (doctype, parent link field). The Regions sit under DEMO_COUNTRY.
-DEMO_COUNTRY = ("ET", "Ethiopia")
-GEO_DOCTYPES = {
-	"region": ("DA Region", "country"),
-	"zone": ("DA Zone", "region"),
-	"woreda": ("DA Woreda", "zone"),
-	"kebele": ("DA Kebele", "woreda"),
-}
-# One demo boundary so the geofence check can be exercised: a box around Dambi Gobu.
-DEMO_BOUNDARY = {
-	"ET04-W01-K03": {
-		"type": "Polygon",
-		"coordinates": [[[37.50, 9.08], [37.62, 9.08], [37.62, 9.17], [37.50, 9.17], [37.50, 9.08]]],
-	}
-}
-
-
-def _areas() -> None:
-	for code, level, parent, name_en in AREAS:
-		if frappe.db.exists("DA Administrative Area", code):
-			continue
-		doc = frappe.new_doc("DA Administrative Area")
-		doc.code = code
-		doc.level = level
-		doc.parent_area = parent
-		doc.name_en = name_en
-		doc.source = "seed_demo"
-		if code in DEMO_BOUNDARY:
-			doc.boundary_geojson = json.dumps(DEMO_BOUNDARY[code])
-			doc.boundary_ref = "demo-box-v1"
-		doc.insert(ignore_permissions=True)
-
-
-def _assignments(ctx) -> None:
+def _assignments(ctx, kebele: str) -> None:
+	"""Post the demo DA to an existing synced Kebele (masters must already be present)."""
 	assignments.assign(
 		da_id=DA_ID,
-		kebele="ET04-W01-K03",
+		kebele=kebele,
 		effective_date=add_days(today(), -400),
 		reason="Seeded demo posting",
 		mode="Automatic",
-		da_location={"lat": 9.1236, "lng": 37.5671},  # inside the demo boundary
 		client_op_id="seed-kas-1",
 		ctx=ctx,
 	)
@@ -208,13 +146,26 @@ def _notifications() -> None:
 def run(force: str | int | bool = False) -> dict:
 	if not (frappe.conf.get("developer_mode") or str(force).lower() in ("1", "true", "yes")):
 		frappe.throw("seed_demo only runs on a developer_mode site (or with force=1).")
-	frappe.set_user("Administrator")
-	_geo_masters()  # before the grants: their scopes link to the geo masters
+	if not geo.masters_nonempty():
+		frappe.throw(
+			"Geography masters are empty. Run geo_master_sync before seed_demo "
+			"(seed_demo does not create DA Region/Zone/Woreda/Kebele)."
+		)
+	kebele = frappe.get_all("DA Kebele", filters={"is_active": 1}, pluck="name", order_by="name asc", limit=1)[
+		0
+	]
+	tree = geo.ancestors_of_kebele(kebele)
+	users = []
 	for email, first_name, role, grant in USERS:
+		g = dict(grant)
+		g["region_scope"] = tree["region"]
+		g["woreda_scope"] = tree["woreda"]
+		users.append((email, first_name, role, g))
+	frappe.set_user("Administrator")
+	for email, first_name, role, grant in users:
 		_user(email, first_name, role, grant)
 	ctx = get_scope_context("Administrator")
-	_areas()
-	_assignments(ctx)
+	_assignments(ctx, kebele)
 	_visits(ctx)
 	_tasks(ctx)
 	_notifications()
@@ -223,7 +174,7 @@ def run(force: str | int | bool = False) -> dict:
 		"visits": frappe.db.count("DA Visit", {"da_id": DA_ID}),
 		"tasks": frappe.db.count("DA Task", {"da_id": DA_ID}),
 		"notifications": frappe.db.count("DA Notification", {"user": "da.demo@da.local"}),
-		"areas": frappe.db.count("DA Administrative Area"),
+		"kebele": kebele,
 		"assignments": frappe.db.count("DA Kebele Assignment", {"da_id": DA_ID}),
 	}
 	print(f"seed_demo: {counts}")

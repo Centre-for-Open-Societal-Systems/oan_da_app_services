@@ -7,16 +7,33 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, get_datetime, today
 
 from da_services.da_services.doctype.da_visit.da_visit import COMPLETE, IN_PROGRESS, PLANNED
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
-from da_services.services import dashboard, tasks, visits
+from da_services.services import dashboard, geo, tasks, visits
 from da_services.setup import seed_demo
-from da_services.tests.fixtures import create_administrative_areas
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	ensure_da_user,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "dash-da1@da.local"  # DA-000001, ET04 / ET04-W01
-SUP = "dash-sup@da.local"  # Supervisor ET04-W01
+DA1 = "dash-da1@da.local"  # DA-000001, primary Region / Woreda
+SUP = "dash-sup@da.local"  # Supervisor, primary Woreda
 SUP2 = "dash-sup2@da.local"  # Supervisor with two Woredas
-EXEC = "dash-exec@da.local"  # Executive ET03
+EXEC = "dash-exec@da.local"  # Executive, other Region
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, SUP, SUP2, EXEC)
+DA_IDS = ("DA-000001", "DA-000003")
+FARMER_IDS = ("FR-DASH-K03-1", "FR-DASH-K03-2", "FR-DASH-OTHER")
+# seed_demo writes its own DA user and the DA-000001 rows it counts.
+DEMO_USER = "da.demo@da.local"
+
+# Mock DA Registry postings come from the synced geography masters (aligned_mock_geo):
+# DA-000001 → primary Woreda (kebele), DA-000002 → kebele_alt, DA-000003 → other Woreda.
 
 
 def _user(email, roles):
@@ -48,17 +65,27 @@ def _ctx(user):
 	return get_scope_context(user)
 
 
+def _aligned_geo() -> dict:
+	"""Rebuild the mock registry from the live masters and return the geography it uses."""
+	require_geo_masters()
+	MockDARegistryClient.reset()
+	return aligned_mock_geo()
+
+
 class TestDashboard(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment", "DA Integration Event"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=(*USERS, DEMO_USER), da_ids=DA_IDS)
+		g = _aligned_geo()
+		self.geo = g
+		self.woreda = g["woreda"]
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
+		bind_da_user(DA1, "DA-000001")  # plan_visit and the DA tiles resolve the DA through the User
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=g["other_region"])
 		admin = _ctx("Administrator")
 		t = today()
 		# 3 visits in range: 2 complete, 1 still open today; 1 outside range (40 days ago)
@@ -89,8 +116,7 @@ class TestDashboard(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment", "DA Integration Event"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=(*USERS, DEMO_USER), da_ids=DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def test_summary_for_da_counts_own_rows_in_range(self):
@@ -120,7 +146,7 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(out["view"], "agent")
 		self.assertEqual(out["visits"]["completed"], 2)
 		with self.assertRaises(frappe.PermissionError):
-			dashboard.summary(_ctx(EXEC), da_id="DA-000001")  # ET04 is outside ET03
+			dashboard.summary(_ctx(EXEC), da_id="DA-000001")  # DA-000001 is outside EXEC's Region
 		with self.assertRaises(frappe.PermissionError):
 			dashboard.summary(_ctx(SUP), da_id="DA-000003")
 		# Executive without da_id still needs a DA (no region roll-up on summary yet).
@@ -128,10 +154,9 @@ class TestDashboard(IntegrationTestCase):
 			dashboard.summary(_ctx(EXEC))
 
 	def test_supervisor_summary_without_da_id_is_woreda_view(self):
-		create_administrative_areas()
 		out = dashboard.summary(_ctx(SUP))
 		self.assertEqual(out["view"], "woreda")
-		self.assertEqual(out["woreda"]["code"], "ET04-W01")
+		self.assertEqual(out["woreda"]["code"], self.woreda)
 		self.assertIn("kebeles", out)
 		self.assertIn("stats", out)
 
@@ -165,11 +190,10 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(sorted(i["status"] for i in out["items"]), ["Done", "Overdue"])
 
 	def test_seed_demo_is_idempotent_and_guarded(self):
-		# Start from an empty site so the counts below are the seed's alone.
-		# Also clear kebele assignments: seed_demo.assign uses client_op_id seed-kas-1 and
+		# Start without DA-000001 / demo-user rows so the counts below are the seed's alone.
+		# Also clear its kebele assignments: seed_demo.assign uses client_op_id seed-kas-1 and
 		# skips the assignment notification on replay if that row already exists.
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA Kebele Assignment"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=(*USERS, DEMO_USER), da_ids=DA_IDS)
 		saved = frappe.conf.get("developer_mode")
 		frappe.conf.developer_mode = 0
 		try:
@@ -196,29 +220,31 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def setUp(self):
 		frappe.set_user("Administrator")
-		create_administrative_areas()
-		# Fixture skips existing rows; pin display names so assertions are stable on reused sites.
-		frappe.db.set_value("DA Administrative Area", "ET04-W01", "name_en", "Bako Tibe")
-		for dt in ("DA Visit", "DA Farmer Reference", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		# Woreda / Kebele display names come from the synced masters (DA Woreda / DA Kebele).
+		g = _aligned_geo()
+		self.geo = g
+		self.woreda, self.other_woreda = g["woreda"], g["other_woreda"]
+		self.k03, self.k07, self.other_kebele = g["kebele"], g["kebele_alt"], g["other_kebele"]
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=FARMER_IDS)
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(SUP2, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP2, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP2, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
+		bind_da_user(DA1, "DA-000001")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=self.woreda)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=self.woreda)
+		_grant(SUP2, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=self.woreda)
+		_grant(SUP2, C.ROLE_SUPERVISOR, region_scope=g["other_region"], woreda_scope=self.other_woreda)
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=g["other_region"])
 
 		frappe.get_doc(
 			{
 				"doctype": "DA Farmer Reference",
 				"farmer_id": "FR-DASH-K03-1",
 				"farmer_name": "Farmer K03",
-				"kebele": "ET04-W01-K03",
-				"woreda": "ET04-W01",
-				"region": "ET04",
+				"kebele": self.k03,
+				"woreda": self.woreda,
+				"region": g["region"],
 				"registration_state": "APPROVED",
 			}
 		).insert(ignore_permissions=True, ignore_links=True)
@@ -227,9 +253,9 @@ class TestWoredaHealth(IntegrationTestCase):
 				"doctype": "DA Farmer Reference",
 				"farmer_id": "FR-DASH-K03-2",
 				"farmer_name": "Farmer K03b",
-				"kebele": "ET04-W01-K03",
-				"woreda": "ET04-W01",
-				"region": "ET04",
+				"kebele": self.k03,
+				"woreda": self.woreda,
+				"region": g["region"],
 				"registration_state": "APPROVED",
 			}
 		).insert(ignore_permissions=True, ignore_links=True)
@@ -238,43 +264,46 @@ class TestWoredaHealth(IntegrationTestCase):
 				"doctype": "DA Farmer Reference",
 				"farmer_id": "FR-DASH-OTHER",
 				"farmer_name": "Other Woreda Farmer",
-				"kebele": "ET03-W02-K01",
-				"woreda": "ET03-W02",
-				"region": "ET03",
+				"kebele": self.other_kebele,
+				"woreda": self.other_woreda,
+				"region": g["other_region"],
 				"registration_state": "APPROVED",
 			}
 		).insert(ignore_permissions=True, ignore_links=True)
 
 		t = today()
 		# 2 planned in K03 (1 complete) → 50% At risk; 1 complete in K07 → 100% On track
-		self._insert_visit("ET04-W01-K03", f"{add_days(t, -2)} 09:00:00", COMPLETE, "wh-v1")
-		self._insert_visit("ET04-W01-K03", f"{add_days(t, -1)} 10:00:00", PLANNED, "wh-v2")
-		self._insert_visit("ET04-W01-K07", f"{add_days(t, -1)} 11:00:00", COMPLETE, "wh-v3")
+		self._insert_visit(self.k03, f"{add_days(t, -2)} 09:00:00", COMPLETE, "wh-v1")
+		self._insert_visit(self.k03, f"{add_days(t, -1)} 10:00:00", PLANNED, "wh-v2")
+		self._insert_visit(self.k07, f"{add_days(t, -1)} 11:00:00", COMPLETE, "wh-v3")
 		# Foreign woreda visit must never appear for SUP
 		self._insert_visit(
-			"ET03-W02-K01", f"{add_days(t, -1)} 12:00:00", COMPLETE, "wh-v4", woreda="ET03-W02"
+			self.other_kebele, f"{add_days(t, -1)} 12:00:00", COMPLETE, "wh-v4", woreda=self.other_woreda
 		)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Visit", "DA Farmer Reference", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=FARMER_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
-	def _insert_visit(self, kebele, scheduled_at, status, client_op_id, *, woreda="ET04-W01"):
+	def _insert_visit(self, kebele, scheduled_at, status, client_op_id, *, woreda=None):
 		"""Insert a visit respecting DA Visit status transitions (new rows cannot be Complete)."""
+		woreda = woreda or self.woreda
+		in_primary = woreda == self.woreda
+		da_id = "DA-000001" if in_primary else "DA-000003"
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-000001" if woreda == "ET04-W01" else "DA-000003",
+				"user": ensure_da_user(da_id),
+				"da_id": da_id,
 				"farmer_id": "FRM-1",
 				"visit_type": "Crop Survey",
 				"scheduled_at": scheduled_at,
 				"physical_status": PLANNED,
 				"kebele": kebele,
 				"woreda": woreda,
-				"region": "ET04" if woreda.startswith("ET04") else "ET03",
+				"region": self.geo["region"] if in_primary else self.geo["other_region"],
 				"source": "Planned",
 				"client_op_id": client_op_id,
 			}
@@ -303,37 +332,40 @@ class TestWoredaHealth(IntegrationTestCase):
 	def test_supervisor_sees_only_assigned_woreda(self):
 		out = dashboard.summary(_ctx(SUP))
 		self.assertEqual(out["view"], "woreda")
-		self.assertEqual(out["woreda"]["code"], "ET04-W01")
-		self.assertEqual(out["woreda"]["name"], "Bako Tibe")
+		self.assertEqual(out["woreda"]["code"], self.woreda)
+		self.assertEqual(out["woreda"]["name"], geo.display_name("DA Woreda", self.woreda))
 		codes = {row["kebele_code"] for row in out["kebeles"]}
 		self.assertTrue(codes)
-		self.assertTrue(all(c.startswith("ET04-W01-") for c in codes))
-		self.assertNotIn("ET03-W02-K01", codes)
-		self.assertEqual(out["stats"]["farmers"], 2)  # only ET04-W01 farmers
+		master_codes = {k["code"] for k in geo.kebeles_for_woreda(self.woreda)}
+		self.assertTrue(codes <= master_codes)  # one page of the Woreda's own Kebeles
+		self.assertEqual(out["total"], len(master_codes))
+		self.assertNotIn(self.other_kebele, codes)
+		self.assertEqual(out["stats"]["farmers"], 2)  # only the primary Woreda's farmers
 		self.assertGreaterEqual(out["stats"]["active_agents"], 1)
 
 	def test_foreign_woreda_denied(self):
 		with self.assertRaises(frappe.PermissionError):
-			dashboard.summary(_ctx(SUP), woreda="ET03-W02")
+			dashboard.summary(_ctx(SUP), woreda=self.other_woreda)
 
 	def test_multi_woreda_requires_woreda_param(self):
 		with self.assertRaises(frappe.ValidationError):
 			dashboard.summary(_ctx(SUP2))
-		out = dashboard.summary(_ctx(SUP2), woreda="ET04-W01")
-		self.assertEqual(out["woreda"]["code"], "ET04-W01")
-		out_other = dashboard.summary(_ctx(SUP2), woreda="ET03-W02")
-		self.assertEqual(out_other["woreda"]["code"], "ET03-W02")
-		self.assertTrue(all(r["kebele_code"].startswith("ET03-W02-") for r in out_other["kebeles"]))
+		out = dashboard.summary(_ctx(SUP2), woreda=self.woreda)
+		self.assertEqual(out["woreda"]["code"], self.woreda)
+		out_other = dashboard.summary(_ctx(SUP2), woreda=self.other_woreda)
+		self.assertEqual(out_other["woreda"]["code"], self.other_woreda)
+		other_codes = {k["code"] for k in geo.kebeles_for_woreda(self.other_woreda)}
+		self.assertTrue(all(r["kebele_code"] in other_codes for r in out_other["kebeles"]))
 
 	def test_kebele_rows_visit_pct_and_status(self):
 		out = dashboard.summary(_ctx(SUP))
 		by_code = {r["kebele_code"]: r for r in out["kebeles"]}
-		k03 = by_code["ET04-W01-K03"]
+		k03 = by_code[self.k03]
 		self.assertEqual(k03["farmers"], 2)
 		self.assertEqual(k03["visit_pct"], 50)
 		self.assertEqual(k03["status"], dashboard.STATUS_AT_RISK)
 		self.assertIsNotNone(k03["last_sync"])
-		k07 = by_code["ET04-W01-K07"]
+		k07 = by_code[self.k07]
 		self.assertEqual(k07["visit_pct"], 100)
 		self.assertEqual(k07["status"], dashboard.STATUS_ON_TRACK)
 
@@ -342,16 +374,18 @@ class TestWoredaHealth(IntegrationTestCase):
 		self.assertTrue(out["kebeles"])
 		self.assertTrue(all(r["status"] == dashboard.STATUS_AT_RISK for r in out["kebeles"]))
 
-		out_k = dashboard.summary(_ctx(SUP), kebele="ET04-W01-K03")
+		out_k = dashboard.summary(_ctx(SUP), kebele=self.k03)
 		self.assertEqual(out_k["total"], 1)
-		self.assertEqual(out_k["kebeles"][0]["kebele_code"], "ET04-W01-K03")
+		self.assertEqual(out_k["kebeles"][0]["kebele_code"], self.k03)
 
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(SUP), kebele="ET03-W02-K01")
+			dashboard.summary(_ctx(SUP), kebele=self.other_kebele)
 
-		out_q = dashboard.summary(_ctx(SUP), q="Dambi")
-		self.assertTrue(out_q["kebeles"])
-		self.assertTrue(all("dambi" in r["kebele"].lower() for r in out_q["kebeles"]))
+		# Free-text search matches the Kebele display name from the masters.
+		needle = geo.display_name("DA Kebele", self.k03)[:5]
+		out_q = dashboard.summary(_ctx(SUP), q=needle)
+		self.assertIn(self.k03, {r["kebele_code"] for r in out_q["kebeles"]})
+		self.assertTrue(all(needle.lower() in r["kebele"].lower() for r in out_q["kebeles"]))
 
 		# Stats stay full-woreda even when the table is filtered
 		self.assertEqual(out["stats"]["farmers"], 2)
@@ -362,4 +396,4 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def test_executive_without_da_id_cannot_get_woreda_summary(self):
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(EXEC), woreda="ET03-W02")
+			dashboard.summary(_ctx(EXEC), woreda=self.other_woreda)

@@ -1,4 +1,4 @@
-"""Tests for farmer assignment specialization flags (DA-211 Phase 4)."""
+﻿"""Tests for farmer assignment specialization flags (DA-211 Phase 4)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
 from da_services.services import visit_specializations as spec_svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
+from da_services.tests.fixtures import ensure_da_user, ensure_kebele_assignment, resolve_test_geo
 from da_services.utils.permissions import ScopeContext
 
 
@@ -18,32 +18,22 @@ class TestAssignmentFlags(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
-		# Create administrative areas first
-		create_administrative_areas()
+		# Any Kebele of the synced geography masters will do.
+		geo = resolve_test_geo()
 
 		self.da_id = "DA-TEST-FLAGS-001"
 		self.farmer_id = "FARMER-FLAGS-001"
-		self.kebele = "ET04-W01-K03"
-		self.woreda = "ET04-W01"
+		self.kebele = geo["kebele"]
+		self.woreda = geo["woreda"]
 
 		# Clean up
 		frappe.db.delete("DA Visit", {"da_id": self.da_id})
 		frappe.db.delete("DA Farmer Reference", {"farmer_id": self.farmer_id})
 		frappe.db.delete("DA Kebele Assignment", {"da_id": self.da_id})
 
-		# Create DA Kebele Assignment
-		frappe.get_doc(
-			{
-				"doctype": "DA Kebele Assignment",
-				"user": ensure_da_user(self.da_id),
-				"da_id": self.da_id,
-				"kebele": self.kebele,
-				"state": "Effective",
-				"mode": "Automatic",
-				"effective_date": "2026-10-01",
-				"woreda": self.woreda,
-			}
-		).insert(ignore_permissions=True, ignore_links=True)
+		# Create DA Kebele Assignment (and the User the DA-ID is bound to; DA Visit rows need it)
+		ensure_kebele_assignment(self.da_id, self.kebele)
+		self.user = ensure_da_user(self.da_id)
 
 		# Create farmer
 		frappe.get_doc(
@@ -85,6 +75,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -106,6 +97,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
@@ -126,6 +118,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Services",
@@ -148,6 +141,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -169,6 +163,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
@@ -208,6 +203,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			visit = frappe.get_doc(
 				{
 					"doctype": "DA Visit",
+					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": fid,
 					"visit_type": "Crop Survey",
@@ -236,6 +232,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			visit = frappe.get_doc(
 				{
 					"doctype": "DA Visit",
+					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": self.farmer_id,
 					"visit_type": "Crop Survey",
@@ -257,6 +254,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Services",

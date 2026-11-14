@@ -1,6 +1,9 @@
 """Auth wiring: routes, JWT middleware, /me profile and the RBAC admin API."""
 
+from unittest.mock import patch
+
 import frappe
+import frappe.api
 from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 from oan_auth_service.api import tokens
@@ -13,13 +16,24 @@ from da_services.api import router
 from da_services.api.v1 import me as me_api
 from da_services.api.v1 import profile as profile_api
 from da_services.api.v1 import rbac as rbac_api
+from da_services.integrations.da_registry.client import DARegistryAuthError
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	require_geo_masters,
+)
 from da_services.utils.permissions import ScopeContext
 
 ADMIN = "test-oan-admin@da.local"
 SUP = "test-sup-auth@da.local"
 DA_USER = "test-da-auth@da.local"
 PLAIN = "test-plain-auth@da.local"  # a user with no DA Services assignment
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (ADMIN, SUP, DA_USER, PLAIN)
 
 
 def _user(email: str) -> str:
@@ -52,24 +66,28 @@ def _request(path: str, token: str | None) -> Request:
 class _Base(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
-		for e in (ADMIN, SUP, DA_USER, PLAIN):
+		cleanup_test_rows(users=USERS)
+		for e in USERS:
 			_user(e)
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		self.geo = aligned_mock_geo()
+		g = self.geo
 		_grant(ADMIN, C.ROLE_ADMIN)
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		bind_da_user(DA_USER, "DA-000001")
 		frappe.response.pop("http_status_code", None)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.response.pop("http_status_code", None)
+		cleanup_test_rows(users=USERS)
 
 
 class TestRoutes(_Base):
 	def test_routes_are_registered_under_our_prefix(self):
 		router.ensure_routes_registered()
-		import frappe.api
-
 		paths = {r.rule for r in frappe.api.API_URL_MAP._rules}
 		for expected in (
 			"/api/v1/da-services/health",
@@ -127,16 +145,17 @@ class TestJwtMiddleware(_Base):
 
 class TestMe(_Base):
 	def test_supervisor_profile(self):
+		g = self.geo
 		frappe.set_user(SUP)
 		out = me_api.get_me()
 		self.assertEqual(out["status"], "success")
 		d = out["data"]
 		self.assertEqual(d["roles"], [C.ROLE_SUPERVISOR])
-		self.assertEqual(d["scope"]["woredas"], ["ET04-W01"])
+		self.assertEqual(d["scope"]["woredas"], [g["woreda"]])
 		self.assertIsNone(d["da_id"])
 		self.assertEqual(d["role"], "Supervisor")
 		self.assertEqual(d["role_label"], "Supervisor (Woreda)")
-		self.assertEqual(d["scope_label"], "Woreda · ET04-W01")
+		self.assertEqual(d["scope_label"], f"Woreda · {g['woreda']}")
 		self.assertEqual(d["user"]["email"], SUP)
 		# frontend hrefs (lib/rbac.ts NAV_GROUPS), in nav order
 		self.assertEqual(d["menu"][0], "/dashboard")
@@ -145,12 +164,13 @@ class TestMe(_Base):
 		self.assertNotIn("/admin/users", d["menu"])
 
 	def test_da_profile_includes_registry_record(self):
+		g = self.geo
 		frappe.set_user(DA_USER)
 		d = me_api.get_me()["data"]
 		self.assertEqual(d["da_id"], "DA-000001")
 		self.assertEqual(d["agent"]["full_name"], "Abebe Kebede")
 		self.assertEqual(d["role"], "DA")
-		self.assertEqual(d["scope_label"], "Own record · ET04-W01")
+		self.assertEqual(d["scope_label"], f"Own record · {g['woreda']}")
 		agent = d["agent"]
 		self.assertEqual(
 			(agent["phone"], agent["specialisation"], agent["joined_at"], agent["farmer_count"]),
@@ -161,11 +181,6 @@ class TestMe(_Base):
 		self.assertNotIn("/agents", d["menu"])
 
 	def test_me_survives_a_registry_token_refusal(self):
-		from unittest.mock import patch
-
-		from da_services.integrations.da_registry.client import DARegistryAuthError
-		from da_services.integrations.da_registry.mock import MockDARegistryClient
-
 		# Roles and menu come from DA Services; a registry 401/403 must not lock the user out.
 		frappe.set_user(DA_USER)
 		with patch.object(MockDARegistryClient, "get_da", side_effect=DARegistryAuthError("no role", 403)):
@@ -184,21 +199,27 @@ class TestMe(_Base):
 		self.assertNotIn("/my-teams", d["menu"])
 
 	def test_scope_labels_per_role(self):
+		g = self.geo
+
 		def ctx(roles, **kw):
 			return ScopeContext(user="x@da.local", roles=frozenset(roles), unrestricted=False, **kw)
 
-		exec_ctx = ctx({C.ROLE_EXECUTIVE}, region_scopes=frozenset({"ET03"}))
+		exec_ctx = ctx({C.ROLE_EXECUTIVE}, region_scopes=frozenset({g["other_region"]}))
 		self.assertEqual(me_api.role_codes_for(exec_ctx), ["Executive"])
-		self.assertEqual(me_api.scope_label_for("Executive", exec_ctx), "Region · ET03 (read)")
-		zone_ctx = ctx(
-			{C.ROLE_SUPERVISOR}, region_scopes=frozenset({"ET04"}), zone_scopes=frozenset({"ET04-Z01"})
+		self.assertEqual(
+			me_api.scope_label_for("Executive", exec_ctx), f"Region · {g['other_region']} (read)"
 		)
-		self.assertEqual(me_api.scope_label_for("Supervisor", zone_ctx), "Zone · ET04-Z01")
+		zone_ctx = ctx(
+			{C.ROLE_SUPERVISOR},
+			region_scopes=frozenset({g["region"]}),
+			zone_scopes=frozenset({g["zone"]}),
+		)
+		self.assertEqual(me_api.scope_label_for("Supervisor", zone_ctx), f"Zone · {g['zone']}")
 		comms = ctx({C.ROLE_COMMS})
 		self.assertEqual(me_api.scope_label_for("CommsOfficer", comms), "Broadcast domain")
 		self.assertEqual(me_api.menu_for(comms), ["/dashboard", "/knowledge", "/broadcast", "/alerts"])
 		# two roles: the widest one wins, the menu is the union
-		both = ctx({C.ROLE_DA, C.ROLE_SUPERVISOR}, woreda_scopes=frozenset({"ET04-W01"}))
+		both = ctx({C.ROLE_DA, C.ROLE_SUPERVISOR}, woreda_scopes=frozenset({g["woreda"]}))
 		self.assertEqual(me_api.role_codes_for(both), ["Supervisor", "DA"])
 		self.assertTrue({"/my-teams", "/assignments"} <= set(me_api.menu_for(both)))
 
@@ -216,9 +237,10 @@ class TestMe(_Base):
 		self.assertEqual(frappe.response.get("http_status_code"), 403)
 
 	def test_profile_hook_for_auth_me(self):
+		g = self.geo
 		ns, data = profile_api.resolve_user_profile_hook(user_doc=frappe.get_doc("User", SUP))
 		self.assertEqual(ns, "da_services")
-		self.assertEqual(data["scope"]["woredas"], ["ET04-W01"])
+		self.assertEqual(data["scope"]["woredas"], [g["woreda"]])
 		# same scope shape as GET /da-services/me, so the frontend can use either
 		self.assertEqual(set(data["scope"]), {"regions", "zones", "woredas", "da_ids"})
 		self.assertNotIn("agent", data)  # the hook stays cheap: no registry call
@@ -233,7 +255,10 @@ class TestRbacAdminApi(_Base):
 	def test_admin_creates_lists_updates_and_revokes(self):
 		frappe.set_user(ADMIN)
 		created = rbac_api.create_assignment(
-			user=PLAIN, role=C.ROLE_EXECUTIVE, region_scope="ET03", notes="regional view"
+			user=PLAIN,
+			role=C.ROLE_EXECUTIVE,
+			region_scope=self.geo["other_region"],
+			notes="regional view",
 		)
 		self.assertEqual(created["status"], "success", created)
 		name = created["data"]["name"]

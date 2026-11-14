@@ -7,6 +7,8 @@ from frappe.model.document import Document
 from frappe.utils import get_datetime, getdate, now_datetime
 
 from da_services.integrations.da_registry.client import DARegistryError, get_client
+from da_services.services import geo
+from da_services.services.notifications import notify_da
 
 PLANNED = "Planned"
 CONFIRMED = "Confirmed"
@@ -95,12 +97,13 @@ class DAVisit(Document):
 			)
 
 	def _fill_scope_from_registry(self):
+		"""Copy registry geography onto Link fields only when masters exist."""
 		if self.region and self.zone and self.woreda and self.kebele:
 			return
 		try:
 			ref = get_client().get_da(self.da_id)
 		except DARegistryError as exc:
-			# Unknown DA or registry down: leave the codes empty (the DA still sees the row
+			# Unknown DA or registry down: leave Links empty (the DA still sees the row
 			# by da_id). Logged, not raised, so an outage never blocks planning a visit.
 			frappe.logger("da_services").warning(
 				"DA Visit %s: scope codes not filled, registry lookup of %s failed: %s",
@@ -109,10 +112,10 @@ class DAVisit(Document):
 				exc,
 			)
 			return
-		self.region = self.region or ref.region
-		self.zone = self.zone or ref.zone
-		self.woreda = self.woreda or ref.woreda
-		self.kebele = self.kebele or ref.kebele
+		self.region = self.region or geo.link_if_exists("DA Region", ref.region)
+		self.zone = self.zone or geo.link_if_exists("DA Zone", ref.zone)
+		self.woreda = self.woreda or geo.link_if_exists("DA Woreda", ref.woreda)
+		self.kebele = self.kebele or geo.link_if_exists("DA Kebele", ref.kebele)
 
 	# -- derived (not stored) -----------------------------------------------------
 
@@ -239,8 +242,6 @@ class DAVisit(Document):
 		)
 		task.insert(ignore_permissions=True)
 		self.db_set("follow_up_task", task.name, update_modified=False)
-		from da_services.services.notifications import notify_da
-
 		notify_da(
 			self.da_id,
 			kind="Task",
@@ -255,6 +256,7 @@ class DAVisit(Document):
 			visit = frappe.get_doc(
 				{
 					"doctype": "DA Visit",
+					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": self.farmer_id,
 					"visit_type": "Follow-up",

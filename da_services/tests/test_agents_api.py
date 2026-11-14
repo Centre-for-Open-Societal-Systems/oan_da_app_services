@@ -7,18 +7,30 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
-from da_services.integrations.da_registry.mock import FIXTURE_DAS, MockDARegistryClient
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
-# Test users
-DA1 = "agents-api-da1@da.local"  # DA-000001, ET04 / ET04-W01
-DA2 = "agents-api-da2@da.local"  # DA-000002, ET04 / ET04-W01
-SUP_W01 = "agents-api-sup-w01@da.local"  # Supervisor ET04 / ET04-W01
-SUP_W02 = "agents-api-sup-w02@da.local"  # Supervisor ET03 / ET03-W02
-EXEC_ET04 = "agents-api-exec-et04@da.local"  # Executive ET04
-EXEC_ET03 = "agents-api-exec-et03@da.local"  # Executive ET03
+# Test users. Geography is the mock DA Registry's, rewritten from the synced masters
+# (aligned_mock_geo): DA-000001/2 in the primary Woreda, DA-000003/4 in the other one.
+DA1 = "agents-api-da1@da.local"  # DA-000001, primary Woreda
+DA2 = "agents-api-da2@da.local"  # DA-000002, primary Woreda
+SUP_W01 = "agents-api-sup-w01@da.local"  # Supervisor, primary Woreda
+SUP_W02 = "agents-api-sup-w02@da.local"  # Supervisor, other Woreda
+EXEC_ET04 = "agents-api-exec-et04@da.local"  # Executive, primary Region
+EXEC_ET03 = "agents-api-exec-et03@da.local"  # Executive, other Region
 ADMIN = "agents-api-admin@da.local"  # Administrator
+
+EXEC_ZONE = "agents-api-exec-zone@da.local"  # Executive, primary Zone (created in one test)
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, DA2, SUP_W01, SUP_W02, EXEC_ET04, EXEC_ET03, ADMIN, EXEC_ZONE)
 
 
 def _user(email, roles):
@@ -55,12 +67,20 @@ class TestAgentsAPI(IntegrationTestCase):
 		"""Set up test users and RBAC grants."""
 		frappe.set_user("Administrator")
 
-		# Clean up
-		frappe.db.delete("DA RBAC Assignment")
+		# Clean up grants left by an earlier run of this module only.
+		cleanup_test_rows(users=USERS)
 
-		# Create users
+		# Reset mock registry to default fixtures (postings rewritten from the live masters)
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
+
+		# Create users (a DA's own DA-ID is read from User.da_registry_id)
 		_user(DA1, [C.ROLE_DA])
 		_user(DA2, [C.ROLE_DA])
+		bind_da_user(DA1, "DA-000001")
+		bind_da_user(DA2, "DA-000002")
 		_user(SUP_W01, [C.ROLE_SUPERVISOR])
 		_user(SUP_W02, [C.ROLE_SUPERVISOR])
 		_user(EXEC_ET04, [C.ROLE_EXECUTIVE])
@@ -68,22 +88,19 @@ class TestAgentsAPI(IntegrationTestCase):
 		_user(ADMIN, [C.ROLE_ADMIN])
 
 		# Create RBAC grants
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_W02, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(EXEC_ET04, C.ROLE_EXECUTIVE, region_scope="ET04")
-		_grant(EXEC_ET03, C.ROLE_EXECUTIVE, region_scope="ET03")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP_W02, C.ROLE_SUPERVISOR, region_scope=g["other_region"], woreda_scope=g["other_woreda"])
+		_grant(EXEC_ET04, C.ROLE_EXECUTIVE, region_scope=g["region"])
+		_grant(EXEC_ET03, C.ROLE_EXECUTIVE, region_scope=g["other_region"])
 		_grant(ADMIN, C.ROLE_ADMIN)
-
-		# Reset mock registry to default fixtures
-		MockDARegistryClient.reset()
 
 		frappe.db.commit()
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=USERS)
 		frappe.db.commit()
 		MockDARegistryClient.reset()
 
@@ -124,7 +141,7 @@ class TestAgentsAPI(IntegrationTestCase):
 		agents = response["data"]["agents"]
 		total = response["data"]["total"]
 
-		# ET04-W01 has DA-000001 and DA-000002
+		# The primary Woreda has DA-000001 and DA-000002
 		self.assertEqual(total, 2)
 		self.assertEqual(len(agents), 2)
 		agent_ids = {a["da_id"] for a in agents}
@@ -138,7 +155,7 @@ class TestAgentsAPI(IntegrationTestCase):
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# ET03-W02 has DA-000003 and DA-000004
+		# The other Woreda has DA-000003 and DA-000004
 		self.assertEqual(len(agents), 2)
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000003", "DA-000004"})
@@ -152,7 +169,7 @@ class TestAgentsAPI(IntegrationTestCase):
 		agents = response["data"]["agents"]
 		total = response["data"]["total"]
 
-		# ET04 region has DA-000001 and DA-000002
+		# The primary Region has DA-000001 and DA-000002
 		self.assertEqual(total, 2)
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000001", "DA-000002"})
@@ -165,16 +182,16 @@ class TestAgentsAPI(IntegrationTestCase):
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# ET03 region has DA-000003 and DA-000004
+		# The other Region has DA-000003 and DA-000004
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000003", "DA-000004"})
 
 	def test_executive_with_zone_scope_sees_only_zone(self):
 		"""Executive role: User with zone_scope sees only DAs in that zone."""
-		# Create Executive with zone scope ET04-Z01
-		exec_zone = "agents-api-exec-zone@da.local"
+		# Create Executive with the primary Zone scope
+		exec_zone = EXEC_ZONE
 		_user(exec_zone, [C.ROLE_EXECUTIVE])
-		_grant(exec_zone, C.ROLE_EXECUTIVE, region_scope="ET04", zone_scope="ET04-Z01")
+		_grant(exec_zone, C.ROLE_EXECUTIVE, region_scope=self.geo["region"], zone_scope=self.geo["zone"])
 		frappe.db.commit()
 
 		frappe.set_user(exec_zone)
@@ -183,13 +200,13 @@ class TestAgentsAPI(IntegrationTestCase):
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# ET04-Z01 has DA-000001 and DA-000002
+		# The primary Zone has DA-000001 and DA-000002
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000001", "DA-000002"})
 
 		# Verify all returned DAs are in the correct zone
 		for agent in agents:
-			self.assertEqual(agent["zone"], "ET04-Z01")
+			self.assertEqual(agent["zone"], self.geo["zone"])
 
 	def test_admin_sees_all(self):
 		"""Admin role: User sees all DAs (unrestricted)."""
@@ -216,12 +233,12 @@ class TestAgentsAPI(IntegrationTestCase):
 	def test_filter_by_woreda(self):
 		"""Filter: woreda parameter filters DAs correctly."""
 		frappe.set_user(ADMIN)
-		response = frappe.call("da_services.api.v1.agents.list_agents", woreda="ET04-W01")
+		response = frappe.call("da_services.api.v1.agents.list_agents", woreda=self.geo["woreda"])
 
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# Only DA-000001 and DA-000002 are in ET04-W01
+		# Only DA-000001 and DA-000002 are in the primary Woreda
 		self.assertEqual(len(agents), 2)
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000001", "DA-000002"})
@@ -229,12 +246,12 @@ class TestAgentsAPI(IntegrationTestCase):
 	def test_filter_by_region(self):
 		"""Filter: region parameter filters DAs correctly."""
 		frappe.set_user(ADMIN)
-		response = frappe.call("da_services.api.v1.agents.list_agents", region="ET03")
+		response = frappe.call("da_services.api.v1.agents.list_agents", region=self.geo["other_region"])
 
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# Only DA-000003 and DA-000004 are in ET03
+		# Only DA-000003 and DA-000004 are in the other Region
 		self.assertEqual(len(agents), 2)
 		agent_ids = {a["da_id"] for a in agents}
 		self.assertEqual(agent_ids, {"DA-000003", "DA-000004"})
@@ -242,12 +259,12 @@ class TestAgentsAPI(IntegrationTestCase):
 	def test_filter_by_kebele(self):
 		"""Filter: kebele parameter filters DAs correctly."""
 		frappe.set_user(ADMIN)
-		response = frappe.call("da_services.api.v1.agents.list_agents", kebele="ET04-W01-K03")
+		response = frappe.call("da_services.api.v1.agents.list_agents", kebele=self.geo["kebele"])
 
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# Only DA-000001 is in ET04-W01-K03
+		# Only DA-000001 is posted to the primary ``kebele``
 		self.assertEqual(len(agents), 1)
 		self.assertEqual(agents[0]["da_id"], "DA-000001")
 
@@ -294,13 +311,13 @@ class TestAgentsAPI(IntegrationTestCase):
 			"da_services.api.v1.agents.list_agents",
 			active_status="Active",
 			fayda_status="Verified",
-			region="ET04",
+			region=self.geo["region"],
 		)
 
 		self.assertEqual(response["status"], "success")
 		agents = response["data"]["agents"]
 
-		# Only DA-000001 matches all three: Active + Verified + ET04
+		# Only DA-000001 matches all three: Active + Verified + primary Region
 		self.assertEqual(len(agents), 1)
 		self.assertEqual(agents[0]["da_id"], "DA-000001")
 

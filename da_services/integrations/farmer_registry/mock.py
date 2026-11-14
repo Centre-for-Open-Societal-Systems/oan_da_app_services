@@ -2,10 +2,16 @@
 
 Returns fixture data matching the OpenG2P Farmer Registry schema. Safe to use
 without a live Farmer Registry instance.
+
+Farmer geography is rewritten from the site's synced DA Region/Zone/Woreda/Kebele
+masters (same ``live_fixture_geo`` chain as the mock DA Registry). Invented
+``ET04-W01``-style codes are not a source of truth.
 """
 
 import uuid
 from datetime import date, datetime
+
+from da_services.integrations.da_registry.mock import live_fixture_geo
 
 from .client import FarmerRegistryClient, FarmerRegistryError
 from .schemas import Farmer, FarmerListItem, Plot
@@ -109,7 +115,8 @@ MOCK_PLACES = {
 	"ET04080102": ("l4", "Abomsa_02", "ET040801"),
 }
 
-# Mock farmer data matching Farmer Registry schema
+# Identity fixtures. Geography fields are filled by ``fixture_farmers_aligned``
+# from live masters (never invent codes here).
 MOCK_FARMERS = {
 	"farmer-uuid-001": Farmer(
 		farmer_id="farmer-uuid-001",
@@ -121,10 +128,10 @@ MOCK_FARMERS = {
 		phone="911234567",
 		email="abebe@example.com",
 		has_personal_phone=True,
-		region_name="ET04",
-		zone_name="ET04-Z01",
-		woreda_name="ET04-W01",
-		kebele_name="Bako 01",
+		region_name=None,
+		zone_name=None,
+		woreda_name=None,
+		kebele_name=None,
 		birth_date=date(1985, 3, 15),
 		gender="male",
 		education_level="Primary",
@@ -147,10 +154,10 @@ MOCK_FARMERS = {
 		phone="922345678",
 		email=None,
 		has_personal_phone=True,
-		region_name="ET04",
-		zone_name="ET04-Z01",
-		woreda_name="ET04-W01",
-		kebele_name="Bako 02",
+		region_name=None,
+		zone_name=None,
+		woreda_name=None,
+		kebele_name=None,
 		birth_date=date(1990, 7, 22),
 		gender="female",
 		education_level="Secondary",
@@ -173,10 +180,10 @@ MOCK_FARMERS = {
 		phone="933456789",
 		email="chaltu@example.com",
 		has_personal_phone=True,
-		region_name="ET03",
-		zone_name="ET03-Z01",
-		woreda_name="ET03-W02",
-		kebele_name="Kebele 03",
+		region_name=None,
+		zone_name=None,
+		woreda_name=None,
+		kebele_name=None,
 		birth_date=date(1988, 11, 5),
 		gender="female",
 		education_level="Tertiary",
@@ -190,6 +197,52 @@ MOCK_FARMERS = {
 		is_psnp_user=False,
 	),
 }
+
+
+def fixture_farmers_aligned(geo: dict | None = None) -> dict[str, Farmer]:
+	"""MOCK_FARMERS with region/zone/woreda/kebele from live masters (or ``geo``).
+
+	``*_name`` fields carry master *codes* so mock filters match DA scope codes.
+	"""
+	if geo is None:
+		primary, other = live_fixture_geo()
+		geo = {
+			"region": primary["region"],
+			"zone": primary["zone"],
+			"woreda": primary["woreda"],
+			"kebele": primary["kebele"],
+			"kebele_alt": primary["kebele_alt"],
+			"other_region": other["region"],
+			"other_zone": other["zone"],
+			"other_woreda": other["woreda"],
+			"other_kebele": other["kebele"],
+		}
+	homes = {
+		"farmer-uuid-001": (geo["region"], geo["zone"], geo["woreda"], geo["kebele"]),
+		"farmer-uuid-002": (geo["region"], geo["zone"], geo["woreda"], geo["kebele_alt"]),
+		"farmer-uuid-003": (
+			geo["other_region"],
+			geo["other_zone"],
+			geo["other_woreda"],
+			geo["other_kebele"],
+		),
+	}
+	aligned: dict[str, Farmer] = {}
+	for farmer_id, farmer in MOCK_FARMERS.items():
+		if farmer_id not in homes:
+			aligned[farmer_id] = farmer
+			continue
+		region, zone, woreda, kebele = homes[farmer_id]
+		aligned[farmer_id] = farmer.model_copy(
+			update={
+				"region_name": region,
+				"zone_name": zone,
+				"woreda_name": woreda,
+				"kebele_name": kebele,
+			}
+		)
+	return aligned
+
 
 # Record photos (the registry's signed MinIO link and document id)
 MOCK_PHOTOS = {
@@ -249,15 +302,19 @@ MOCK_PLOTS = {
 class MockFarmerRegistryClient(FarmerRegistryClient):
 	"""Mock implementation for development without live Farmer Registry."""
 
+	def __init__(self, farmers: dict[str, Farmer] | None = None):
+		# Default geography always comes from live masters (fail closed if empty).
+		self._farmers = farmers if farmers is not None else fixture_farmers_aligned()
+
 	def get_farmer(self, farmer_id: str) -> Farmer | None:
 		"""Get farmer from mock fixtures."""
-		return MOCK_FARMERS.get(farmer_id)
+		return self._farmers.get(farmer_id)
 
 	def find_internal_id(self, reference: str) -> str | None:
 		"""Resolve the Farmer-ID shown in the UI (``FR-…``) to the internal id."""
-		if reference in MOCK_FARMERS:
+		if reference in self._farmers:
 			return reference
-		for farmer in MOCK_FARMERS.values():
+		for farmer in self._farmers.values():
 			if farmer.reg_id == reference:
 				return farmer.farmer_id
 		return None
@@ -272,7 +329,7 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 		offset: int = 0,
 	) -> tuple[list[FarmerListItem], int]:
 		"""List mock farmers with filters."""
-		farmers = list(MOCK_FARMERS.values())
+		farmers = list(self._farmers.values())
 
 		# Apply filters
 		if woreda:
@@ -318,7 +375,7 @@ class MockFarmerRegistryClient(FarmerRegistryClient):
 		page = max(1, int(page or 1))
 		page_size = max(1, int(page_size or 50))
 		filters = filter_by or {}
-		farmers = list(MOCK_FARMERS.values())
+		farmers = list(self._farmers.values())
 		if filters.get("woreda"):
 			farmers = [f for f in farmers if f.woreda_name == filters["woreda"]]
 		if filters.get("kebele"):

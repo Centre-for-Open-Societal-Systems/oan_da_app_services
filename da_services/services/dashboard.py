@@ -25,7 +25,14 @@ from frappe import _
 from frappe.utils import add_days, cint, get_datetime, getdate, now_datetime
 
 from da_services.da_services.doctype.da_visit.da_visit import COMPLETE, PLANNED_STATES
-from da_services.services import assignments, da_service, tasks, visits
+from da_services.integrations.grievance.client import (
+	GrievanceServiceError,
+	GrievanceServiceUnavailable,
+)
+from da_services.integrations.grievance.client import (
+	get_client as get_grievance_client,
+)
+from da_services.services import assignments, da_service, geo, tasks, visits
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.utils.permissions import ScopeContext, require_roles
@@ -228,8 +235,8 @@ def resolve_supervisor_woreda(ctx: ScopeContext, woreda: str | None = None) -> s
 
 
 def _area_name(code: str) -> str:
-	name = frappe.db.get_value("DA Administrative Area", code, "name_en")
-	return name or code
+	# Woreda health tiles pass a Woreda code; fall back to the code if unsynced.
+	return geo.display_name("DA Woreda", code) or code
 
 
 def _parse_range(from_date, to_date) -> tuple:
@@ -348,13 +355,7 @@ def _visit_metrics_by_kebele(
 def _open_grievance_count(woreda: str) -> int:
 	"""Unresolved grievances for the Woreda; 0 when the grievance client is unavailable."""
 	try:
-		from da_services.integrations.grievance.client import (
-			GrievanceServiceError,
-			GrievanceServiceUnavailable,
-			get_client,
-		)
-
-		client = get_client()
+		client = get_grievance_client()
 		open_total = 0
 		for status in OPEN_GRIEVANCE_STATUSES:
 			_items, total = client.list_grievances(woreda=woreda, status=status, page=1, page_size=1)
