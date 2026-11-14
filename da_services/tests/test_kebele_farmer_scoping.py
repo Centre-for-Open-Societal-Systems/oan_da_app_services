@@ -255,3 +255,21 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 		self.assertEqual(len(farmers_page1), 1)
 		self.assertEqual(len(farmers_page2), 1)
 		self.assertNotEqual(farmers_page1[0]["farmer_id"], farmers_page2[0]["farmer_id"])
+
+	def test_supervisor_reads_farmers_in_woreda_scope(self):
+		"""Supervisor uses Woreda grant for profile/edit (not DA link/kebele rules)."""
+		ctx = ScopeContext(
+			user="sup@test.com",
+			roles={"Supervisor"},
+			da_ids=set(),
+			woreda_scopes={self.woreda},
+			unrestricted=False,
+		)
+		ref = svc._require_farmer_in_scope(self.farmer_kebele_a_1, ctx)
+		self.assertEqual(ref["farmer_id"], self.farmer_kebele_a_1)
+		self.assertTrue(svc._can_edit_farmer(self.farmer_kebele_a_1, ctx))
+
+		out_of_scope = self._create_farmer("FARMER-OTHER-WOREDA", self.kebele_a)
+		frappe.db.set_value("DA Farmer Reference", out_of_scope, "woreda", "ET04-W99")
+		with self.assertRaises(frappe.PermissionError):
+			svc._require_farmer_in_scope(out_of_scope, ctx)

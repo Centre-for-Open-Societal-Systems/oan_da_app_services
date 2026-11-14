@@ -14,13 +14,23 @@ from werkzeug.wrappers import Request
 from da_services.api.v1 import visits as api
 from da_services.services import constants as C
 from da_services.services import visits as svc
-from da_services.tests.fixtures import ensure_kebele_assignment
+from da_services.tests.fixtures import (
+	clear_notifications_for,
+	clear_rbac_for_users,
+	clear_tasks_for,
+	clear_test_kebele_assignments_for,
+	clear_visits_for,
+	ensure_kebele_assignment,
+)
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "vapi-da1@da.local"  # DA-000001, ET04 / ET04-W01
+DA2 = "vapi-da2@da.local"  # DA-000002, ET04 / ET04-W01
 SUP = "vapi-sup@da.local"  # Supervisor ET04-W01
 EXEC = "vapi-exec@da.local"  # Executive ET04
 COMMS = "vapi-comms@da.local"
+_USERS = (DA1, DA2, SUP, EXEC, COMMS)
+_VISIT_FARMERS = ("FRM-000101", "FRM-000102", "FRM-000103", "FRM-000199")
 
 
 def _user(email, roles):
@@ -75,28 +85,37 @@ def _grant(user, role, **kw):
 	return doc
 
 
+def _clear_visit_api_rows():
+	"""Wipe only this module's fixtures — keep Postman/manual site data."""
+	clear_notifications_for(*_USERS)
+	clear_visits_for(owners=(*_USERS, "Administrator"), farmer_ids=_VISIT_FARMERS)
+	clear_tasks_for(owners=(*_USERS, "Administrator"), farmer_ids=_VISIT_FARMERS)
+	clear_rbac_for_users(*_USERS)
+	clear_test_kebele_assignments_for("DA-000001", "DA-000002")
+
+
 class TestVisitAPI(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		_clear_visit_api_rows()
 		_user(DA1, [C.ROLE_DA])
+		_user(DA2, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
 		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
 		_grant(COMMS, C.ROLE_COMMS)
 		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
+		ensure_kebele_assignment("DA-000002", "ET04-W01-K07")
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		frappe.local.request = None  # API helpers then read kwargs, as the form would send them
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		_clear_visit_api_rows()
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _plan(self, **kw):
@@ -141,7 +160,7 @@ class TestVisitAPI(IntegrationTestCase):
 		a = self._plan(client_op_id="op-43-1")["data"]
 		b = self._plan(client_op_id="op-43-1", purpose="changed")["data"]
 		self.assertEqual(a["name"], b["name"])
-		self.assertEqual(frappe.db.count("DA Visit"), 1)
+		self.assertEqual(frappe.db.count("DA Visit", {"client_op_id": "op-43-1"}), 1)
 
 	def test_supervisor_plans_for_a_da_in_woreda_only(self):
 		frappe.set_user(SUP)
@@ -177,6 +196,36 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(out["meta"]["total"], 3)
 		out = api.list_visits(farmer_id="FRM-000102")
 		self.assertEqual(out["meta"]["total"], 1)
+
+	def test_supervisor_lists_woreda_visits_with_filters(self):
+		"""DA-383: Supervisor token lists own-Woreda visits; kebele/da_id filter; other Woreda 403."""
+		frappe.set_user(DA1)
+		mine = self._plan(date=today(), time="09:00", farmer_id="FRM-000101")["data"]
+		frappe.set_user(SUP)
+		peer = self._plan(date=today(), time="11:00", da_id="DA-000002", farmer_id="FRM-000102")["data"]
+		frappe.set_user("Administrator")
+		other = self._plan(date=today(), time="13:00", da_id="DA-000003", farmer_id="FRM-000199")["data"]
+
+		frappe.set_user(SUP)
+		out = api.list_visits()
+		self.assertEqual(out["status"], "success", out)
+		da_ids = {r["da_id"] for r in out["data"]}
+		self.assertEqual(da_ids, {"DA-000001", "DA-000002"})
+		self.assertNotIn(other["name"], {r["name"] for r in out["data"]})
+
+		out = api.list_visits(status="Planned", kebele="ET04-W01-K03")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["meta"]["total"], 1)
+		self.assertEqual(out["data"][0]["name"], mine["name"])
+
+		out = api.list_visits(da_id="DA-000002")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["meta"]["total"], 1)
+		self.assertEqual(out["data"][0]["name"], peer["name"])
+
+		out = api.list_visits(woreda="ET03-W02")
+		self.assertEqual(out["status"], "error")
+		self.assertEqual(frappe.response.get("http_status_code"), 403)
 
 	def test_executive_reads_region_but_not_other_region(self):
 		frappe.set_user(DA1)

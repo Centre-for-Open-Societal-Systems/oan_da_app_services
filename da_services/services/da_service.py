@@ -11,10 +11,80 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
+from frappe.utils import today
 
+from da_services.da_services.doctype.da_kebele_assignment.da_kebele_assignment import LIVE_STATES
 from da_services.integrations.da_registry.client import DANotFound, get_client
 from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext
+
+
+def _live_da_rbac_ids(
+	*, woreda_scopes: set[str] | None = None, region_scopes: set[str] | None = None
+) -> set[str]:
+	"""Active Development Agent RBAC rows in the given geography (same date window as grants)."""
+	filters: dict = {
+		"role": C.ROLE_DA,
+		"active": 1,
+		"effective_from": ("<=", today()),
+	}
+	if woreda_scopes:
+		filters["woreda_scope"] = ("in", list(woreda_scopes))
+	elif region_scopes:
+		filters["region_scope"] = ("in", list(region_scopes))
+	else:
+		return set()
+	return {
+		da
+		for da in frappe.get_all(
+			"DA RBAC Assignment",
+			filters=filters,
+			or_filters=[["effective_to", "is", "not set"], ["effective_to", ">=", today()]],
+			pluck="da_id",
+		)
+		if da
+	}
+
+
+def da_ids_for_woreda_grant(ctx: ScopeContext, *, woreda: str | None = None) -> list[str]:
+	"""DA-IDs mapped to a Supervisor/Executive Woreda (or Region) grant in **Frappe DB**.
+
+	Not the DA Registry mock/http agent list. Sources:
+	- live ``DA RBAC Assignment`` rows (Development Agent + matching Woreda/Region)
+	- live ``DA Kebele Assignment`` rows (Proposed/Validated/Flagged/Effective) under
+	  that Woreda / its Admin Area kebeles — same ``LIVE_STATES`` as the DocType
+	"""
+	woredas = set(ctx.woreda_scopes)
+	if woreda:
+		woreda = woreda.strip()
+		if woredas and woreda not in woredas and not ctx.covers(woreda=woreda):
+			frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
+		woredas = {woreda}
+
+	ids: set[str] = set()
+	if woredas:
+		ids.update(_live_da_rbac_ids(woreda_scopes=woredas))
+		kebeles = frappe.get_all(
+			"DA Administrative Area",
+			filters={"level": "Kebele", "active": 1, "parent_area": ("in", list(woredas))},
+			pluck="name",
+		)
+		ka_or: list[list] = [["woreda", "in", list(woredas)]]
+		if kebeles:
+			ka_or.append(["kebele", "in", kebeles])
+		ids.update(
+			da
+			for da in frappe.get_all(
+				"DA Kebele Assignment",
+				filters={"state": ("in", list(LIVE_STATES))},
+				or_filters=ka_or,
+				pluck="da_id",
+			)
+			if da
+		)
+	elif ctx.region_scopes and not ctx.zone_scopes:
+		ids.update(_live_da_rbac_ids(region_scopes=set(ctx.region_scopes)))
+	return sorted(ids)
 
 
 def list_agents(

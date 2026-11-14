@@ -25,11 +25,12 @@ from da_services.da_services.doctype.da_visit.da_visit import (
 	PLANNED_STATES,
 	RESCHEDULED,
 )
-from da_services.services import area_scope
+from da_services.services import area_scope, da_service
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
 from da_services.services.da_lookup import get_da_reference
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.services.farmers import _get_da_assigned_kebeles
+from da_services.utils.permissions import ScopeContext, get_officer_scope_context, require_roles
 
 WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
@@ -190,6 +191,13 @@ def _check_specialization_conflict(farmer_id: str, new_specializations: list[str
 
 def _resolve_da_for_write(da_id: str | None, ctx: ScopeContext) -> tuple[str, str | None]:
 	"""(da_id, assigned_by). A DA acts on their own DA-ID; an officer names a DA in scope."""
+	# Supervisor/Executive (live officer grant): must name a DA in scope; assigned_by = officer.
+	oversight = None if ctx.unrestricted else get_officer_scope_context(ctx.user)
+	if oversight is not None:
+		if not da_id:
+			frappe.throw(_("da_id is required."), frappe.ValidationError)
+		get_da_reference(da_id, oversight)  # raises PermissionError when out of scope, audited
+		return da_id, ctx.user
 	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
 		own = sorted(ctx.da_ids)
 		if not own:
@@ -281,25 +289,115 @@ def _da_can_read_peer_kebele(doc, ctx: ScopeContext) -> bool:
 	"""True when a DA may read another DA's visit in a shared Effective Kebele (Phase 6)."""
 	if not doc.kebele or not ctx.da_ids:
 		return False
-	from da_services.services.farmers import _get_da_assigned_kebeles
-
 	return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
+
+
+def _apply_supervisor_visit_filters(
+	filters: dict,
+	or_filters: list,
+	ctx: ScopeContext,
+	*,
+	region: str | None,
+	zone: str | None,
+	woreda: str | None,
+	kebele: str | None,
+	da_id: str | None,
+) -> bool:
+	"""Scope Supervisor/Executive lists: Woreda DA-map and/or Zone/Region geography.
+
+	Woreda grants use live ``DA RBAC Assignment`` / ``DA Kebele Assignment`` DA-IDs
+	(DA-383). Zone grants filter on ``visit.zone``; Region-only on ``visit.region``.
+	A Woreda+Zone grant ORs both. Optional area / ``da_id`` picks must stay in scope.
+	Returns False when the grant resolves to nothing.
+	"""
+	area = area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
+	filters.update(area)
+
+	picked_woreda = (woreda or "").strip() or None
+	if not picked_woreda and isinstance(area.get("woreda"), str):
+		picked_woreda = area["woreda"]
+
+	da_id = (da_id or "").strip() or None
+	woreda_grant = bool(ctx.woreda_scopes)
+	zone_grant = bool(ctx.zone_scopes)
+	region_only = bool(ctx.region_scopes) and not woreda_grant and not zone_grant
+
+	scoped_das: list[str] = []
+	if woreda_grant:
+		scoped_das = da_service.da_ids_for_woreda_grant(ctx, woreda=picked_woreda)
+
+	if da_id:
+		allowed = False
+		if woreda_grant and da_id in scoped_das:
+			allowed = True
+		elif zone_grant or region_only:
+			get_da_reference(da_id, ctx)
+			allowed = True
+		if not allowed:
+			frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
+		filters["da_id"] = da_id
+		return True
+
+	# Client already narrowed via area filters — keep those; add Woreda DA map when needed.
+	if area:
+		if woreda_grant and picked_woreda:
+			if not scoped_das:
+				return False
+			filters["da_id"] = scoped_das[0] if len(scoped_das) == 1 else ("in", scoped_das)
+		return True
+
+	if woreda_grant and zone_grant:
+		parts: list[list] = []
+		if scoped_das:
+			parts.append(["da_id", "in", scoped_das])
+		parts.append(["zone", "in", list(ctx.zone_scopes)])
+		or_filters.extend(parts)
+		return True
+
+	if woreda_grant:
+		if not scoped_das:
+			return False
+		filters["da_id"] = scoped_das[0] if len(scoped_das) == 1 else ("in", scoped_das)
+		return True
+
+	if zone_grant:
+		filters["zone"] = ("in", list(ctx.zone_scopes))
+		return True
+
+	if region_only:
+		filters["region"] = ("in", list(ctx.region_scopes))
+		return True
+
+	return False
 
 
 def _load_in_scope(name: str, ctx: ScopeContext, write: bool = False):
 	doc = frappe.get_doc("DA Visit", name)
 	if ctx.unrestricted:
 		return doc
+
+	# Supervisor/Executive: Woreda → mapped DA-IDs; Zone/Region → visit geography.
+	oversight = get_officer_scope_context(ctx.user)
+	if oversight is not None:
+		if write and not oversight.has_any_role(C.ROLE_SUPERVISOR):
+			# Executives stay read-only on visits.
+			frappe.throw(_("Visit {0} is outside your scope.").format(name), frappe.PermissionError)
+		if (
+			oversight.woreda_scopes
+			and doc.da_id
+			and doc.da_id in set(da_service.da_ids_for_woreda_grant(oversight))
+		):
+			return doc
+		if oversight.covers(doc.region, doc.woreda, doc.zone):
+			return doc
+		frappe.throw(_("Visit {0} is outside your scope.").format(name), frappe.PermissionError)
+
 	if ctx.has_any_role(C.ROLE_DA):
 		if ctx.owns_da(doc.da_id):
 			return doc
 		# Peer Kebele visits are read-only; start/submit/cancel stay on own DA-ID.
 		if not write and _da_can_read_peer_kebele(doc, ctx):
 			return doc
-	elif ctx.has_any_role(C.ROLE_SUPERVISOR) and ctx.covers(doc.region, doc.woreda, doc.zone):
-		return doc
-	elif not write and ctx.has_any_role(C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda, doc.zone):
-		return doc
 	frappe.throw(_("Visit {0} is outside your scope.").format(name), frappe.PermissionError)
 
 
@@ -468,6 +566,13 @@ def add_attachment(
 
 def resolve_da_for_read(da_id: str | None, ctx: ScopeContext) -> str:
 	"""The DA-ID a report is about: a DA's own, or one an officer names inside their scope."""
+	# Supervisor/Executive (live officer grant): must name a DA in scope.
+	oversight = None if ctx.unrestricted else get_officer_scope_context(ctx.user)
+	if oversight is not None:
+		if not da_id:
+			frappe.throw(_("da_id is required."), frappe.ValidationError)
+		get_da_reference(da_id, oversight)
+		return da_id
 	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
 		own = sorted(ctx.da_ids)
 		if not own:
@@ -586,13 +691,20 @@ def list_visits(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Visits the caller may see (DA-211 Phase 6: Kebele-scoped for DAs).
+	"""Visits the caller may see (role/scope from auth ``ScopeContext``, never a client role flag).
 
 	DAs see their own scheduled visits, and (when listing without ``da_id``) other visits
 	in their assigned Kebele. ``da_id`` filters to that DA's visits and does not also
 	require a Kebele match, so a Planned visit with blank geography still appears.
-	Supervisors/Executives see their Woreda/Region scope.
-	``status`` may be a physical_status or a UI chip (Planned / Confirmed / Completed / Missed).
+
+	Supervisors / Executives (live grant from the token) see visits for DAs mapped to
+	their Woreda in Frappe DB (live RBAC + live kebele in Proposed/Validated/Flagged/
+	Effective). Optional ``kebele`` / ``da_id`` / ``status`` / date narrow inside that
+	grant; out-of-scope area or ``da_id`` → 403. Visit list does not use visit.woreda
+	fallback or the DA Registry mock.
+
+	Omit ``date`` and ``from``/``to`` for an open date range. ``status`` may be a
+	physical_status or a UI chip (Planned → open states, Completed, Missed, …).
 	"""
 	ctx = ctx or require_roles(*READ_ROLES)
 	filters: dict = {}
@@ -607,44 +719,52 @@ def list_visits(
 		)
 	if farmer_id:
 		filters["farmer_id"] = farmer_id
-	filters.update(
-		area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
-	)
 
-	# Scope already validated for officers when da_id is named (registry), so query by
-	# da_id with get_all and skip the woreda/zone permission clause that hides visits
-	# whose geography was never filled from the registry.
-	officer_da_filter = False
+	# Supervisor/Executive filters → get_all (explicit scope; skip Desk double-filter).
+	supervisor_scoped = False
 
-	# DA-211 Phase 6: Kebele-based visit visibility for DAs
-	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
+	oversight = None if ctx.unrestricted else get_officer_scope_context(ctx.user)
+	if oversight is not None:
+		if not _apply_supervisor_visit_filters(
+			filters,
+			or_filters,
+			oversight,
+			region=region,
+			zone=zone,
+			woreda=woreda,
+			kebele=kebele,
+			da_id=da_id,
+		):
+			return [], 0
+		supervisor_scoped = True
+	elif not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
+		# DA-211 Phase 6: Kebele-based visit visibility for Development Agents.
+		filters.update(
+			area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
+		)
 		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
 		if not da_ids_list:
 			return [], 0
-
-		from da_services.services.farmers import _get_da_assigned_kebeles
 
 		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
 		if da_id:
 			if da_id not in ctx.da_ids:
 				frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
-			# Explicit own-DA filter: that DA's scheduled visits (date/status/farmer still apply)
 			filters["da_id"] = da_id
 		elif assigned_kebeles:
-			# Departmental list: own visits (incl. blank kebele) OR peers in assigned Kebeles
 			or_filters = [
 				["da_id", "in", da_ids_list],
 				["kebele", "in", assigned_kebeles],
 			]
 		else:
-			# No Effective Kebele assignment — still return this DA's own visits
 			filters["da_id"] = ("in", da_ids_list)
-	elif da_id:
-		# Explicit DA filter (Supervisors/Executives/Admin). Officers must be in scope for that DA.
-		if not ctx.unrestricted and ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-			get_da_reference(da_id, ctx)
-			officer_da_filter = True
-		filters["da_id"] = da_id
+	else:
+		# Admin / unrestricted, or rare non-DA path.
+		filters.update(
+			area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
+		)
+		if da_id:
+			filters["da_id"] = da_id
 
 	if status == "Completed":
 		filters["physical_status"] = COMPLETE
@@ -666,13 +786,9 @@ def list_visits(
 	if or_filters:
 		list_args["or_filters"] = or_filters
 		count_args["or_filters"] = or_filters
-	# get_all skips permission_query_conditions; used only after get_da_reference for officers.
-	fetcher = frappe.get_all if officer_da_filter else frappe.get_list
+	fetcher = frappe.get_all if supervisor_scoped else frappe.get_list
 	rows = fetcher("DA Visit", **list_args)
-	if officer_da_filter:
-		total = frappe.db.count("DA Visit", filters)
-	else:
-		total = len(fetcher("DA Visit", **count_args))
+	total = len(fetcher("DA Visit", **count_args))
 	return [serialize(frappe._dict(r)) for r in rows], total
 
 

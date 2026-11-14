@@ -26,7 +26,11 @@ from da_services.integrations.farmer_registry.mapper import (
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.pending_actions import derive_pending_actions_batch
-from da_services.utils.permissions import ScopeContext
+from da_services.utils.permissions import (
+	SCOPE_UNRESOLVED,
+	ScopeContext,
+	get_officer_scope_context,
+)
 
 
 def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
@@ -80,9 +84,27 @@ def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
 	if not ref:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 
-	# Check scope: Different rules for DA vs Supervisor/Executive
+	# Supervisor/Executive (live officer grant) or DA (link / assigned Kebele).
 	if not ctx.unrestricted:
-		if ctx.has_any_role(C.ROLE_DA):
+		scope_ctx = _officer_scope(ctx)
+		if scope_ctx is not None:
+			farmer_region = ref.get("region")
+			farmer_woreda = ref.get("woreda")
+			farmer_zone = ref.get("zone")
+
+			covered, reason = scope_ctx.scope_decision(
+				region=farmer_region, woreda=farmer_woreda, zone=farmer_zone
+			)
+
+			if not covered:
+				if reason == SCOPE_UNRESOLVED:
+					frappe.throw(
+						_("Cannot verify farmer scope: missing Woreda or Zone data."),
+						frappe.PermissionError,
+					)
+				else:
+					frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
+		elif ctx.has_any_role(C.ROLE_DA):
 			# A DA reads farmers linked to them or in their assigned Kebeles: the same
 			# farmers their list shows (FR-05, DA-211).
 			da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
@@ -91,26 +113,20 @@ def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
 				or _is_farmer_in_da_kebele(farmer_id, da_ids_list, kebele=ref.get("kebele"))
 			):
 				frappe.throw(_("Farmer is not linked or assigned to you."), frappe.PermissionError)
-		else:
-			# Supervisors/Executives check region/woreda scope
-			farmer_region = ref.get("region")
-			farmer_woreda = ref.get("woreda")
-			farmer_zone = ref.get("zone")
-
-			covered, reason = ctx.scope_decision(region=farmer_region, woreda=farmer_woreda, zone=farmer_zone)
-
-			if not covered:
-				from da_services.utils.permissions import SCOPE_UNRESOLVED
-
-				if reason == SCOPE_UNRESOLVED:
-					frappe.throw(
-						_("Cannot verify farmer scope: missing Woreda or Zone data."),
-						frappe.PermissionError,
-					)
-				else:
-					frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
 
 	return ref
+
+
+def _officer_scope(ctx: ScopeContext) -> ScopeContext | None:
+	"""Supervisor/Executive scope: prefer live officer grant, else officer roles on ctx."""
+	if ctx.unrestricted:
+		return None
+	oversight = get_officer_scope_context(ctx.user)
+	if oversight is not None:
+		return oversight
+	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+		return ctx
+	return None
 
 
 def resolve_farmer_id(farmer_id: str) -> str:
@@ -268,6 +284,18 @@ def search_farmers(
 
 	if ctx.unrestricted:
 		filter_by.update({"woreda": woreda, "kebele": kebele})
+	elif (scope_ctx := _officer_scope(ctx)) is not None:
+		# Supervisor/Executive: Woreda/Region grant (not DA kebele narrowing).
+		if woreda:
+			_require_woreda_in_scope(scope_ctx, woreda)
+		elif len(scope_ctx.woreda_scopes) == 1:
+			woreda = next(iter(scope_ctx.woreda_scopes))
+		else:
+			frappe.throw(
+				_("Pass a woreda to search in: your scope covers more than one Woreda."),
+				frappe.ValidationError,
+			)
+		filter_by.update({"woreda": woreda, "kebele": kebele})
 	elif ctx.has_any_role(C.ROLE_DA):
 		assigned = _get_da_assigned_kebeles(list(ctx.da_ids) if ctx.da_ids else [])
 		if not assigned:
@@ -416,7 +444,9 @@ def list_farmers(
 	# - Zone-scoped officers: the Woredas under their Zone, via the zone column on
 	#   DA Farmer Reference (Zone scope) and ancestors_of() for the woreda filter.
 	# - Executive (Region): their Region, read-only.
-	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
+	# Supervisor/Executive use woreda filters below; DA uses kebele.
+	officer = _officer_scope(ctx)
+	if not ctx.unrestricted and officer is None and ctx.has_any_role(C.ROLE_DA):
 		# DA sees all farmers in assigned Kebele (DA-211 change)
 		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
 		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
@@ -431,23 +461,16 @@ def list_farmers(
 	# Woreda filter can only narrow within the scope, not expand it
 	if woreda:
 		if not ctx.unrestricted:
-			# Validate that requested woreda is within scope
-			if ctx.has_any_role(C.ROLE_DA):
-				if woreda not in ctx.woreda_scopes:
-					frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
-				filters["woreda"] = woreda
-			elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-				# Check if the woreda is in the user's scope
-				if ctx.woreda_scopes:
-					# Woreda-scoped: must be in their woredas
-					if woreda not in ctx.woreda_scopes:
+			# Validate that requested woreda is within scope (officer before DA).
+			if officer is not None:
+				if officer.woreda_scopes:
+					if woreda not in officer.woreda_scopes:
 						frappe.throw(
 							_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError
 						)
 					filters["woreda"] = woreda
-				elif ctx.zone_scopes:
+				elif officer.zone_scopes:
 					# Zone-scoped: the Woreda must sit under one of their Zones in master data.
-					# An unknown Woreda is a data problem, not a scope problem; say so.
 					woreda_zone = ancestors_of(woreda).get("zone")
 					if not woreda_zone:
 						frappe.throw(
@@ -457,26 +480,26 @@ def list_farmers(
 							).format(woreda),
 							frappe.ValidationError,
 						)
-					if woreda_zone not in ctx.zone_scopes:
+					if woreda_zone not in officer.zone_scopes:
 						frappe.throw(
 							_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError
 						)
 					filters["woreda"] = woreda
-				elif ctx.region_scopes:
-					# Region-scoped: woreda must be in their region
-					# Simplified check: assume woreda code starts with region code
+				elif officer.region_scopes:
 					woreda_region = woreda.split("-")[0] if "-" in woreda else None
-					if woreda_region and woreda_region not in ctx.region_scopes:
+					if woreda_region and woreda_region not in officer.region_scopes:
 						frappe.throw(
 							_("Woreda {0} is not in your Region scope.").format(woreda),
 							frappe.PermissionError,
 						)
 					filters["woreda"] = woreda
 				else:
-					# No scope defined, deny
 					frappe.throw(_("You do not have scope to filter by Woreda."), frappe.PermissionError)
+			elif ctx.has_any_role(C.ROLE_DA):
+				if woreda not in ctx.woreda_scopes:
+					frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
+				filters["woreda"] = woreda
 			else:
-				# Other roles: apply filter directly
 				filters["woreda"] = woreda
 		else:
 			filters["woreda"] = woreda
@@ -825,16 +848,18 @@ def _can_edit_farmer(farmer_id: str, ctx: ScopeContext) -> bool:
 	if not ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR):
 		return False
 
-	# For DA role: Must be in assigned Kebele (DA-211 Kebele-based scoping)
-	if ctx.has_any_role(C.ROLE_DA):
-		return _is_farmer_in_da_kebele(farmer_id, ctx.da_ids)
-
-	# For Supervisor: Can edit any farmer in their woreda
-	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		woreda_scope = next(iter(ctx.woreda_scopes), None) if ctx.woreda_scopes else None
+	# Supervisor: any farmer in the officer's Woreda.
+	scope_ctx = _officer_scope(ctx)
+	if scope_ctx is not None and scope_ctx.has_any_role(C.ROLE_SUPERVISOR):
+		woreda_scope = next(iter(scope_ctx.woreda_scopes), None) if scope_ctx.woreda_scopes else None
 		if woreda_scope:
 			farmer_woreda = frappe.db.get_value("DA Farmer Reference", farmer_id, "woreda")
 			return farmer_woreda == woreda_scope
+		return False
+
+	# DA: Must be in assigned Kebele (DA-211 Kebele-based scoping)
+	if ctx.has_any_role(C.ROLE_DA):
+		return _is_farmer_in_da_kebele(farmer_id, ctx.da_ids)
 
 	return False
 

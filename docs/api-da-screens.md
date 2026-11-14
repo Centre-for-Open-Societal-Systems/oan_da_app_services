@@ -215,17 +215,22 @@ Schedule mode (from the priority list) presets `reason`, `visitType`, `level`.
 
 ### 2.7 Visits list (`/visits`, Supervisor nav item; DA reaches it from the dashboard tile)
 
-Frontend `VisitRecord`: `id, date, time, agent, farmerId, farmerName, farmerEmail, farmerAvatar?, kebele,
-purpose, status (Confirmed | Planned | Completed | Missed), plotRef, durationMin, assignedBy?`.
-`VISIT_STATS`: `plannedThisWeek, completed, missed, onTimeRate`. Filters: agent, kebele, status.
-Purposes seen: Crop inspection, Input advisory, Pest follow-up, Registration, Harvest survey, Soil sampling,
-Follow-up. Details modal shows `VisitTimelineEntry {label, by, when, done}`. Reschedule modal:
-`new_date, new_time, reason` (Farmer unavailable / Weather / road access / Agent schedule conflict / Inputs not
-yet delivered / Other), farmer notified by SMS.
+Supervisor Woreda grant (role from access token / ScopeContext) lists visits for DAs mapped to that
+Woreda in Frappe DB (`DA RBAC Assignment` + live `DA Kebele Assignment` in Proposed/Validated/Flagged/
+Effective) — planned, completed, and other history — never another Woreda’s agents. Zone grants use
+`visit.zone`; Region-only grants use `visit.region` (blank geography does not widen a narrow grant).
+Not `visit.woreda` fallback / not the registry mock. Same route for DA self-list. Optional filters:
+`status`, `kebele`, `da_id`, `date` or `from`+`to`, `region`/`zone`/`woreda`. Out-of-scope area or DA
+→ 403. Docs: [visits-integration.md](visits-integration.md), [visits-frontend.md](visits-frontend.md).
+
+API row (`serialize`): `name`, `da_id`, `farmer_id`, `ui_status` (Planned | Confirmed | Completed | Missed),
+`physical_status`, `scheduled_at`, `kebele`, `woreda`, `purpose`, `plot_ref`, `duration_min`, `assigned_by`, ….
+FE may map these to a `VisitRecord`-shaped view. `q`, `agent`, and list `stats` are **not** implemented
+on this endpoint (use `da_id` instead of `agent`).
 
 | Element | API | Source |
 |---|---|---|
-| Table + stats + facets | `GET /visits?q&agent&region&zone&woreda&kebele&status&from&to&limit&start` → `VisitRecord` fields (`agent` = DA name, `assigned_by`) + `stats`. Explicit area selections are validated against the caller's scope; unauthorized areas are 403 | ours: DA Visit |
+| Table + filters | `GET /visits?region&zone&woreda&kebele&status&da_id&from&to&date&limit&start` → serialized visits + `meta.{total,limit,start}`. Omit `status` for full history in scope. Unauthorized areas / DA → 403 | ours: DA Visit |
 | View details | `GET /visits/{id}` → record + `timeline[]` (from DA Visit status history) | ours |
 | Reschedule | `POST /visits/{id}/reschedule {scheduled_at, reason}` → new DA Visit with `rescheduled_from`, old one `Rescheduled`; SMS job | ours + SMS |
 | Supervisor assigns a visit to a DA (`assignedBy`) | `POST /visits` with `da_id` by a Supervisor (scope: own Woreda) | ours |
