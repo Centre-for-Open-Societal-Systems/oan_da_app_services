@@ -12,7 +12,7 @@ class KBArticle(Document):
 		if self.status == "Published" and not self.published_on:
 			self.published_on = today()
 		if not self.languages:
-			frappe.throw(_("Add at least one language version (EN or አማ)."))
+			frappe.throw(_("Add at least one language version (EN or ßèáßê¢)."))
 		seen = set()
 		for row in self.languages:
 			if row.language in seen:

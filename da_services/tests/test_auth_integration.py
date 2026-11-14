@@ -7,18 +7,38 @@ Covers: deny-by-default revocation check, REST and RPC namespace protection,
 import json
 
 import frappe
+import frappe.api
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, today
+from oan_auth_service.api.middleware import _NAMESPACES, validate_jwt_request
+from oan_auth_service.api.router import NAMESPACE
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
 from da_services.api.middleware import check_da_assignment
 from da_services.api.router import ensure_routes_registered
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
+from da_services.tests.fixtures import aligned_mock_geo, bind_da_user, cleanup_test_rows, require_geo_masters
 
 SUPERVISOR = "auth-test-supervisor@da.local"
 DA_USER = "auth-test-da@da.local"
 NO_ROLE_USER = "auth-test-norole@da.local"
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (SUPERVISOR, DA_USER, NO_ROLE_USER, "auth-test-sm@da.local")
+
+_GEO: dict | None = None
+
+
+def _geo() -> dict:
+	"""Live geography for grants (cached per process after masters are required)."""
+	global _GEO
+	if _GEO is None:
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		_GEO = aligned_mock_geo()
+	return _GEO
 
 
 def make_test_request(
@@ -93,13 +113,14 @@ class TestRevocationCheck(IntegrationTestCase):
 
 	def setUp(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=USERS)
 		_user(SUPERVISOR, [C.ROLE_SUPERVISOR])
 		_user(DA_USER, [C.ROLE_DA])
 		_user(NO_ROLE_USER)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		cleanup_test_rows(users=USERS)
 
 	def test_unrestricted_role_bypasses_check(self):
 		result = check_da_assignment("Administrator")
@@ -121,16 +142,18 @@ class TestRevocationCheck(IntegrationTestCase):
 		self.assertIn("No active DA RBAC assignment", result)
 
 	def test_da_role_with_active_assignment_passes(self):
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		g = _geo()
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
 		result = check_da_assignment(SUPERVISOR)
 		self.assertIsNone(result)
 
 	def test_expired_assignment_is_rejected(self):
+		g = _geo()
 		_grant(
 			SUPERVISOR,
 			C.ROLE_SUPERVISOR,
-			region_scope="ET04",
-			woreda_scope="ET04-W01",
+			region_scope=g["region"],
+			woreda_scope=g["woreda"],
 			effective_from=add_days(today(), -30),
 			effective_to=add_days(today(), -1),
 		)
@@ -142,7 +165,9 @@ class TestRevocationCheck(IntegrationTestCase):
 		self.assertIsNotNone(result)
 
 	def test_da_user_with_active_assignment_passes(self):
-		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		g = _geo()
+		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		bind_da_user(DA_USER, "DA-000001")
 		result = check_da_assignment(DA_USER)
 		self.assertIsNone(result)
 
@@ -161,36 +186,24 @@ class TestRPCNamespace(IntegrationTestCase):
 		ensure_routes_registered()
 
 	def test_rpc_namespace_is_registered(self):
-		from oan_auth_service.api.middleware import _NAMESPACES
-
 		self.assertIn("/api/method/da_services.", _NAMESPACES)
 
 	def test_rpc_namespace_has_revocation_check(self):
-		from oan_auth_service.api.middleware import _NAMESPACES
-
 		config = _NAMESPACES.get("/api/method/da_services.")
 		self.assertIsNotNone(config)
 		self.assertIsNotNone(config.get("revocation_check"))
 		self.assertEqual(config["revocation_check"], check_da_assignment)
 
 	def test_rest_namespace_is_registered(self):
-		from oan_auth_service.api.middleware import _NAMESPACES
-		from oan_auth_service.api.router import NAMESPACE
-
 		self.assertIn(NAMESPACE, _NAMESPACES)
 
 	def test_rest_namespace_has_revocation_check(self):
-		from oan_auth_service.api.middleware import _NAMESPACES
-		from oan_auth_service.api.router import NAMESPACE
-
 		config = _NAMESPACES.get(NAMESPACE)
 		self.assertIsNotNone(config)
 		self.assertIsNotNone(config.get("revocation_check"))
 
 	def test_jwt_middleware_rejects_guest_on_rpc(self):
 		"""Guest hitting an RPC endpoint in our namespace gets 401."""
-		from oan_auth_service.api.middleware import validate_jwt_request
-
 		req = make_test_request("/api/method/da_services.api.v1.da.get_da", method="GET")
 		frappe.set_user("Guest")
 		frappe.local.session = frappe._dict(user="Guest")
@@ -199,11 +212,10 @@ class TestRPCNamespace(IntegrationTestCase):
 
 	def test_jwt_middleware_allows_authenticated_user(self):
 		"""JWT middleware requires bearer token even when session exists."""
-		from oan_auth_service.api.middleware import validate_jwt_request
-
+		g = _geo()
 		frappe.set_user("Administrator")
 		_user(SUPERVISOR, [C.ROLE_SUPERVISOR])
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
 		req = make_test_request("/api/method/da_services.api.v1.da.get_da", method="GET")
 		frappe.set_user(SUPERVISOR)
 		frappe.local.session = frappe._dict(user=SUPERVISOR)
@@ -228,18 +240,17 @@ class TestRESTRoutes(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=USERS)
 		_user(SUPERVISOR, [C.ROLE_SUPERVISOR])
 		_user(DA_USER, [C.ROLE_DA])
 		_user(NO_ROLE_USER)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		cleanup_test_rows(users=USERS)
 		super().tearDown()
 
 	def test_health_endpoint_accessible_as_guest(self):
-		import frappe.api
-
 		frappe.set_user("Guest")
 		req = make_test_request("/api/v1/da-services/health", method="GET")
 		res = frappe.api.handle(req)
@@ -251,9 +262,8 @@ class TestRESTRoutes(IntegrationTestCase):
 
 	def test_me_sets_session_user_and_returns_profile(self):
 		"""Valid token sets the session user; /me returns identity and DA profile."""
-		import frappe.api
-
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		g = _geo()
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
 		frappe.set_user(SUPERVISOR)
 		req = make_test_request("/api/v1/auth/me", method="GET")
 		res = frappe.api.handle(req)
@@ -265,13 +275,13 @@ class TestRESTRoutes(IntegrationTestCase):
 		da_profile = data["data"]["profiles"].get("da_services")
 		self.assertIsNotNone(da_profile)
 		self.assertIn(C.ROLE_SUPERVISOR, da_profile["roles"])
-		self.assertIn("ET04", da_profile["scope"]["regions"])
-		self.assertIn("ET04-W01", da_profile["scope"]["woredas"])
+		self.assertIn(g["region"], da_profile["scope"]["regions"])
+		self.assertIn(g["woreda"], da_profile["scope"]["woredas"])
 
 	def test_me_returns_da_ids_for_assigned_da(self):
-		import frappe.api
-
-		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		g = _geo()
+		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		bind_da_user(DA_USER, "DA-000001")
 		frappe.set_user(DA_USER)
 		req = make_test_request("/api/v1/auth/me", method="GET")
 		res = frappe.api.handle(req)
@@ -280,11 +290,10 @@ class TestRESTRoutes(IntegrationTestCase):
 		da_profile = data["data"]["profiles"].get("da_services")
 		self.assertIsNotNone(da_profile)
 		self.assertIn(C.ROLE_DA, da_profile["roles"])
-		self.assertIn("DA-000001", da_profile["scope"]["da_ids"])
+		# DA-ID is on the profile from User.da_registry_id (not a scope list).
+		self.assertEqual(da_profile.get("da_id"), "DA-000001")
 
 	def test_me_returns_no_da_profile_for_user_without_da_role(self):
-		import frappe.api
-
 		frappe.set_user(NO_ROLE_USER)
 		req = make_test_request("/api/v1/auth/me", method="GET")
 		res = frappe.api.handle(req)
@@ -295,8 +304,6 @@ class TestRESTRoutes(IntegrationTestCase):
 
 	def test_me_returns_da_profile_for_administrator(self):
 		"""Administrator has DA roles on this site, so the profile hook returns data."""
-		import frappe.api
-
 		frappe.set_user("Administrator")
 		req = make_test_request("/api/v1/auth/me", method="GET")
 		res = frappe.api.handle(req)
@@ -309,16 +316,15 @@ class TestRESTRoutes(IntegrationTestCase):
 
 	def test_supervisor_scope_aggregates_multiple_assignments(self):
 		"""Supervisor with assignments in two woredas sees both in their profile."""
-		import frappe.api
-
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W02")
+		g = _geo()
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope=g["other_region"], woreda_scope=g["other_woreda"])
 		frappe.set_user(SUPERVISOR)
 		req = make_test_request("/api/v1/auth/me", method="GET")
 		res = frappe.api.handle(req)
 		self.assertEqual(res.status_code, 200)
 		data = json.loads(res.get_data(as_text=True))
 		da_profile = data["data"]["profiles"]["da_services"]
-		self.assertIn("ET04-W01", da_profile["scope"]["woredas"])
-		self.assertIn("ET04-W02", da_profile["scope"]["woredas"])
-		self.assertIn("ET04", da_profile["scope"]["regions"])
+		self.assertIn(g["woreda"], da_profile["scope"]["woredas"])
+		self.assertIn(g["other_woreda"], da_profile["scope"]["woredas"])
+		self.assertIn(g["region"], da_profile["scope"]["regions"])

@@ -1,12 +1,16 @@
 """Survey templates and responses (FR-09d).
 
 Registry mock fixtures used here:
-- DA-000001 / DA-000002 (ET04-W01, same Kebele) — cross-DA duplicate cases.
-- DA-000004 (ET03-W02).
+- DA-000001 / DA-000002 (primary Woreda, posted to the same Kebele) — cross-DA duplicate cases.
+- DA-000004 (the other Woreda).
 
 Farmer references are written explicitly so location, Kebele assignment and the
 canonical internal ID are deterministic; the Farmer Registry mock is only used
 for the collector DA reference.
+
+Geography Links point at the synced DA Region / Zone / Woreda / Kebele masters; the mock
+DA Registry stamps its fixtures from the same masters (``aligned_mock_geo``), so setUp
+fails closed only when the masters are empty.
 """
 
 import io
@@ -24,18 +28,21 @@ from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import surveys as svc
 from da_services.tests.fixtures import (
-	create_administrative_areas,
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
 	ensure_doctype_schema,
 	ensure_kebele_assignment,
+	require_geo_masters,
 )
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "srv-da1@da.local"  # DA-000001, ET04-W01
-DA2 = "srv-da2@da.local"  # DA-000002, ET04-W01
-DA3 = "srv-da3@da.local"  # DA-000004, ET03-W02
-SUP = "srv-sup@da.local"  # Supervisor ET04-W01
-SUP_OTHER = "srv-sup3@da.local"  # Supervisor ET03-W02
-EXEC = "srv-exec@da.local"  # Executive ET04
+DA1 = "srv-da1@da.local"  # DA-000001, primary Woreda
+DA2 = "srv-da2@da.local"  # DA-000002, primary Woreda
+DA3 = "srv-da3@da.local"  # DA-000004, other Woreda
+SUP = "srv-sup@da.local"  # Supervisor, primary Woreda
+SUP_OTHER = "srv-sup3@da.local"  # Supervisor, other Woreda
+EXEC = "srv-exec@da.local"  # Executive, primary Region
 ADMIN = "srv-admin@da.local"  # OAN Administrator
 COMMS = "srv-comms@da.local"  # Communications Officer
 # Scope-shape users for the H1 authorization rules. The DocType controller requires a
@@ -45,7 +52,7 @@ REGION_SUP = "srv-region-sup@da.local"
 ZONE_SUP = "srv-zone-sup@da.local"
 NO_SCOPE_SUP = "srv-noscope-sup@da.local"
 EXPIRED_SUP = "srv-expired-sup@da.local"
-DUAL = "srv-dual@da.local"  # DA-000001 + Supervisor, both ET04-W01
+DUAL = "srv-dual@da.local"  # DA-000001 + Supervisor, both primary Woreda
 ALL_USERS = (
 	DA1,
 	DA2,
@@ -63,19 +70,41 @@ ALL_USERS = (
 )
 TEST_DAS = ("DA-000001", "DA-000002", "DA-000004")
 
-# canonical internal id, display id, Kebele, Woreda, Zone, Region
-FARMERS = {
-	"farmer-uuid-001": ("FR-000101", "Bako 01", "ET04-W01", "ET04-Z01", "ET04"),
-	"farmer-uuid-002": ("FR-000102", "Bako 02", "ET04-W01", "ET04-Z01", "ET04"),
-	"farmer-uuid-003": ("FR-000103", "Kebele 03", "ET03-W02", "ET03-Z02", "ET03"),
-	"farmer-uuid-004": ("FR-000104", "Bako 01", "ET04-W01", "ET04-Z01", "ET04"),
-}
+# Geography (mock DA Registry postings, from the live masters), set on the case in setUp:
+# ``kebele_a`` = primary ``kebele`` where both primary-Woreda DAs are posted,
+# ``kebele_b`` = ``kebele_alt`` (same Woreda, no DA posted here in this module),
+# ``kebele_c`` = the other Woreda's Kebele.
 FARMER_A = "farmer-uuid-001"
 FARMER_B = "farmer-uuid-002"  # same Woreda, different Kebele
 FARMER_C = "farmer-uuid-003"
 FARMER_D = "farmer-uuid-004"  # same Kebele as FARMER_A
+FARMER_IDS = (FARMER_A, FARMER_B, FARMER_C, FARMER_D)
 
-DOCTYPES = ("DA Survey Response", "DA Survey Template", "DA RBAC Assignment")
+
+def _farmers(g: dict) -> dict:
+	"""canonical internal id → (display id, Kebele, Woreda, Zone, Region)."""
+	primary = (g["woreda"], g["zone"], g["region"])
+	other = (g["other_woreda"], g["other_zone"], g["other_region"])
+	return {
+		FARMER_A: ("FR-000101", g["kebele"], *primary),
+		FARMER_B: ("FR-000102", g["kebele_alt"], *primary),
+		FARMER_C: ("FR-000103", g["other_kebele"], *other),
+		FARMER_D: ("FR-000104", g["kebele"], *primary),
+	}
+
+
+def _templates() -> list[str]:
+	"""Names of the templates this module's users created."""
+	return frappe.get_all("DA Survey Template", filters={"created_by_user": ("in", ALL_USERS)}, pluck="name")
+
+
+def _count_templates() -> int:
+	return frappe.db.count("DA Survey Template", {"created_by_user": ("in", ALL_USERS)})
+
+
+def _count_responses() -> int:
+	"""Responses to this module's templates (the table may hold the site's own rows)."""
+	return frappe.db.count("DA Survey Response", {"survey": ("in", _templates() or ["__none__"])})
 
 
 def _user(email, roles):
@@ -137,13 +166,28 @@ class TestSurveys(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		ensure_doctype_schema("DA Survey Parameter")
-		create_administrative_areas()
+		require_geo_masters()
 		self._clean()
-		MockDARegistryClient.reset()
+		MockDARegistryClient.reset()  # rebuilds the fixture postings from the live masters
+		g = aligned_mock_geo()
+		self.geo = g
+		self.region, self.zone, self.woreda = g["region"], g["zone"], g["woreda"]
+		self.other_region, self.other_zone, self.other_woreda = (
+			g["other_region"],
+			g["other_zone"],
+			g["other_woreda"],
+		)
+		self.kebele_a, self.kebele_b, self.kebele_c = g["kebele"], g["kebele_alt"], g["other_kebele"]
+		region, woreda = self.region, self.woreda
+		other_region, other_woreda = self.other_region, self.other_woreda
 
 		_user(DA1, [C.ROLE_DA])
 		_user(DA2, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
+		# A DA's own DA-ID is read from User.da_registry_id (unique per DA-ID).
+		bind_da_user(DA1, "DA-000001")
+		bind_da_user(DA2, "DA-000002")
+		bind_da_user(DA3, "DA-000004")
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(SUP_OTHER, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
@@ -153,43 +197,43 @@ class TestSurveys(IntegrationTestCase):
 			_user(user, [C.ROLE_SUPERVISOR])
 		_user(DUAL, [C.ROLE_DA, C.ROLE_SUPERVISOR])
 
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA3, C.ROLE_DA, da_id="DA-000004", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=region, woreda_scope=woreda)
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope=region, woreda_scope=woreda)
+		_grant(DA3, C.ROLE_DA, da_id="DA-000004", region_scope=other_region, woreda_scope=other_woreda)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=region, woreda_scope=woreda)
+		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope=other_region, woreda_scope=other_woreda)
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=region)
 
 		# Region-only / Zone-only grants: create them valid, then remove the Woreda so
 		# the scope model has to derive the target from master data.
-		region_grant = _grant(REGION_SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		region_grant = _grant(REGION_SUP, C.ROLE_SUPERVISOR, region_scope=region, woreda_scope=woreda)
 		frappe.db.set_value("DA RBAC Assignment", region_grant.name, "woreda_scope", None)
 		zone_grant = _grant(
 			ZONE_SUP,
 			C.ROLE_SUPERVISOR,
-			region_scope="ET04",
-			zone_scope="ET04-Z01",
-			woreda_scope="ET04-W01",
+			region_scope=region,
+			zone_scope=self.zone,
+			woreda_scope=woreda,
 		)
 		frappe.db.set_value("DA RBAC Assignment", zone_grant.name, "woreda_scope", None)
 		_grant(
 			EXPIRED_SUP,
 			C.ROLE_SUPERVISOR,
-			region_scope="ET04",
-			woreda_scope="ET04-W01",
+			region_scope=region,
+			woreda_scope=woreda,
 			effective_from=add_days(today(), -10),
 			effective_to=add_days(today(), -1),
 		)
-		_grant(DUAL, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DUAL, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(DUAL, C.ROLE_DA, da_id="DA-000001", region_scope=region, woreda_scope=woreda)
+		_grant(DUAL, C.ROLE_SUPERVISOR, region_scope=region, woreda_scope=woreda)
 
-		# Both ET04 DAs cover Bako 01, which is what makes a cross-DA duplicate
+		# Both primary-Woreda DAs cover kebele_a, which is what makes a cross-DA duplicate
 		# reachable; DA-000004 covers a Kebele with no test farmer.
-		ensure_kebele_assignment("DA-000001", "ET04-W01-K01")
-		ensure_kebele_assignment("DA-000002", "ET04-W01-K01")
-		ensure_kebele_assignment("DA-000004", "ET03-W02-K01")
+		ensure_kebele_assignment("DA-000001", self.kebele_a)
+		ensure_kebele_assignment("DA-000002", self.kebele_a)
+		ensure_kebele_assignment("DA-000004", self.kebele_c)
 
-		for farmer_id, (reg_id, kebele, woreda, zone, region) in FARMERS.items():
+		for farmer_id, (reg_id, kebele, f_woreda, f_zone, f_region) in _farmers(g).items():
 			frappe.get_doc(
 				{
 					"doctype": "DA Farmer Reference",
@@ -197,9 +241,9 @@ class TestSurveys(IntegrationTestCase):
 					"reg_id": reg_id,
 					"farmer_name": f"Test {farmer_id}",
 					"kebele": kebele,
-					"woreda": woreda,
-					"zone": zone,
-					"region": region,
+					"woreda": f_woreda,
+					"zone": f_zone,
+					"region": f_region,
 				}
 			).insert(ignore_permissions=True, ignore_links=True)
 
@@ -209,12 +253,9 @@ class TestSurveys(IntegrationTestCase):
 		MockDARegistryClient.reset()
 
 	def _clean(self):
-		frappe.db.delete("DA Survey Response")
-		frappe.db.delete("DA Survey Template")
-		frappe.db.delete("DA Task", {"generated_by_rule": ("like", f"{svc.ASSIGNMENT_RULE_PREFIX}%")})
-		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": ("in", TEST_DAS)})
-		frappe.db.delete("DA Farmer Reference", {"name": ("in", list(FARMERS))})
+		# Templates by their creator (their responses go with them), responses, generated
+		# tasks and Kebele postings by the test DAs, grants by user, farmers by id.
+		cleanup_test_rows(users=ALL_USERS, da_ids=TEST_DAS, farmer_ids=FARMER_IDS)
 
 	def _create(self, user=SUP, **over):
 		data = {
@@ -271,10 +312,10 @@ class TestSurveys(IntegrationTestCase):
 				"answers_json": "{}",
 				"sync_state": "Draft",
 				"started_at": now_datetime(),
-				"region": "ET04",
-				"zone": "ET04-Z01",
-				"woreda": "ET04-W01",
-				"kebele": "Bako 01",
+				"region": self.region,
+				"zone": self.zone,
+				"woreda": self.woreda,
+				"kebele": self.kebele_a,
 			}
 		)
 		row.insert(ignore_permissions=True)
@@ -287,7 +328,7 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(out["status"], "Open")
 		self.assertEqual(out["type"], "Satisfaction")
 		self.assertEqual(out["targetFarmers"], 20)
-		self.assertEqual(out["woreda"], "ET04-W01")
+		self.assertEqual(out["woreda"], self.woreda)
 		self.assertTrue(out["templateVersion"].startswith("FSS-T"))
 		types = [p["type"] for p in out["parameters"]]
 		self.assertEqual(types[:3], ["consent", "auto", "auto"])
@@ -344,7 +385,7 @@ class TestSurveys(IntegrationTestCase):
 		first = self._create(client_op_id="srv-i18n-op", questions=questions)
 		second = self._create(client_op_id="srv-i18n-op", questions=questions)
 		self.assertEqual(first["id"], second["id"])
-		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+		self.assertEqual(_count_templates(), 1)
 
 	def test_da_cannot_create_template(self):
 		with self.assertRaises(frappe.PermissionError):
@@ -354,21 +395,21 @@ class TestSurveys(IntegrationTestCase):
 		first = self._create(client_op_id="srv-op-1")
 		second = self._create(client_op_id="srv-op-1")
 		self.assertEqual(first["id"], second["id"])
-		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+		self.assertEqual(_count_templates(), 1)
 
 	def test_template_client_op_id_replay_by_another_user_is_conflict(self):
 		self._create(client_op_id="srv-op-2")
 		with self.assertRaises(svc.SurveyConflictError) as caught:
 			self._create(user=SUP_OTHER, client_op_id="srv-op-2")
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+		self.assertEqual(_count_templates(), 1)
 
 	def test_template_client_op_id_replay_with_different_payload_is_conflict(self):
 		self._create(client_op_id="srv-op-diff")
 		with self.assertRaises(svc.SurveyConflictError) as caught:
 			self._create(client_op_id="srv-op-diff", name="A different survey")
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+		self.assertEqual(_count_templates(), 1)
 
 	def test_template_client_op_id_concurrent_replay_returns_existing(self):
 		first = self._create(client_op_id="srv-op-race")
@@ -385,7 +426,7 @@ class TestSurveys(IntegrationTestCase):
 		):
 			second = self._create(client_op_id="srv-op-race")
 		self.assertEqual(second["id"], first["id"])
-		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+		self.assertEqual(_count_templates(), 1)
 
 	def test_template_client_op_id_concurrent_payload_mismatch_is_conflict(self):
 		self._create(client_op_id="srv-op-race-diff")
@@ -403,79 +444,79 @@ class TestSurveys(IntegrationTestCase):
 			with self.assertRaises(svc.SurveyConflictError) as caught:
 				self._create(client_op_id="srv-op-race-diff", name="Different payload")
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Template"), 1)
+		self.assertEqual(_count_templates(), 1)
 
 	# -- template scope authorization (H1) ------------------------------------
 
 	def test_create_stores_authoritative_woreda_hierarchy(self):
-		out = self._create(user=SUP, woreda="ET04-W01")
+		out = self._create(user=SUP, woreda=self.woreda)
 		self.assertEqual(
 			(out["region"], out["zone"], out["woreda"]),
-			("ET04", "ET04-Z01", "ET04-W01"),
+			(self.region, self.zone, self.woreda),
 		)
 		# Lower-case input resolves through master data and is stored canonically.
-		lower = self._create(user=SUP, woreda="et04-w01", name="Lower case target")
-		self.assertEqual(lower["woreda"], "ET04-W01")
+		lower = self._create(user=SUP, woreda=self.woreda.lower(), name="Lower case target")
+		self.assertEqual(lower["woreda"], self.woreda)
 
 	def test_matching_explicit_region_and_zone_are_accepted(self):
 		out = self._create(
 			user=SUP,
-			woreda="ET04-W01",
-			region="ET04",
-			zone="ET04-Z01",
+			woreda=self.woreda,
+			region=self.region,
+			zone=self.zone,
 		)
-		self.assertEqual((out["region"], out["zone"]), ("ET04", "ET04-Z01"))
+		self.assertEqual((out["region"], out["zone"]), (self.region, self.zone))
 
 	def test_region_only_supervisor_can_publish_inside_region(self):
-		out = self._create(user=REGION_SUP, woreda="ET04-W01")
-		self.assertEqual(out["woreda"], "ET04-W01")
+		out = self._create(user=REGION_SUP, woreda=self.woreda)
+		self.assertEqual(out["woreda"], self.woreda)
 		with self.assertRaises(frappe.PermissionError):
-			self._create(user=REGION_SUP, woreda="ET03-W02", name="Other region")
+			self._create(user=REGION_SUP, woreda=self.other_woreda, name="Other region")
 
 	def test_zone_only_supervisor_can_publish_inside_zone(self):
-		out = self._create(user=ZONE_SUP, woreda="ET04-W01")
-		self.assertEqual(out["zone"], "ET04-Z01")
+		out = self._create(user=ZONE_SUP, woreda=self.woreda)
+		self.assertEqual(out["zone"], self.zone)
 		with self.assertRaises(frappe.PermissionError):
-			self._create(user=ZONE_SUP, woreda="ET03-W02", name="Other zone")
+			self._create(user=ZONE_SUP, woreda=self.other_woreda, name="Other zone")
 
 	def test_supervisor_without_active_assignment_cannot_publish(self):
 		with self.assertRaises(frappe.PermissionError):
-			self._create(user=NO_SCOPE_SUP, woreda="ET04-W01")
+			self._create(user=NO_SCOPE_SUP, woreda=self.woreda)
 
 	def test_expired_assignment_cannot_publish(self):
 		with self.assertRaises(frappe.PermissionError):
-			self._create(user=EXPIRED_SUP, woreda="ET04-W01")
+			self._create(user=EXPIRED_SUP, woreda=self.woreda)
 
 	def test_forged_woreda_is_rejected(self):
 		with self.assertRaises(frappe.PermissionError):
-			self._create(user=SUP, woreda="ET03-W02")
+			self._create(user=SUP, woreda=self.other_woreda)
 
 	def test_forged_or_mismatched_region_and_zone_are_rejected(self):
 		for kwargs in (
-			{"region": "ET03"},
-			{"zone": "ET03-Z02"},
-			{"region": "ET03", "zone": "ET03-Z02"},
+			{"region": self.other_region},
+			{"zone": self.other_zone},
+			{"region": self.other_region, "zone": self.other_zone},
 		):
 			with self.assertRaises(frappe.ValidationError):
-				self._create(user=SUP, woreda="ET04-W01", **kwargs)
+				self._create(user=SUP, woreda=self.woreda, **kwargs)
 
 	def test_unknown_or_wrong_level_area_is_rejected(self):
-		for code in ("ET04-Z01", "ET99-W99"):
+		for code in (self.zone, "ET99-W99"):
 			with self.assertRaises(frappe.ValidationError):
 				self._create(user=SUP, woreda=code)
 
 	def test_admin_can_select_explicit_target_but_still_needs_a_valid_hierarchy(self):
-		out = self._create(user=ADMIN, woreda="ET03-W02")
+		out = self._create(user=ADMIN, woreda=self.other_woreda)
 		self.assertEqual(
 			(out["region"], out["zone"], out["woreda"]),
-			("ET03", "ET03-Z02", "ET03-W02"),
+			(self.other_region, self.other_zone, self.other_woreda),
 		)
 		with self.assertRaises(frappe.ValidationError):
-			self._create(user=ADMIN, woreda="ET03-W02", region="ET04")
+			self._create(user=ADMIN, woreda=self.other_woreda, region=self.region)
 		with self.assertRaises(frappe.ValidationError):
 			self._create(user=ADMIN, woreda="ET99-W99")
 		with self.assertRaises(frappe.ValidationError):
-			self._create(user=ADMIN, woreda="ET03-W02", zone="ET04-Z01")
+			self._create(user=ADMIN, woreda=self.other_woreda, zone=self.zone)
 
 	# -- list scope ------------------------------------------------------------
 
@@ -535,7 +576,7 @@ class TestSurveys(IntegrationTestCase):
 			self._submit(survey["id"], user=DA1)
 		with self.assertRaises(frappe.PermissionError):
 			self._submit(survey["id"], user=SUP, da_id="DA-000001")
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_assignment_can_switch_between_woreda_wide_and_selected(self):
 		survey = self._create()
@@ -578,7 +619,7 @@ class TestSurveys(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			self._create(
 				user=ADMIN,
-				woreda="ET04-W01",
+				woreda=self.woreda,
 				assignmentMode="Selected",
 				assignedDaIds=["DA-000004"],
 			)
@@ -644,13 +685,13 @@ class TestSurveys(IntegrationTestCase):
 
 		self.assertEqual(out["farmer_id"], FARMER_A)
 		self.assertEqual(out["collector_da_id"], "DA-000001")
-		self.assertEqual(out["kebele"], "Bako 01")
-		self.assertEqual(out["woreda"], "ET04-W01")
-		self.assertEqual(out["zone"], "ET04-Z01")
-		self.assertEqual(out["region"], "ET04")
+		self.assertEqual(out["kebele"], self.kebele_a)
+		self.assertEqual(out["woreda"], self.woreda)
+		self.assertEqual(out["zone"], self.zone)
+		self.assertEqual(out["region"], self.region)
 		# Auto answers are normalised to the resolved farmer.
 		self.assertEqual(out["answers"]["p2"], "FR-000101")
-		self.assertEqual(out["answers"]["p3"], "Bako 01")
+		self.assertEqual(out["answers"]["p3"], self.kebele_a)
 
 		detail = svc.get_survey(survey["id"], _ctx(DA1))
 		self.assertEqual(detail["collected"], 1)
@@ -661,24 +702,25 @@ class TestSurveys(IntegrationTestCase):
 		self._submit(survey["id"], user=DA1, farmer_id=FARMER_A)
 		self._submit(survey["id"], user=DA2, farmer_id=FARMER_D)
 
-		rows, total = svc.list_responses(survey["id"], _ctx(SUP), woreda="ET04-W01")
+		rows, total = svc.list_responses(survey["id"], _ctx(SUP), woreda=self.woreda)
 		self.assertEqual(total, 2)
 		self.assertEqual({row["collector_da_id"] for row in rows}, {"DA-000001", "DA-000002"})
 
-		rows, total = svc.list_responses(survey["id"], _ctx(SUP), kebele="ET04-W01-K01")
+		rows, total = svc.list_responses(survey["id"], _ctx(SUP), kebele=self.kebele_a)
 		self.assertEqual(total, 2)
-		rows, total = svc.list_responses(survey["id"], _ctx(SUP), kebele="ET04-W01-K03")
+		# Same Woreda, but no response was captured there.
+		rows, total = svc.list_responses(survey["id"], _ctx(SUP), kebele=self.kebele_b)
 		self.assertEqual(total, 0)
 
 		with self.assertRaises(frappe.PermissionError):
-			svc.list_responses(survey["id"], _ctx(SUP), woreda="ET03-W02")
+			svc.list_responses(survey["id"], _ctx(SUP), woreda=self.other_woreda)
 		with self.assertRaises(frappe.PermissionError):
-			svc.list_responses(survey["id"], _ctx(DA1), kebele="ET04-W01-K03")
+			svc.list_responses(survey["id"], _ctx(DA1), kebele=self.kebele_b)  # not DA1's posting
 
-		rows, total = svc.list_responses(survey["id"], _ctx(DA1), kebele="ET04-W01-K01")
+		rows, total = svc.list_responses(survey["id"], _ctx(DA1), kebele=self.kebele_a)
 		self.assertEqual(total, 1)
 		self.assertEqual(rows[0]["collector_da_id"], "DA-000001")
-		rows, total = svc.list_responses(survey["id"], _ctx(ADMIN), woreda="ET03-W02")
+		rows, total = svc.list_responses(survey["id"], _ctx(ADMIN), woreda=self.other_woreda)
 		self.assertEqual(total, 0)
 
 	def test_submit_stores_template_version_at_capture(self):
@@ -791,16 +833,16 @@ class TestSurveys(IntegrationTestCase):
 		survey = self._create()
 		with self.assertRaises(frappe.PermissionError):
 			self._submit(survey["id"], farmer_id=FARMER_B)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_unknown_farmer_is_404_and_not_stored(self):
 		survey = self._create()
 		with self.assertRaises(frappe.DoesNotExistError):
 			self._submit(survey["id"], farmer_id="FR-does-not-exist")
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_farmer_outside_survey_woreda_is_denied_and_not_stored(self):
-		survey = self._create(user=ADMIN, woreda="ET03-W02")
+		survey = self._create(user=ADMIN, woreda=self.other_woreda)
 		with self.assertRaises(frappe.PermissionError):
 			self._submit(
 				survey["id"],
@@ -808,26 +850,26 @@ class TestSurveys(IntegrationTestCase):
 				da_id="DA-000001",
 				farmer_id=FARMER_A,
 			)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_closed_survey_rejects_and_stores_nothing(self):
 		survey = self._create()
 		svc.patch_template(survey["id"], {"status": "Closed"}, ctx=_ctx(SUP))
 		with self.assertRaises(frappe.ValidationError):
 			self._submit(survey["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_unknown_answer_parameter_is_rejected_and_not_stored(self):
 		survey = self._create()
 		with self.assertRaises(frappe.ValidationError):
 			self._submit(survey["id"], answers={"p4": "4", "p5": "Yes, fully", "p99": "x"})
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_missing_required_answer_is_rejected_and_not_stored(self):
 		survey = self._create()
 		with self.assertRaises(frappe.ValidationError):
 			self._submit(survey["id"], answers={"p4": "4"})  # p5 is required
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	# -- duplicates ------------------------------------------------------------
 
@@ -837,7 +879,7 @@ class TestSurveys(IntegrationTestCase):
 		with self.assertRaises(svc.SurveyConflictError) as caught:
 			self._submit(survey["id"], farmer_id=FARMER_A)
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 		self.assertEqual(frappe.db.get_value("DA Survey Response", first["id"], "farmer_id"), FARMER_A)
 
 	def test_cross_da_duplicate_is_409_and_stores_one_row(self):
@@ -846,7 +888,7 @@ class TestSurveys(IntegrationTestCase):
 		with self.assertRaises(svc.SurveyConflictError) as caught:
 			self._submit(survey["id"], user=DA2)
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_concurrent_duplicate_insert_race_is_409(self):
 		"""The unique constraint still wins when two requests pass the pre-check."""
@@ -861,7 +903,7 @@ class TestSurveys(IntegrationTestCase):
 				"answers_json": "{}",
 				"sync_state": "Synced",
 				"duplicate_guard_key": f"{survey['id']}|{FARMER_A}",
-				"kebele": "Bako 01",
+				"kebele": self.kebele_a,
 			}
 		).insert(ignore_permissions=True)
 
@@ -882,7 +924,7 @@ class TestSurveys(IntegrationTestCase):
 			with self.assertRaises(svc.SurveyConflictError) as caught:
 				self._submit(survey["id"], farmer_id=FARMER_A)
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_same_farmer_on_a_different_template_is_allowed(self):
 		first = self._create()
@@ -890,7 +932,7 @@ class TestSurveys(IntegrationTestCase):
 		self._submit(first["id"], farmer_id=FARMER_A)
 		out = self._submit(second["id"], farmer_id=FARMER_A)
 		self.assertEqual(out["survey_id"], second["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 2)
+		self.assertEqual(_count_responses(), 2)
 
 	def test_declined_consent_does_not_lock_farmer(self):
 		survey = self._create()
@@ -913,14 +955,14 @@ class TestSurveys(IntegrationTestCase):
 				answers={},
 				sync_state="Draft",
 			)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_historical_draft_does_not_reserve_the_farmer(self):
 		survey = self._create()
 		draft_id = self._insert_historical_draft(survey)
 		synced = self._submit(survey["id"], farmer_id=FARMER_A)
 		self.assertNotEqual(draft_id, synced["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 2)
+		self.assertEqual(_count_responses(), 2)
 		rows, _total = svc.list_responses(survey["id"], _ctx(SUP))
 		self.assertEqual({row["sync_state"] for row in rows}, {"Draft", "Synced"})
 
@@ -937,7 +979,7 @@ class TestSurveys(IntegrationTestCase):
 			self._submit(survey["id"], sync_state="Synced", consent=None)
 		with self.assertRaises(frappe.ValidationError):
 			self._submit(survey["id"], sync_state="Queued", consent=None)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_declined_consent_forces_declined_state(self):
 		survey = self._create()
@@ -960,19 +1002,19 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(first["sync_state"], "Queued")
 		with self.assertRaises(svc.SurveyConflictError):
 			self._submit(survey["id"], sync_state="Synced")
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_rejected_or_conflict_attempts_never_bypass_the_guard(self):
 		survey = self._create()
 		for state in ("Rejected", "Conflict", "Declined"):
 			with self.assertRaises(frappe.ValidationError):
 				self._submit(survey["id"], farmer_id=FARMER_A, sync_state=state)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 		out = self._submit(survey["id"], farmer_id=FARMER_A)
 		self.assertEqual(out["sync_state"], "Synced")
 		with self.assertRaises(svc.SurveyConflictError):
 			self._submit(survey["id"], farmer_id=FARMER_A)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	# -- collection window -----------------------------------------------------
 
@@ -980,7 +1022,7 @@ class TestSurveys(IntegrationTestCase):
 		survey = self._create(open=add_days(today(), 1), close=add_days(today(), 10))
 		with self.assertRaises(frappe.ValidationError):
 			self._submit(survey["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	def test_response_on_opening_boundary_is_allowed(self):
 		survey = self._create(open=today(), close=add_days(today(), 10))
@@ -996,7 +1038,7 @@ class TestSurveys(IntegrationTestCase):
 		survey = self._create(open=add_days(today(), -10), close=add_days(today(), -1))
 		with self.assertRaises(frappe.ValidationError):
 			self._submit(survey["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 	# -- response timestamps ---------------------------------------------------
 
@@ -1013,7 +1055,7 @@ class TestSurveys(IntegrationTestCase):
 		for payload in bad:
 			with self.assertRaises(frappe.ValidationError):
 				self._submit(survey["id"], **payload)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 0)
+		self.assertEqual(_count_responses(), 0)
 
 		out = self._submit(
 			survey["id"],
@@ -1029,7 +1071,7 @@ class TestSurveys(IntegrationTestCase):
 		first = self._submit(survey["id"], farmer_id="FR-000101", client_op_id="resp-op-1")
 		second = self._submit(survey["id"], farmer_id=FARMER_A, client_op_id="resp-op-1")
 		self.assertEqual(first["id"], second["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_response_client_op_id_replay_with_different_payload_is_conflict(self):
 		survey = self._create()
@@ -1040,7 +1082,7 @@ class TestSurveys(IntegrationTestCase):
 				farmer_id=FARMER_D,
 				client_op_id="resp-op-2",
 			)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_response_client_op_id_replay_on_another_survey_is_conflict(self):
 		first = self._create()
@@ -1048,14 +1090,14 @@ class TestSurveys(IntegrationTestCase):
 		self._submit(first["id"], farmer_id=FARMER_A, client_op_id="resp-op-3")
 		with self.assertRaises(svc.SurveyConflictError):
 			self._submit(second["id"], farmer_id=FARMER_A, client_op_id="resp-op-3")
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_response_client_op_id_cannot_leak_another_collectors_row(self):
 		survey = self._create()
 		self._submit(survey["id"], user=DA1, farmer_id=FARMER_A, client_op_id="resp-op-4")
 		with self.assertRaises(svc.SurveyConflictError):
 			self._submit(survey["id"], user=DA2, farmer_id=FARMER_A, client_op_id="resp-op-4")
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_response_client_op_id_concurrent_replay_returns_existing(self):
 		survey = self._create()
@@ -1092,7 +1134,7 @@ class TestSurveys(IntegrationTestCase):
 		):
 			second = self._submit(survey["id"], client_op_id="resp-op-race")
 		self.assertEqual(second["id"], first["id"])
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	def test_response_client_op_id_concurrent_payload_mismatch_is_conflict(self):
 		survey = self._create()
@@ -1133,7 +1175,7 @@ class TestSurveys(IntegrationTestCase):
 					answers={"p4": "2", "p5": "No"},
 				)
 		self.assertEqual(caught.exception.http_status_code, 409)
-		self.assertEqual(frappe.db.count("DA Survey Response"), 1)
+		self.assertEqual(_count_responses(), 1)
 
 	# -- dual role: DA + live officer -----------------------------------------
 
@@ -1169,6 +1211,8 @@ class TestSurveys(IntegrationTestCase):
 			"name",
 		)
 		frappe.db.set_value("DA RBAC Assignment", grant, "active", 0)
+		# User.da_registry_id is unique: take DA-000001 for the dual user while acting as DA.
+		bind_da_user(DUAL, "DA-000001")
 
 		frappe.set_user(DUAL)
 		try:
@@ -1193,14 +1237,14 @@ class TestSurveys(IntegrationTestCase):
 			type="Needs assessment",
 		)
 
-		# Move the live officer grant to ET03-W02 while the DA grant stays ET04-W01.
+		# Move the live officer grant to the other Woreda while the DA grant stays in the primary one.
 		grant = frappe.db.get_value(
 			"DA RBAC Assignment",
 			{"user": DUAL, "role": C.ROLE_SUPERVISOR},
 			"name",
 		)
-		frappe.db.set_value("DA RBAC Assignment", grant, "region_scope", "ET03")
-		frappe.db.set_value("DA RBAC Assignment", grant, "woreda_scope", "ET03-W02")
+		frappe.db.set_value("DA RBAC Assignment", grant, "region_scope", self.other_region)
+		frappe.db.set_value("DA RBAC Assignment", grant, "woreda_scope", self.other_woreda)
 
 		frappe.set_user(DUAL)
 		try:
@@ -1265,7 +1309,7 @@ class TestSurveys(IntegrationTestCase):
 	def test_patch_invalid_questions_after_response_does_not_create_version(self):
 		survey = self._create()
 		self._submit(survey["id"], farmer_id=FARMER_A)
-		before = frappe.db.count("DA Survey Template")
+		before = _count_templates()
 
 		with self.assertRaises(frappe.ValidationError):
 			svc.patch_template(
@@ -1278,7 +1322,7 @@ class TestSurveys(IntegrationTestCase):
 				ctx=_ctx(SUP),
 			)
 
-		self.assertEqual(frappe.db.count("DA Survey Template"), before)
+		self.assertEqual(_count_templates(), before)
 		self.assertEqual(
 			frappe.db.get_value("DA Survey Template", survey["id"], "template_version"),
 			survey["templateVersion"],
@@ -1336,7 +1380,7 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(row[headers.index("Farmer ID")], FARMER_A)
 		self.assertEqual(row[headers.index("Farmer Registry ID")], "FR-000101")
 		self.assertEqual(row[headers.index("Collector DA ID")], "DA-000001")
-		self.assertEqual(row[headers.index("Kebele")], "Bako 01")
+		self.assertEqual(row[headers.index("Kebele")], self.kebele_a)
 
 	def test_export_empty_survey_is_headers_only(self):
 		survey = self._create()

@@ -1,40 +1,17 @@
-"""Administrative-area filters shared by list APIs."""
+"""Geography filters shared by list APIs (DA Region / Zone / Woreda / Kebele masters)."""
 
 from __future__ import annotations
 
 import frappe
 from frappe import _
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.services import constants as C
+from da_services.services import geo
 from da_services.utils.permissions import ScopeContext
-
-AREA_DOCTYPE = "DA Administrative Area"
-LEVELS = ("Region", "Zone", "Woreda", "Kebele")
 
 
 def _code(value: str | None) -> str | None:
-	return (value or "").strip().upper() or None
-
-
-def _area_row(code: str, label: str) -> dict:
-	row = frappe.db.get_value(
-		AREA_DOCTYPE,
-		code,
-		["name", "level", "parent_area", "active", "name_en"],
-		as_dict=True,
-	)
-	if not row:
-		frappe.throw(
-			_("{0} {1} was not found in the administrative areas.").format(label, code),
-			frappe.ValidationError,
-		)
-	if not row.active:
-		frappe.throw(
-			_("{0} {1} is no longer active.").format(label, code),
-			frappe.ValidationError,
-		)
-	return row
+	return (value or "").strip() or None
 
 
 def _assigned_kebeles(da_ids) -> set[str]:
@@ -52,7 +29,7 @@ def _assigned_kebeles(da_ids) -> set[str]:
 def _check_supplied(supplied: str | None, resolved: str | None, label: str) -> None:
 	if supplied and supplied != resolved:
 		frappe.throw(
-			_("{0} {1} does not match the selected administrative area.").format(label, supplied),
+			_("{0} {1} does not match the selected geography.").format(label, supplied),
 			frappe.ValidationError,
 		)
 
@@ -65,12 +42,11 @@ def resolve_area_filters(
 	woreda: str | None = None,
 	kebele: str | None = None,
 ) -> dict:
-	"""Validate a selected area and return canonical filters it implies.
+	"""Validate a selected area against geo masters and return canonical filters.
 
-	Unknown or inactive areas are validation errors. A caller may only narrow to an
-	area inside their live scope: selecting another Woreda/Kebele is a permission
-	error, not an empty result. A DA may select a Woreda only through their Woreda
-	grant and a Kebele only when it is one of their Effective Kebele assignments.
+	Unknown or inactive masters are validation errors. A caller may only narrow to an
+	area inside their live scope. A DA may select a Kebele only when it is one of their
+	Effective Kebele assignments.
 	"""
 	region = _code(region)
 	zone = _code(zone)
@@ -80,31 +56,23 @@ def resolve_area_filters(
 	resolved = {"region": None, "zone": None, "woreda": None, "kebele": None}
 	selected_level = None
 	selected_code = None
-	selected_name_en = None
+	selected_name = None
 
 	if kebele:
-		row = _area_row(kebele, _("Kebele"))
-		if row.level != "Kebele":
-			frappe.throw(_("{0} is not a Kebele.").format(row.name), frappe.ValidationError)
-		resolved.update(ancestors_of(row.name))
+		row = geo.require_active_master("DA Kebele", kebele, _("Kebele"))
+		resolved.update(geo.ancestors_of_kebele(row.name))
 		selected_level, selected_code = "kebele", row.name
-		selected_name_en = row.name_en
+		selected_name = row.kebele_name
 	elif woreda:
-		row = _area_row(woreda, _("Woreda"))
-		if row.level != "Woreda":
-			frappe.throw(_("{0} is not a Woreda.").format(row.name), frappe.ValidationError)
-		resolved.update(ancestors_of(row.name))
+		row = geo.require_active_master("DA Woreda", woreda, _("Woreda"))
+		resolved.update(geo.ancestors_of_woreda(row.name))
 		selected_level, selected_code = "woreda", row.name
 	elif zone:
-		row = _area_row(zone, _("Zone"))
-		if row.level != "Zone":
-			frappe.throw(_("{0} is not a Zone.").format(row.name), frappe.ValidationError)
-		resolved.update(ancestors_of(row.name))
+		row = geo.require_active_master("DA Zone", zone, _("Zone"))
+		resolved.update(geo.ancestors_of_zone(row.name))
 		selected_level, selected_code = "zone", row.name
 	elif region:
-		row = _area_row(region, _("Region"))
-		if row.level != "Region":
-			frappe.throw(_("{0} is not a Region.").format(row.name), frappe.ValidationError)
+		row = geo.require_active_master("DA Region", region, _("Region"))
 		resolved["region"] = row.name
 		selected_level, selected_code = "region", row.name
 
@@ -139,7 +107,7 @@ def resolve_area_filters(
 	out = {key: value for key, value in resolved.items() if value}
 	if selected_level == "kebele":
 		values = [selected_code]
-		if selected_name_en and selected_name_en not in values:
-			values.append(selected_name_en)
+		if selected_name and selected_name not in values:
+			values.append(selected_name)
 		out["kebele"] = ("in", values) if len(values) > 1 else selected_code
 	return out

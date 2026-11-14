@@ -14,8 +14,8 @@ from datetime import timedelta
 import frappe
 from frappe import _
 from frappe.utils import get_datetime, getdate, now_datetime, today
+from frappe.utils.xlsxutils import make_xlsx
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_survey_response.da_survey_response import (
 	CONSENTS,
 )
@@ -23,10 +23,11 @@ from da_services.da_services.doctype.da_survey_template.da_survey_template impor
 	CUSTOM_QUESTION_TYPES,
 	SURVEY_TYPES,
 )
-from da_services.services import area_scope
+from da_services.services import area_scope, geo
 from da_services.services import constants as C
 from da_services.services import farmers as farmer_svc
 from da_services.services import tasks as task_svc
+from da_services.services.da_lookup import get_da_reference
 from da_services.utils.permissions import (
 	ScopeContext,
 	get_officer_scope_context,
@@ -35,7 +36,6 @@ from da_services.utils.permissions import (
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
-AREA_DOCTYPE = "DA Administrative Area"
 # States a client may ask for. Declined is forced by the server when consent is
 # declined; Rejected and Conflict are server-only terminal states.
 CLIENT_SYNC_STATES = ("Queued", "Synced")
@@ -338,8 +338,6 @@ def _clean_assignment_input(
 	if not clean_ids:
 		frappe.throw(_("Select at least one DA for an individual assignment."), frappe.ValidationError)
 
-	from da_services.services.da_lookup import get_da_reference
-
 	for da_id in clean_ids:
 		ref = get_da_reference(da_id, ctx)
 		if ref.woreda != woreda:
@@ -441,30 +439,6 @@ def _acting_da_id(ctx: ScopeContext) -> str | None:
 	return _own_da_id(ctx)
 
 
-def _area_row(code: str, label: str) -> dict:
-	"""One active administrative area, or a validation error."""
-	code = (code or "").strip().upper()
-	if not code:
-		frappe.throw(_("{0} is required.").format(label), frappe.ValidationError)
-	row = frappe.db.get_value(
-		AREA_DOCTYPE,
-		code,
-		["name", "level", "parent_area", "active"],
-		as_dict=True,
-	)
-	if not row:
-		frappe.throw(
-			_("{0} {1} was not found in the administrative areas.").format(label, code),
-			frappe.ValidationError,
-		)
-	if not row.active:
-		frappe.throw(
-			_("{0} {1} is no longer active.").format(label, code),
-			frappe.ValidationError,
-		)
-	return row
-
-
 def _creator_scope(
 	ctx: ScopeContext,
 	*,
@@ -474,12 +448,8 @@ def _creator_scope(
 ) -> tuple[str | None, str | None, str | None]:
 	"""Resolve the authoritative Region / Zone / Woreda for a published survey.
 
-	The selected Woreda always comes from ``DA Administrative Area``; its parent Zone
-	and Region are derived from that tree. A client may send ``region`` / ``zone`` as
-	a consistency check, but those values are never used as authorization evidence and
-	a mismatch is rejected. A non-Admin caller must then pass the existing
-	``ScopeContext.covers`` rule against the *derived* hierarchy, so an expired or
-	missing RBAC assignment cannot authorize a target.
+	The selected Woreda comes from ``DA Woreda``; Zone and Region are derived from
+	Link parents. A client may send ``region`` / ``zone`` as a consistency check.
 	"""
 	# A role string can outlive its grant (the RBAC controller syncs roles add-only).
 	# For a non-Admin creator, authorization must come from a live Supervisor
@@ -493,7 +463,7 @@ def _creator_scope(
 			)
 		ctx = officer_ctx
 
-	selected_woreda = (woreda or "").strip().upper() or None
+	selected_woreda = (woreda or "").strip() or None
 	if not selected_woreda:
 		if ctx.unrestricted:
 			frappe.throw(
@@ -508,48 +478,44 @@ def _creator_scope(
 				frappe.ValidationError,
 			)
 
-	woreda_row = _area_row(selected_woreda, _("Woreda"))
-	if woreda_row.level != "Woreda":
-		frappe.throw(
-			_("{0} is not a Woreda.").format(woreda_row.name),
-			frappe.ValidationError,
-		)
-
-	hierarchy = ancestors_of(woreda_row.name)
+	# Store the master's canonical code (Link names compare case-insensitively in the DB,
+	# scope sets do not).
+	selected_woreda = geo.require_active_master("DA Woreda", selected_woreda, _("Woreda")).name
+	hierarchy = geo.ancestors_of_woreda(selected_woreda)
 	resolved_region = hierarchy.get("region")
 	resolved_zone = hierarchy.get("zone")
 	if not resolved_region or not resolved_zone:
 		frappe.throw(
-			_("Woreda {0} does not have a complete Region / Zone hierarchy.").format(woreda_row.name),
+			_("Woreda {0} does not have a complete Region / Zone hierarchy.").format(selected_woreda),
 			frappe.ValidationError,
 		)
 
-	supplied_region = (region or "").strip().upper() or None
+	supplied_region = (region or "").strip() or None
 	if supplied_region:
-		region_row = _area_row(supplied_region, _("Region"))
-		if region_row.level != "Region" or region_row.name != resolved_region:
+		supplied_region = geo.require_active_master("DA Region", supplied_region, _("Region")).name
+		if supplied_region != resolved_region:
 			frappe.throw(
-				_("Region {0} does not match Woreda {1}.").format(region_row.name, woreda_row.name),
+				_("Region {0} does not match Woreda {1}.").format(supplied_region, selected_woreda),
 				frappe.ValidationError,
 			)
 
-	supplied_zone = (zone or "").strip().upper() or None
+	supplied_zone = (zone or "").strip() or None
 	if supplied_zone:
-		zone_row = _area_row(supplied_zone, _("Zone"))
-		if zone_row.level != "Zone" or zone_row.name != resolved_zone:
+		supplied_zone = geo.require_active_master("DA Zone", supplied_zone, _("Zone")).name
+		if supplied_zone != resolved_zone:
 			frappe.throw(
-				_("Zone {0} does not match Woreda {1}.").format(zone_row.name, woreda_row.name),
+				_("Zone {0} does not match Woreda {1}.").format(supplied_zone, selected_woreda),
 				frappe.ValidationError,
 			)
 
 	if not ctx.unrestricted:
-		if not ctx.covers(resolved_region, woreda_row.name, resolved_zone):
+		if not ctx.covers(resolved_region, selected_woreda, resolved_zone):
 			frappe.throw(
-				_("Woreda {0} is outside your scope.").format(woreda_row.name),
+				_("Woreda {0} is outside your scope.").format(selected_woreda),
 				frappe.PermissionError,
 			)
 
-	return resolved_region, resolved_zone, woreda_row.name
+	return resolved_region, resolved_zone, selected_woreda
 
 
 def _load_template(survey_id: str, ctx: ScopeContext, *, write: bool = False):
@@ -976,6 +942,7 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 					"region": doc.region,
 					"zone": doc.zone,
 					"woreda": doc.woreda,
+					"created_by_user": doc.created_by_user,
 					"parameters": params,
 					"est_minutes": _est_minutes(len(params)),
 					"status": doc.status,
@@ -1474,8 +1441,6 @@ def list_responses(
 				if da_id not in area_ctx.da_ids:
 					frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
 			else:
-				from da_services.services.da_lookup import get_da_reference
-
 				get_da_reference(da_id, area_ctx)
 		filters["da_id"] = da_id
 	elif officer_ctx is None:
@@ -1625,8 +1590,6 @@ def build_export_xlsx(
 	sheet_name: str = EXPORT_SHEET,
 ) -> bytes:
 	"""Build an XLSX workbook for the given parameters and response dicts."""
-	from frappe.utils.xlsxutils import make_xlsx
-
 	data = build_export_rows(parameters, responses)
 	workbook = make_xlsx(data, sheet_name)
 	return workbook.getvalue()

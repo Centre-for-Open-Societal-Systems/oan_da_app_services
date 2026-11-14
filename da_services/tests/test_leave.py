@@ -1,24 +1,27 @@
 """DA Leave Request: doctype, service and API (lifecycle slice 1).
 
-Registry mock fixtures: DA-000001 (ET04 / ET04-W01, Active), DA-000004 (ET03 / ET03-W02, Active).
+Registry mock fixtures: DA-000001 (primary live Woreda, Active), DA-000004 (other chain, Active).
 """
+
+from unittest.mock import patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, today
 
 from da_services.api.v1 import leave as api
-from da_services.integrations.da_registry.client import get_client
+from da_services.integrations.da_registry.client import DARegistryUnavailable, get_client
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import leave as svc
+from da_services.tests.fixtures import aligned_mock_geo, bind_da_user, require_geo_masters
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "lvr-da1@da.local"  # DA-000001, ET04-W01
-DA3 = "lvr-da3@da.local"  # DA-000004, ET03-W02
-SUP = "lvr-sup@da.local"  # Supervisor ET04-W01
-SUP_OTHER = "lvr-sup3@da.local"  # Supervisor ET03-W02
-EXEC = "lvr-exec@da.local"  # Executive ET04
+DA1 = "lvr-da1@da.local"  # DA-000001, primary Woreda
+DA3 = "lvr-da3@da.local"  # DA-000004, other Woreda
+SUP = "lvr-sup@da.local"  # Supervisor, primary Woreda
+SUP_OTHER = "lvr-sup3@da.local"  # Supervisor, other Woreda
+EXEC = "lvr-exec@da.local"  # Executive, primary Region
 ALL_USERS = (DA1, DA3, SUP, SUP_OTHER, EXEC)
 DOCTYPES = ("DA Notification", "DA Leave Request", "DA RBAC Assignment")
 
@@ -56,17 +59,24 @@ class TestLeaveRequests(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		self._clean()
+		require_geo_masters()
 		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(SUP_OTHER, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA3, C.ROLE_DA, da_id="DA-000004", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		bind_da_user(DA1, "DA-000001")
+		bind_da_user(DA3, "DA-000004")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(
+			DA3, C.ROLE_DA, da_id="DA-000004", region_scope=g["other_region"], woreda_scope=g["other_woreda"]
+		)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope=g["other_region"], woreda_scope=g["other_woreda"])
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=g["region"])
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -91,10 +101,11 @@ class TestLeaveRequests(IntegrationTestCase):
 	# -- submit ---------------------------------------------------------------
 
 	def test_submit_creates_pending_with_scope_and_days(self):
+		g = aligned_mock_geo()
 		out = self._submit()
 		self.assertEqual(out["status"], "Pending")
 		self.assertEqual(out["da_id"], "DA-000001")
-		self.assertEqual((out["region"], out["woreda"]), ("ET04", "ET04-W01"))
+		self.assertEqual((out["region"], out["woreda"]), (g["region"], g["woreda"]))
 		self.assertEqual(out["days"], 3)
 		self.assertEqual(out["requested_by"], DA1)
 
@@ -242,10 +253,6 @@ class TestLeaveRequests(IntegrationTestCase):
 
 	def test_scheduler_retries_failed_registry_push(self):
 		"""A registry outage at approval time is recorded, not fatal; the next run converges."""
-		from unittest.mock import patch
-
-		from da_services.integrations.da_registry.client import DARegistryUnavailable
-
 		out = self._submit(from_date=today(), to_date=add_days(today(), 1))
 		with patch.object(
 			MockDARegistryClient, "push_lifecycle_outcome", side_effect=DARegistryUnavailable("registry down")

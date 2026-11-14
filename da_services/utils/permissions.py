@@ -60,8 +60,8 @@ class ScopeContext:
 		the grant is **not** widened to the Region: that would silently give a Zone
 		Supervisor the whole Region whenever registry data is incomplete. The denial is
 		reported as ``SCOPE_UNRESOLVED`` instead of ``OUT_OF_SCOPE`` so operators can tell
-		missing registry data from a wrong grant. Follow-up: resolve the Zone from the
-		Woreda through master data once `DA Administrative Area` exists.
+		missing registry data from a wrong grant. Callers that hold a Woreda may resolve
+		Zone via ``da_services.services.geo.ancestors_of_woreda`` when needed.
 		"""
 		if self.unrestricted:
 			return True, "unrestricted"
@@ -112,7 +112,6 @@ def get_scope_context(user: str | None = None) -> ScopeContext:
 	regions: set[str] = set()
 	zones: set[str] = set()
 	woredas: set[str] = set()
-	da_ids: set[str] = set()
 	for row in active_assignments(user):
 		if row.region_scope:
 			regions.add(row.region_scope)
@@ -120,8 +119,13 @@ def get_scope_context(user: str | None = None) -> ScopeContext:
 			zones.add(row.zone_scope)
 		if row.woreda_scope:
 			woredas.add(row.woreda_scope)
-		if row.role == C.ROLE_DA and row.da_id:
-			da_ids.add(row.da_id)
+
+	# DA-ID is on the User (da_registry_id), not collected from RBAC row copies.
+	da_ids: set[str] = set()
+	if C.ROLE_DA in roles:
+		registry_id = frappe.db.get_value("User", user, "da_registry_id")
+		if registry_id:
+			da_ids.add(registry_id)
 
 	return ScopeContext(
 		user=user,

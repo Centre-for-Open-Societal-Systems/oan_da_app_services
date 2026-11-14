@@ -107,14 +107,16 @@
   },
   {
    "fieldname": "region",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Region",
+   "options": "DA Region",
    "read_only": 1
   },
   {
    "fieldname": "zone",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Zone",
+   "options": "DA Zone",
    "read_only": 1
   },
   {
@@ -122,10 +124,12 @@
    "fieldtype": "Column Break"
   },
   {
+   "fetch_from": "kebele.woreda",
    "fieldname": "woreda",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_standard_filter": 1,
    "label": "Woreda",
+   "options": "DA Woreda",
    "read_only": 1,
    "search_index": 1
   },

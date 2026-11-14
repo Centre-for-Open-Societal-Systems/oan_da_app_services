@@ -9,7 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
+from da_services.tests.fixtures import ensure_da_user, ensure_kebele_assignment, resolve_test_geo
 from da_services.utils.permissions import ScopeContext
 
 
@@ -18,12 +18,11 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
-		# Create administrative areas first
-		create_administrative_areas()
-
-		self.kebele_a = "ET04-W01-K05"
-		self.kebele_b = "ET04-W01-K06"
-		self.woreda = "ET04-W01"
+		# Any two Kebeles of one Woreda from the synced geography masters.
+		geo = resolve_test_geo()
+		self.kebele_a = geo["kebele"]
+		self.kebele_b = geo["kebele_alt"]
+		self.woreda = geo["woreda"]
 
 		self.da1 = "DA-VIS-001"
 		self.da2 = "DA-VIS-002"
@@ -36,24 +35,15 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		frappe.db.delete("DA Visit", {"da_id": ["in", [self.da1, self.da2, self.da3]]})
 		frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", [self.da1, self.da2, self.da3]]})
 
-		# Create Kebele assignments
+		# Create Kebele assignments (one User per DA-ID; DA Visit rows need the User too)
+		self.users = {}
 		for da_id, kebele in [
 			(self.da1, self.kebele_a),
 			(self.da2, self.kebele_a),  # Same Kebele as DA1
 			(self.da3, self.kebele_b),  # Different Kebele
 		]:
-			frappe.get_doc(
-				{
-					"doctype": "DA Kebele Assignment",
-					"user": ensure_da_user(da_id),
-					"da_id": da_id,
-					"kebele": kebele,
-					"state": "Effective",
-					"mode": "Automatic",
-					"effective_date": "2026-10-01",
-					"woreda": self.woreda,
-				}
-			).insert(ignore_permissions=True, ignore_links=True)
+			ensure_kebele_assignment(da_id, kebele)
+			self.users[da_id] = ensure_da_user(da_id)
 
 		# Create contexts
 		self.ctx_da1 = ScopeContext(
@@ -88,6 +78,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -112,6 +103,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -136,6 +128,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -159,6 +152,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -174,6 +168,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit2 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da2],
 				"da_id": self.da2,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Livestock Survey",
@@ -209,6 +204,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		own = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user(da_id),
 				"da_id": da_id,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -227,6 +223,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		other = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -245,12 +242,13 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
 				"scheduled_at": datetime.now() + timedelta(days=1),
-				# kebele intentionally omitted — registry fill may leave geography blank
+				# kebele intentionally omitted ΓÇö registry fill may leave geography blank
 			}
 		)
 		spec_svc.set_visit_specializations(visit, ["Crop Production"])
@@ -265,6 +263,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -290,6 +289,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -305,6 +305,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit2 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da3],
 				"da_id": self.da3,
 				"farmer_id": self.farmer_kebele_b,
 				"visit_type": "Livestock Survey",
@@ -338,6 +339,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit1 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -367,6 +369,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit_completed = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Crop Survey",
@@ -382,6 +385,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		visit_planned = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.users[self.da1],
 				"da_id": self.da1,
 				"farmer_id": self.farmer_kebele_a,
 				"visit_type": "Livestock Survey",

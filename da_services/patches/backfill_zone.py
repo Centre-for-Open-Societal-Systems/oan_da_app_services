@@ -1,6 +1,6 @@
 """Fill the new `zone` column on rows created before Zone joined the scope model.
 
-Order of truth, cheapest first: the Woreda's parent in `DA Administrative Area`; for a
+Order of truth, cheapest first: the Woreda's parent in `DA Woreda` / Zone masters; for a
 DA Farmer Link, the cached `DA Farmer Reference`; finally the DA Registry record of the
 row's DA. Rows that none of these can resolve stay empty and keep being denied to a
 Zone-only grant, exactly as before this column existed.
@@ -13,8 +13,8 @@ operator can see what was left empty and why.
 
 import frappe
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.integrations.da_registry.client import DARegistryError, get_client
+from da_services.services import geo
 
 DOCTYPES = ("DA Visit", "DA Task", "DA Farmer Link", "DA Profile Change Request")
 EMPTY = "ifnull(`zone`, '') = ''"
@@ -57,7 +57,7 @@ def _from_master_data(doctype: str) -> None:
 	)
 	updated = unresolved = 0
 	for woreda in woredas:
-		zone = ancestors_of(woreda).get("zone")
+		zone = geo.ancestors_of_woreda(woreda).get("zone")
 		if not zone:
 			unresolved += 1
 			continue

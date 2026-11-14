@@ -9,7 +9,6 @@ import json
 import frappe
 from frappe import _
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
 from da_services.integrations.farmer_registry import get_farmer_registry_client, intake
 from da_services.integrations.farmer_registry.client import FarmerRegistryClientError, FarmerRegistryError
@@ -24,9 +23,10 @@ from da_services.integrations.farmer_registry.mapper import (
 	registration_to_dict,
 )
 from da_services.services import constants as C
+from da_services.services import geo
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.pending_actions import derive_pending_actions_batch
-from da_services.utils.permissions import ScopeContext
+from da_services.utils.permissions import SCOPE_UNRESOLVED, ScopeContext
 
 
 def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
@@ -100,8 +100,6 @@ def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
 			covered, reason = ctx.scope_decision(region=farmer_region, woreda=farmer_woreda, zone=farmer_zone)
 
 			if not covered:
-				from da_services.utils.permissions import SCOPE_UNRESOLVED
-
 				if reason == SCOPE_UNRESOLVED:
 					frappe.throw(
 						_("Cannot verify farmer scope: missing Woreda or Zone data."),
@@ -323,11 +321,10 @@ def _empty_search_page(page: int, page_size: int) -> dict:
 
 
 def _area_names(codes: list) -> list[str]:
-	"""English names of DA Administrative Areas, for matching the registry's *_name values."""
+	"""Kebele display names from DA Kebele, for matching the registry's *_name values."""
 	if not codes:
 		return []
-	rows = frappe.get_all("DA Administrative Area", filters={"name": ("in", list(codes))}, fields=["name_en"])
-	return [r.name_en for r in rows if r.name_en]
+	return list(geo.display_names("DA Kebele", codes).values())
 
 
 def _kebele_filter_values(kebele: str):
@@ -336,16 +333,16 @@ def _kebele_filter_values(kebele: str):
 	if not raw:
 		return raw
 	row = frappe.db.get_value(
-		"DA Administrative Area",
-		raw.upper(),
-		["name", "name_en"],
+		"DA Kebele",
+		raw,
+		["name", "kebele_name", "is_active"],
 		as_dict=True,
 	)
 	if not row:
 		return raw
 	values = [row.name]
-	if row.name_en and row.name_en not in values:
-		values.append(row.name_en)
+	if row.kebele_name and row.kebele_name not in values:
+		values.append(row.kebele_name)
 	return ("in", values) if len(values) > 1 else row.name
 
 
@@ -356,12 +353,13 @@ def _require_woreda_in_scope(ctx: ScopeContext, woreda: str) -> None:
 			frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
 		return
 	if ctx.zone_scopes:
-		woreda_zone = ancestors_of(woreda).get("zone")
+		tree = geo.ancestors_of_woreda(woreda)
+		woreda_zone = tree.get("zone")
 		if not woreda_zone:
 			frappe.throw(
 				_(
-					"Woreda {0} is not in the administrative master data (no Zone known); "
-					"ask an Administrator to load it before filtering by it."
+					"Woreda {0} is not in the geography masters (no Zone known); "
+					"run geo_master_sync before filtering by it."
 				).format(woreda),
 				frappe.ValidationError,
 			)
@@ -369,10 +367,16 @@ def _require_woreda_in_scope(ctx: ScopeContext, woreda: str) -> None:
 			frappe.throw(_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError)
 		return
 	if ctx.region_scopes:
-		woreda_region = ancestors_of(woreda).get("region") or (
-			woreda.split("-")[0] if "-" in woreda else None
-		)
-		if woreda_region and woreda_region not in ctx.region_scopes:
+		woreda_region = geo.ancestors_of_woreda(woreda).get("region")
+		if not woreda_region:
+			frappe.throw(
+				_(
+					"Woreda {0} is not in the geography masters (no Region known); "
+					"run geo_master_sync before filtering by it."
+				).format(woreda),
+				frappe.ValidationError,
+			)
+		if woreda_region not in ctx.region_scopes:
 			frappe.throw(_("Woreda {0} is not in your Region scope.").format(woreda), frappe.PermissionError)
 		return
 	frappe.throw(_("You do not have scope to search by Woreda."), frappe.PermissionError)
@@ -413,8 +417,7 @@ def list_farmers(
 	# Scope filters
 	# - DA: all farmers in the assigned Kebele(s), not just manually linked ones (DA-211).
 	# - Supervisor: their Woreda(s); the permission_query_conditions hook applies this.
-	# - Zone-scoped officers: the Woredas under their Zone, via the zone column on
-	#   DA Farmer Reference (Zone scope) and ancestors_of() for the woreda filter.
+	# - Zone-scoped officers: the Woredas under their Zone via geo.ancestors_of_woreda.
 	# - Executive (Region): their Region, read-only.
 	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
 		# DA sees all farmers in assigned Kebele (DA-211 change)
@@ -447,13 +450,12 @@ def list_farmers(
 					filters["woreda"] = woreda
 				elif ctx.zone_scopes:
 					# Zone-scoped: the Woreda must sit under one of their Zones in master data.
-					# An unknown Woreda is a data problem, not a scope problem; say so.
-					woreda_zone = ancestors_of(woreda).get("zone")
+					woreda_zone = geo.ancestors_of_woreda(woreda).get("zone")
 					if not woreda_zone:
 						frappe.throw(
 							_(
-								"Woreda {0} is not in the administrative master data (no Zone known); "
-								"ask an Administrator to load it before filtering by it."
+								"Woreda {0} is not in the geography masters (no Zone known); "
+								"run geo_master_sync before filtering by it."
 							).format(woreda),
 							frappe.ValidationError,
 						)
@@ -463,10 +465,16 @@ def list_farmers(
 						)
 					filters["woreda"] = woreda
 				elif ctx.region_scopes:
-					# Region-scoped: woreda must be in their region
-					# Simplified check: assume woreda code starts with region code
-					woreda_region = woreda.split("-")[0] if "-" in woreda else None
-					if woreda_region and woreda_region not in ctx.region_scopes:
+					woreda_region = geo.ancestors_of_woreda(woreda).get("region")
+					if not woreda_region:
+						frappe.throw(
+							_(
+								"Woreda {0} is not in the geography masters (no Region known); "
+								"run geo_master_sync before filtering by it."
+							).format(woreda),
+							frappe.ValidationError,
+						)
+					if woreda_region not in ctx.region_scopes:
 						frappe.throw(
 							_("Woreda {0} is not in your Region scope.").format(woreda),
 							frappe.PermissionError,

@@ -1,57 +1,59 @@
-# Administrative areas from Master Data
+# Geography masters from Master Data
 
-DA Services keeps a copy of Ethiopia's Region / Zone / Woreda / Kebele tree in
-`DA Administrative Area`. Scope checks, the Kebele picker and the assignment screens
-(`GET /api/v1/da-services/master/areas`, `GET /master/kebeles`) read it. The tree itself is
-owned by the platform's Master Data service, so DA Services syncs it instead of seeding it
-by hand.
+DA Services keeps Ethiopia's Country / Region / Zone / Woreda / Kebele tree as Frappe
+DocTypes (`DA Country`, `DA Region`, `DA Zone`, `DA Woreda`, `DA Kebele`). Desk Links,
+RBAC / Kebele Assignment scopes, Visit / Task stamps, and User Permissions read these
+masters. The tree is owned by the platform's Master Data service; DA Services syncs it
+instead of seeding codes by hand.
+
+There is **no** `DA Administrative Area` DocType and no `area_sync` module. Use
+`geo_master_sync` only.
 
 ## What the sync does
 
-`da_services.services.area_sync.sync_areas` walks Master Data level by level
+`da_services.services.geo_master_sync.sync_geo_masters` walks Master Data level by level
 (`POST /geo/get_all_geo_levels`, then `POST /geo/get_geo_level_values` per parent) and
-upserts one row per area:
+upserts one row per value into the matching DocType.
 
-| Master Data | DA Administrative Area |
+| Master Data | Frappe DocType |
 |---|---|
-| `level_value_id` (P-code, e.g. `ET010101`) | `code` (the row name) |
-| `level_mnemonic` region / zone / woreda / kebele | `level` Region / Zone / Woreda / Kebele |
-| `parent_level_value_id` | `parent_area` (a Region has none; the country level is not kept) |
-| `level_value_mnemonic` | `name_en` |
+| country | `DA Country` |
+| region | `DA Region` |
+| zone | `DA Zone` (Link parent: Region) |
+| woreda | `DA Woreda` (Link parent: Zone) |
+| kebele | `DA Kebele` (Link parent: Woreda) |
 
-Rows carry `source = master_data`, `source_version` (the sync time) and `last_synced_at`.
-An area Master Data no longer lists is set `active = 0`, never deleted: assignments and
-visits link to it.
+Rows that Master Data no longer lists are set `is_active = 0`, never deleted: other
+records still Link to them.
 
-The run is one transaction and refuses to change anything when the answer cannot be
-trusted: a call fails half-way (rolled back), a level comes back empty, or more than a
-fifth of the areas the sync owns would be deactivated (`MAX_DEACTIVATION_SHARE`), which
-means Master Data answered partially. A code listed twice keeps its first parent.
-
-The same P-codes come back from the DA Registry on every DA record
-(`region_code`, `woreda_code`, `geo_lowest_level_value_id`), so after the sync the
-registry's codes, the RBAC scopes and the area master agree.
+The run refuses to change anything when the answer cannot be trusted (login or call
+failure, empty level, or more than a fifth of active rows would deactivate).
 
 ## Running it
 
-Master Data takes the same staff token as the DA Registry. A scheduled job or a bench
-command has no signed-in user, so the sync uses the **service identity** in
-`site_config.json` (`da_registry_keycloak`: the `da-services-backend` client credentials,
-or a staff user's portal login on dev), whatever `da_registry_auth` is set to for the
-user-facing calls. With `da_registry_backend: "mock"` it loads the demo geography.
+Credentials come from **DA Services Settings** (`master_sync_username` / password /
+login_key) plus `master_data_domain` in site config. See `geo_master_sync` module docs.
 
 First load after a deploy, and whenever the tree changes:
 
 ```
-bench --site <site> execute da_services.services.area_sync.sync_areas
+bench --site <site> execute da_services.services.geo_master_sync.sync_geo_masters
 ```
 
-It prints the counts: `{"inserted": …, "updated": …, "unchanged": …, "deactivated": …}`.
-The scheduler then runs it daily on the long queue (`daily_long`, `sync_areas_scheduled`);
-a run that cannot reach Master Data or has no service identity writes one Error Log entry
-and skips.
+The scheduler runs it daily on the long queue
+(`da_services.services.geo_master_sync.sync_geo_masters_scheduled`).
 
-Master Data answers one level per parent, so a full tree is roughly one call per Region,
-Zone and Woreda, fanned out on 8 workers. Dev (14 Regions, 125 Zones, 1,362 Woredas,
-19,535 Kebeles) loads in about six minutes the first time; later runs read every existing
-row once and write only what changed.
+## Desk and API usage
+
+- Geography fields are **Link** fields to these DocTypes (not free-text Data).
+- Cascading Desk pickers use `set_query` / `da_services.geo_cascade` (Visit pattern).
+- Assignment master lists (`GET …/master/areas`, `GET …/master/kebeles`) read via
+  `da_services.services.geo.list_masters` / `kebeles_for_woreda`.
+- Thin parent-chain helpers live in `da_services.services.geo` (`ancestors_of_kebele`,
+  etc.). Prefer Link + `fetch_from` over custom re-validation.
+
+## Tests
+
+Integration tests call `require_geo_masters` / `resolve_test_geo` (and
+`require_named_masters` when a test is coupled to mock-registry fixture codes). They
+must not invent Admin Area trees.

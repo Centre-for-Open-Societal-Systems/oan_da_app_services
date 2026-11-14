@@ -6,8 +6,11 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmer_links as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
+from da_services.tests.fixtures import ensure_kebele_assignment, resolve_test_geo
 from da_services.utils.permissions import ScopeContext
+
+# A Woreda code that is never the resolved one; the scope check is a membership test.
+OTHER_WOREDA = "XX-OTHER-WOREDA"
 
 
 class TestFarmerLinks(IntegrationTestCase):
@@ -15,13 +18,13 @@ class TestFarmerLinks(IntegrationTestCase):
 
 	def setUp(self):
 		"""Set up test data."""
+		geo = resolve_test_geo()  # any Kebele of the synced geography masters
 		self.da_id = "DA-TEST-001"
 		self.farmer_id = "FARMER-TEST-001"
-		self.kebele = "ET04-W01-K03"
-		self.woreda = "ET04-W01"
+		self.kebele = geo["kebele"]
+		self.woreda = geo["woreda"]
 		self.supervisor_user = "supervisor@test.com"
 
-		create_administrative_areas()
 		if not frappe.db.exists("User", self.supervisor_user):
 			user = frappe.new_doc("User")
 			user.email = self.supervisor_user
@@ -35,18 +38,8 @@ class TestFarmerLinks(IntegrationTestCase):
 		frappe.db.delete("DA Farmer Reference", {"farmer_id": ["in", [self.farmer_id, "FARMER-TEST-002"]]})
 
 		# Create DA Kebele Assignment with Manual mode
-		self.assignment = frappe.get_doc(
-			{
-				"doctype": "DA Kebele Assignment",
-				"user": ensure_da_user(self.da_id),
-				"da_id": self.da_id,
-				"kebele": self.kebele,
-				"state": "Effective",
-				"mode": "Manual",
-				"effective_date": "2026-10-01",
-				"woreda": self.woreda,
-			}
-		).insert(ignore_permissions=True, ignore_links=True)
+		ensure_kebele_assignment(self.da_id, self.kebele, mode="Manual")
+		self.assignment = frappe.get_doc("DA Kebele Assignment", {"da_id": self.da_id, "state": "Effective"})
 
 		for farmer_id in (self.farmer_id, "FARMER-TEST-002"):
 			frappe.get_doc(
@@ -169,7 +162,7 @@ class TestFarmerLinks(IntegrationTestCase):
 		wrong_ctx = ScopeContext(
 			user=self.supervisor_user,
 			roles={"Supervisor"},
-			woreda_scopes={"ET03-W02"},  # Different Woreda
+			woreda_scopes={OTHER_WOREDA},  # Different Woreda
 			unrestricted=False,
 		)
 

@@ -4,16 +4,28 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now_datetime, today
 
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import tasks
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "task-da1@da.local"  # DA-000001, ET04 / ET04-W01
-DA2 = "task-da2@da.local"  # DA-000002, ET04 / ET04-W01
-DA3 = "task-da3@da.local"  # DA-000003, ET03
-SUP = "task-sup@da.local"  # Supervisor ET04 / ET04-W01
-EXEC = "task-exec@da.local"  # Executive ET03
+# Geography is the mock DA Registry's, rewritten from the synced masters (aligned_mock_geo).
+DA1 = "task-da1@da.local"  # DA-000001, primary Woreda
+DA2 = "task-da2@da.local"  # DA-000002, primary Woreda
+DA3 = "task-da3@da.local"  # DA-000003, other Region
+SUP = "task-sup@da.local"  # Supervisor, primary Woreda
+EXEC = "task-exec@da.local"  # Executive, other Region
 COMMS = "task-comms@da.local"
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, DA2, DA3, SUP, EXEC, COMMS)
+DA_IDS = ("DA-000001", "DA-000002", "DA-000003")
 
 
 def _user(email, roles):
@@ -44,19 +56,28 @@ def _grant(user, role, **kw):
 class TestDATask(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
 		_user(DA1, [C.ROLE_DA])
 		_user(DA2, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
+		# A DA's own DA-ID is read from User.da_registry_id.
+		bind_da_user(DA1, "DA-000001")
+		bind_da_user(DA2, "DA-000002")
+		bind_da_user(DA3, "DA-000003")
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA3, C.ROLE_DA, da_id="DA-000003", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(
+			DA3, C.ROLE_DA, da_id="DA-000003", region_scope=g["other_region"], woreda_scope=g["other_woreda"]
+		)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=g["other_region"])
 		_grant(COMMS, C.ROLE_COMMS)
 		# Seed: two tasks for DA-000001 (one urgent, due today), one for DA-000002, one for DA-000003
 		self.t1 = tasks.create_task(
@@ -87,15 +108,14 @@ class TestDATask(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	# -- doctype rules -----------------------------------------------------------
 
 	def test_scope_codes_are_filled_from_registry_posting(self):
 		doc = frappe.get_doc("DA Task", self.t1["name"])
-		self.assertEqual((doc.region, doc.woreda), ("ET04", "ET04-W01"))
+		self.assertEqual((doc.region, doc.woreda), (self.geo["region"], self.geo["woreda"]))
 		self.assertEqual(doc.status, "Open")
 		self.assertEqual(doc.created_by_user, "Administrator")
 		self.assertTrue(doc.name.startswith("DA-TSK-"))

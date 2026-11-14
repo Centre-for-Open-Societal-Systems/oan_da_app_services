@@ -7,19 +7,34 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
 from da_services.api.v1 import profile_self as api
+from da_services.integrations.da_registry.client import DARegistryUnavailable
 from da_services.integrations.da_registry.mapper import PROFILE_FIELDS
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import profile as svc
-from da_services.tests.fixtures import ensure_doctype_schema
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	ensure_doctype_schema,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "pcr-da1@da.local"  # DA-000001, ET04 / ET04-W01
-DA3 = "pcr-da3@da.local"  # DA-000004, ET03 / ET03-W02
-SUP = "pcr-sup@da.local"  # Supervisor ET04-W01
-SUP_OTHER = "pcr-sup3@da.local"  # Supervisor ET03-W02
-EXEC = "pcr-exec@da.local"  # Executive ET04
-DOCTYPES = ("DA Notification", "DA Profile Change Request", "DA RBAC Assignment")
+# Geography is the mock DA Registry's, rewritten from the synced masters (aligned_mock_geo).
+DA1 = "pcr-da1@da.local"  # DA-000001, primary Woreda
+DA3 = "pcr-da3@da.local"  # DA-000004, other Region's Woreda
+SUP = "pcr-sup@da.local"  # Supervisor, primary Woreda
+SUP_OTHER = "pcr-sup3@da.local"  # Supervisor, other Region's Woreda
+EXEC = "pcr-exec@da.local"  # Executive, primary Region
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, DA3, SUP, SUP_OTHER, EXEC)
+DA_IDS = ("DA-000001", "DA-000004")
+
+
+def _count_requests() -> int:
+	return frappe.db.count("DA Profile Change Request", {"da_id": ("in", DA_IDS)})
 
 
 def _user(email, roles):
@@ -50,26 +65,31 @@ class TestProfileChangeRequest(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		ensure_doctype_schema("DA Profile Change Request")
-		for dt in DOCTYPES:
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		require_geo_masters()
 		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
+		bind_da_user(DA1, "DA-000001")  # a DA's own DA-ID is read from User.da_registry_id
+		bind_da_user(DA3, "DA-000004")
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(SUP_OTHER, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA3, C.ROLE_DA, da_id="DA-000004", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(
+			DA3, C.ROLE_DA, da_id="DA-000004", region_scope=g["other_region"], woreda_scope=g["other_woreda"]
+		)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope=g["other_region"], woreda_scope=g["other_woreda"])
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=g["region"])
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		frappe.local.request = None
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in DOCTYPES:
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		MockDARegistryClient.reset()
 
@@ -99,13 +119,13 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		r = out["data"]
 		self.assertEqual(
 			(r["status"], r["section"], r["da_id"], r["woreda"]),
-			("Pending", "Contact", "DA-000001", "ET04-W01"),
+			("Pending", "Contact", "DA-000001", self.geo["woreda"]),
 		)
 		self.assertEqual(r["changes"]["mobile"], {"from": "+251911000001", "to": "+251911999888"})
 		self.assertEqual(r["requested_by"], DA1)
 		again = self._submit(client_op_id="pcr-op-1")
 		self.assertEqual(again["data"]["name"], r["name"])
-		self.assertEqual(frappe.db.count("DA Profile Change Request"), 1)
+		self.assertEqual(_count_requests(), 1)
 		# shows on the profile while pending; registry unchanged
 		frappe.set_user(DA1)
 		d = api.my_profile()["data"]
@@ -126,7 +146,7 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		for field in ("first_name", "full_name", "fayda_id", "gender"):
 			out = api.submit(changes={field: "X"}, reason="test")
 			self.assertEqual(out["status"], "error", (field, out))
-		self.assertEqual(frappe.db.count("DA Profile Change Request"), 0)
+		self.assertEqual(_count_requests(), 0)
 
 	def test_submit_validation(self):
 		frappe.set_user(DA1)
@@ -145,7 +165,7 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			out = api.submit(**body)
 			self.assertEqual(out["status"], "error", body)
 			self.assertEqual(frappe.response.get("http_status_code"), 400, body)
-		self.assertEqual(frappe.db.count("DA Profile Change Request"), 0)
+		self.assertEqual(_count_requests(), 0)
 
 	def test_one_open_request_per_section_and_cancel(self):
 		first = self._submit()["data"]
@@ -244,10 +264,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual(api.cancel(r["name"])["status"], "error")
 
 	def test_registry_failure_keeps_the_approval(self):
-		from unittest.mock import patch
-
-		from da_services.integrations.da_registry.client import DARegistryUnavailable
-
 		r = self._submit()["data"]
 		frappe.set_user(SUP)
 		with patch.object(
@@ -270,7 +286,7 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			out = api.submit(changes={"language": "am"}, reason="test")
 			self.assertEqual(out["status"], "error", out)
 			self.assertIn("does not hold", out["message"])
-		self.assertEqual(frappe.db.count("DA Profile Change Request"), 0)
+		self.assertEqual(_count_requests(), 0)
 
 	def test_a_change_waiting_for_the_registry_blocks_the_next_one_in_that_section(self):
 		r = self._submit()["data"]

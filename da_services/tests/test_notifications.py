@@ -5,14 +5,25 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, today
 
 from da_services.api.v1 import notifications as api
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import notifications as svc
 from da_services.services import visits
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "ntf-da1@da.local"  # DA-000001
 DA2 = "ntf-da2@da.local"  # DA-000002
 COMMS = "ntf-comms@da.local"
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, DA2, COMMS)
+DA_IDS = ("DA-000001", "DA-000002")
 
 
 def _user(email, roles):
@@ -43,13 +54,17 @@ def _grant(user, role, **kw):
 class TestDANotification(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		g = aligned_mock_geo()  # the mock DA Registry posting of DA-000001 / DA-000002
 		_user(DA1, [C.ROLE_DA])
 		_user(DA2, [C.ROLE_DA])
+		bind_da_user(DA1, "DA-000001")  # a DA's own DA-ID is read from User.da_registry_id
+		bind_da_user(DA2, "DA-000002")
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope=g["region"], woreda_scope=g["woreda"])
 		_grant(COMMS, C.ROLE_COMMS)
 		self.n1 = svc.notify(
 			DA1,
@@ -65,8 +80,7 @@ class TestDANotification(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	# -- doctype --------------------------------------------------------------------

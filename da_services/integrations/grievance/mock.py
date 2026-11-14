@@ -2,11 +2,16 @@
 
 Fixture grievances cover the states the Grievances page has to handle: open, in-progress,
 resolved, and escalated.
+
+Geography on fixtures is rewritten from synced masters (``live_fixture_geo``). Do not
+hardcode invented ``ET04-W01`` codes as the live woreda.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+
+from da_services.integrations.da_registry.mock import live_fixture_geo
 
 from .client import GrievanceClient, GrievanceNotFound
 from .mapper import location_text, to_grievance_detail, to_grievance_summary
@@ -20,6 +25,7 @@ from .schemas import (
 
 _COUNTER = 100
 
+# Identity + status fixtures. Geography filled by ``fixture_grievances_aligned``.
 FIXTURE_GRIEVANCES: dict[str, dict] = {
 	"GRV-000001": {
 		"ticket_id": "GRV-000001",
@@ -31,8 +37,8 @@ FIXTURE_GRIEVANCES: dict[str, dict] = {
 		"complainant_id": "DA-000001",
 		"complainant_name": "Abebe Kebede",
 		"complainant_role": "Development Agent",
-		"region": "ET04",
-		"woreda": "ET04-W01",
+		"region": None,
+		"woreda": None,
 		"assigned_to": None,
 		"resolution": None,
 		"created_at": "2026-09-20T10:00:00Z",
@@ -50,15 +56,15 @@ FIXTURE_GRIEVANCES: dict[str, dict] = {
 	"GRV-000002": {
 		"ticket_id": "GRV-000002",
 		"subject": "Training schedule conflict",
-		"description": "Two training sessions scheduled at the same time for ET04-W01-K03.",
+		"description": "Two training sessions scheduled at the same time.",
 		"status": "In Progress",
 		"category": "Training",
 		"subcategory": "Scheduling",
 		"complainant_id": "DA-000001",
 		"complainant_name": "Abebe Kebede",
 		"complainant_role": "Development Agent",
-		"region": "ET04",
-		"woreda": "ET04-W01",
+		"region": None,
+		"woreda": None,
 		"assigned_to": "supervisor@example.com",
 		"resolution": None,
 		"created_at": "2026-09-18T08:30:00Z",
@@ -89,8 +95,8 @@ FIXTURE_GRIEVANCES: dict[str, dict] = {
 		"complainant_id": "DA-000002",
 		"complainant_name": "Marta Tesfaye",
 		"complainant_role": "Development Agent",
-		"region": "ET04",
-		"woreda": "ET04-W01",
+		"region": None,
+		"woreda": None,
 		"assigned_to": "supervisor@example.com",
 		"resolution": "KPI data corrected in the system.",
 		"created_at": "2026-09-10T09:00:00Z",
@@ -118,6 +124,23 @@ FIXTURE_GRIEVANCES: dict[str, dict] = {
 		],
 	},
 }
+
+
+def fixture_grievances_aligned(geo: dict | None = None) -> dict[str, dict]:
+	"""FIXTURE_GRIEVANCES stamped onto the primary live Woreda chain."""
+	if geo is None:
+		primary, _other = live_fixture_geo()
+		region, woreda = primary["region"], primary["woreda"]
+	else:
+		region, woreda = geo["region"], geo["woreda"]
+	out: dict[str, dict] = {}
+	for ticket_id, row in FIXTURE_GRIEVANCES.items():
+		rec = dict(row)
+		rec["region"] = region
+		rec["woreda"] = woreda
+		out[ticket_id] = rec
+	return out
+
 
 _FILTER_FIELDS = {
 	"category": "category",
@@ -206,7 +229,9 @@ class MockGrievanceClient(GrievanceClient):
 	_instance: MockGrievanceClient | None = None
 
 	def __init__(self, records: dict[str, dict] | None = None):
-		self._records = {k: dict(v) for k, v in (records or FIXTURE_GRIEVANCES).items()}
+		# Default records always come from live masters (fail closed if empty).
+		source = records if records is not None else fixture_grievances_aligned()
+		self._records = {k: dict(v) for k, v in source.items()}
 		self._by_uuid: dict[str, str] = {}
 
 	@classmethod

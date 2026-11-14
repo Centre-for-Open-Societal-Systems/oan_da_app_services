@@ -18,8 +18,13 @@ def resolve_user_profile_hook(user_doc, roles=None) -> tuple[str, dict | None]:
 	if not da_roles:
 		return "da_services", None
 
+	# Canonical DA-ID for the signed-in user (User.da_registry_id); scope.da_ids stays
+	# the grant set for officers who may cover several DAs.
+	da_id = frappe.db.get_value("User", user_doc.name, "da_registry_id") or None
+
 	return "da_services", {
 		"roles": sorted(da_roles),
+		"da_id": da_id,
 		"scope": {
 			"regions": sorted(ctx.region_scopes),
 			"zones": sorted(ctx.zone_scopes),

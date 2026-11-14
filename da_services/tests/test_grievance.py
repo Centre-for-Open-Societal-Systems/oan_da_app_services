@@ -4,8 +4,9 @@ import json
 
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import today
+from frappe.utils import add_to_date, now_datetime, today
 
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.integrations.grievance.client import GrievanceNotFound, get_client
 from da_services.integrations.grievance.mock import MockGrievanceClient
 from da_services.integrations.grievance.queue import enqueue_event, process_single, retry_failed
@@ -14,11 +15,34 @@ from da_services.integrations.grievance.schemas import (
 	GrievanceSubmission,
 )
 from da_services.services import constants as C
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	require_geo_masters,
+)
 
 SUPERVISOR = "grv-test-supervisor@da.local"
 DA_USER = "grv-test-da@da.local"
 COMMS_USER = "grv-test-comms@da.local"
 NO_ROLE_USER = "grv-test-norole@da.local"
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (SUPERVISOR, DA_USER, COMMS_USER, NO_ROLE_USER)
+GRIEVANCE_EVENT_TYPES = ("Grievance Submit", "Grievance Action")
+
+
+def _mark_start(test) -> None:
+	"""Remember when the test began so tearDown can remove only the queue rows it wrote."""
+	test._started_at = add_to_date(now_datetime(), seconds=-1)
+
+
+def _cleanup_queue_rows(test) -> None:
+	"""Grievance queue rows written during this test (the processor runs as Administrator)."""
+	frappe.db.delete(
+		"DA Integration Event",
+		{"event_type": ("in", GRIEVANCE_EVENT_TYPES), "creation": (">=", test._started_at)},
+	)
 
 
 def _user(email, roles=None):
@@ -81,7 +105,8 @@ class TestMockGrievanceClient(IntegrationTestCase):
 		self.assertEqual(len(items), 3)
 
 	def test_list_filters_by_region(self):
-		_items, total = self.client.list_grievances(region="ET04")
+		region = aligned_mock_geo()["region"]
+		_items, total = self.client.list_grievances(region=region)
 		self.assertEqual(total, 3)
 
 	def test_list_filters_by_status(self):
@@ -170,11 +195,13 @@ class TestQueueProcessor(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		_use_mock_grievance(self)
 		MockGrievanceClient.reset()
-		frappe.db.delete("DA Integration Event")
+		_mark_start(self)  # every case looks rows up by name; the table need not be empty
 
 	def tearDown(self):
 		_restore_grievance_backend(self)
 		frappe.set_user("Administrator")
+		_cleanup_queue_rows(self)
+		frappe.db.commit()  # nosemgrep: the cases above commit their own rows
 
 	def test_enqueue_creates_pending_event(self):
 		name = enqueue_event(
@@ -288,19 +315,28 @@ class TestGrievanceAPI(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		_use_mock_grievance(self)
 		MockGrievanceClient.reset()
-		frappe.db.delete("DA RBAC Assignment")
-		frappe.db.delete("DA Integration Event")
+		cleanup_test_rows(users=USERS)
+		_mark_start(self)
 		_user(SUPERVISOR, [C.ROLE_SUPERVISOR])
 		_user(DA_USER, [C.ROLE_DA])
+		bind_da_user(DA_USER, "DA-000001")  # a DA's own DA-ID is read from User.da_registry_id
 		_user(COMMS_USER, [C.ROLE_COMMS])
 		_user(NO_ROLE_USER)
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(COMMS_USER, C.ROLE_COMMS, region_scope="ET04")
+		# Scopes are Links to the synced masters, matching the mock DA Registry's DA-000001 posting.
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
+		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(COMMS_USER, C.ROLE_COMMS, region_scope=g["region"])
 
 	def tearDown(self):
 		_restore_grievance_backend(self)
 		frappe.set_user("Administrator")
+		cleanup_test_rows(users=USERS)
+		_cleanup_queue_rows(self)
+		frappe.db.commit()  # nosemgrep: the request handler commits the rows these cases create
 		super().tearDown()
 
 	def _request(self, path, method="GET", data=None, user=None):
@@ -408,6 +444,9 @@ class TestGrievanceAPI(IntegrationTestCase):
 		self.assertIn(res.status_code, (403, 401))
 
 	def test_retry_sync_as_admin(self):
+		# The retry is site-wide: it resets every Failed queue row, including ones this
+		# module did not write, so compare against the queue as it stands.
+		failed_before = frappe.db.count("DA Integration Event", {"status": "Failed"})
 		res = self._request(
 			"/api/v1/da-services/grievances/sync/retry",
 			method="POST",
@@ -416,7 +455,7 @@ class TestGrievanceAPI(IntegrationTestCase):
 		)
 		self.assertEqual(res.status_code, 200)
 		body = json.loads(res.get_data(as_text=True))
-		self.assertEqual(body["data"]["count"], 0)
+		self.assertEqual(body["data"]["count"], failed_before)
 
 	def test_da_sees_own_ticket_after_submit(self):
 		res = self._request(

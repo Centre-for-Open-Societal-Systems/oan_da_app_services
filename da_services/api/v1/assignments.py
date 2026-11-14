@@ -8,8 +8,7 @@ GET  /api/v1/da-services/master/areas?level=&parent=&q=
 GET  /api/v1/da-services/master/kebeles?woreda=
 
 A Supervisor lists and assigns within their Woreda; an Executive reads their Region;
-a DA reads their own row. The Kebele list comes from DA Administrative Area, which is
-seeded until the master source is wired.
+a DA reads their own row. The Kebele list comes from DA Kebele (geo_master_sync).
 """
 
 from __future__ import annotations

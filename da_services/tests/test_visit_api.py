@@ -12,15 +12,29 @@ from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
 from da_services.api.v1 import visits as api
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import visits as svc
-from da_services.tests.fixtures import ensure_kebele_assignment
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	ensure_kebele_assignment,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "vapi-da1@da.local"  # DA-000001, ET04 / ET04-W01
-SUP = "vapi-sup@da.local"  # Supervisor ET04-W01
-EXEC = "vapi-exec@da.local"  # Executive ET04
+# Geography is the mock DA Registry's, rewritten from the synced masters (aligned_mock_geo).
+DA1 = "vapi-da1@da.local"  # DA-000001, primary Woreda
+SUP = "vapi-sup@da.local"  # Supervisor, primary Woreda
+EXEC = "vapi-exec@da.local"  # Executive, primary Region
 COMMS = "vapi-comms@da.local"
+
+# Rows this module creates; setUp / tearDown delete only these. Several cases commit a
+# visit planned for DA-000003 (the out-of-scope DA) before provoking an API error, so its
+# rows are ours to remove too: left behind, they block later plans for the same farmer.
+USERS = (DA1, SUP, EXEC, COMMS)
+DA_IDS = ("DA-000001", "DA-000003")
 
 
 def _user(email, roles):
@@ -78,25 +92,27 @@ def _grant(user, role, **kw):
 class TestVisitAPI(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
 		_user(DA1, [C.ROLE_DA])
+		bind_da_user(DA1, "DA-000001")  # a DA's own DA-ID is read from User.da_registry_id
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=g["region"])
 		_grant(COMMS, C.ROLE_COMMS)
-		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
+		ensure_kebele_assignment("DA-000001", g["kebele"])
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		frappe.local.request = None  # API helpers then read kwargs, as the form would send them
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _plan(self, **kw):
@@ -141,14 +157,14 @@ class TestVisitAPI(IntegrationTestCase):
 		a = self._plan(client_op_id="op-43-1")["data"]
 		b = self._plan(client_op_id="op-43-1", purpose="changed")["data"]
 		self.assertEqual(a["name"], b["name"])
-		self.assertEqual(frappe.db.count("DA Visit"), 1)
+		self.assertEqual(frappe.db.count("DA Visit", {"da_id": "DA-000001"}), 1)
 
 	def test_supervisor_plans_for_a_da_in_woreda_only(self):
 		frappe.set_user(SUP)
 		out = self._plan(da_id="DA-000001")
 		self.assertEqual(out["status"], "success", out)
 		self.assertEqual(out["data"]["assigned_by"], SUP)
-		out = self._plan(da_id="DA-000003")  # ET03, outside the Supervisor's Woreda
+		out = self._plan(da_id="DA-000003")  # other Region, outside the Supervisor's Woreda
 		self.assertEqual(out["status"], "error")
 		self.assertEqual(frappe.response.get("http_status_code"), 403)
 		out = self._plan()  # officer must name the DA

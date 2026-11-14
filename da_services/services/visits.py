@@ -16,6 +16,8 @@ from io import BytesIO
 import frappe
 from frappe import _
 from frappe.utils import get_datetime, getdate, now_datetime
+from PIL import Image
+from pypdf import PdfReader
 
 from da_services.da_services.doctype.da_visit.da_visit import (
 	COMPLETE,
@@ -25,10 +27,11 @@ from da_services.da_services.doctype.da_visit.da_visit import (
 	PLANNED_STATES,
 	RESCHEDULED,
 )
-from da_services.services import area_scope
+from da_services.services import area_scope, geo
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
 from da_services.services.da_lookup import get_da_reference
+from da_services.services.farmers import _get_da_assigned_kebeles
 from da_services.utils.permissions import ScopeContext, require_roles
 
 WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
@@ -242,10 +245,12 @@ def plan_visit(
 		)
 
 	location = location or {}
+	user = geo.require_user_for_da(da_id)
 	doc = frappe.get_doc(
 		{
 			"doctype": "DA Visit",
-			"da_id": da_id,
+			"user": user,
+			"da_id": da_id,  # known from write resolve; DocType also fetch_from user on Desk
 			"farmer_id": farmer_id,
 			"visit_type": visit_type or "Crop Survey",
 			"purpose": purpose,
@@ -281,8 +286,6 @@ def _da_can_read_peer_kebele(doc, ctx: ScopeContext) -> bool:
 	"""True when a DA may read another DA's visit in a shared Effective Kebele (Phase 6)."""
 	if not doc.kebele or not ctx.da_ids:
 		return False
-	from da_services.services.farmers import _get_da_assigned_kebeles
-
 	return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
 
 
@@ -376,8 +379,6 @@ def validate_evidence(content: bytes, filename: str) -> str:
 		)
 	if kind == "pdf":
 		try:
-			from pypdf import PdfReader
-
 			if not content.startswith(b"%PDF-"):
 				raise ValueError("missing PDF header")
 			PdfReader(BytesIO(content))
@@ -385,8 +386,6 @@ def validate_evidence(content: bytes, filename: str) -> str:
 			frappe.throw(_("The file is not a readable PDF."), frappe.ValidationError)
 		return kind
 	try:
-		from PIL import Image
-
 		with Image.open(BytesIO(content)) as img:
 			img.verify()
 	except Exception:
@@ -621,8 +620,6 @@ def list_visits(
 		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
 		if not da_ids_list:
 			return [], 0
-
-		from da_services.services.farmers import _get_da_assigned_kebeles
 
 		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
 		if da_id:

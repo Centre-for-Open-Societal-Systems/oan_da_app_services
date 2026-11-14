@@ -4,17 +4,29 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, add_to_date, now_datetime, today
 
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import visits
-from da_services.tests.fixtures import ensure_kebele_assignment
+from da_services.tests.fixtures import (
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
+	ensure_kebele_assignment,
+	require_geo_masters,
+)
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "visit-da1@da.local"  # DA-000001, ET04 / ET04-W01
-DA3 = "visit-da3@da.local"  # DA-000003, ET03
-SUP = "visit-sup@da.local"  # Supervisor ET04 / ET04-W01
-EXEC = "visit-exec@da.local"  # Executive ET04
+# Geography is the mock DA Registry's, rewritten from the synced masters (aligned_mock_geo).
+DA1 = "visit-da1@da.local"  # DA-000001, primary Woreda
+DA3 = "visit-da3@da.local"  # DA-000003, other Region
+SUP = "visit-sup@da.local"  # Supervisor, primary Woreda
+EXEC = "visit-exec@da.local"  # Executive, primary Region
 COMMS = "visit-comms@da.local"
 ADMIN = "Administrator"
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, DA3, SUP, EXEC, COMMS)
+DA_IDS = ("DA-000001", "DA-000002", "DA-000003")
 
 
 def _user(email, roles):
@@ -49,21 +61,29 @@ def _ctx(user):
 class TestDAVisit(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user(ADMIN)
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		require_geo_masters()
+		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
+		self.region, self.woreda, self.kebele = g["region"], g["woreda"], g["kebele"]
+		self.kebele_alt, self.other_woreda = g["kebele_alt"], g["other_woreda"]
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
+		bind_da_user(DA1, "DA-000001")  # a DA's own DA-ID is read from User.da_registry_id
+		bind_da_user(DA3, "DA-000003")
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA3, C.ROLE_DA, da_id="DA-000003", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=self.region, woreda_scope=self.woreda)
+		_grant(
+			DA3, C.ROLE_DA, da_id="DA-000003", region_scope=g["other_region"], woreda_scope=self.other_woreda
+		)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=self.region, woreda_scope=self.woreda)
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=self.region)
 		_grant(COMMS, C.ROLE_COMMS)
 		# DA lists are scoped to the Effective Kebele posting, which matches the registry kebele.
-		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
+		ensure_kebele_assignment("DA-000001", self.kebele)
 		self.tomorrow = f"{add_days(today(), 1)} 09:00:00"
 		self.v1 = visits.plan_visit(
 			farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", purpose="Crop inspection", ctx=_ctx(DA1)
@@ -75,10 +95,7 @@ class TestDAVisit(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user(ADMIN)
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	# -- plan ---------------------------------------------------------------------
@@ -86,7 +103,7 @@ class TestDAVisit(IntegrationTestCase):
 	def test_plan_fills_posting_and_defaults(self):
 		doc = frappe.get_doc("DA Visit", self.v1["name"])
 		self.assertTrue(doc.name.startswith("DA-VIS-"))
-		self.assertEqual((doc.region, doc.woreda, doc.kebele), ("ET04", "ET04-W01", "ET04-W01-K03"))
+		self.assertEqual((doc.region, doc.woreda, doc.kebele), (self.region, self.woreda, self.kebele))
 		self.assertEqual(doc.physical_status, "Planned")
 		self.assertEqual(doc.source, "Planned")
 		self.assertIsNone(doc.assigned_by)  # self-planned
@@ -267,21 +284,21 @@ class TestDAVisit(IntegrationTestCase):
 	def test_list_area_filters_enforce_scope(self):
 		frappe.set_user(SUP)
 		try:
-			rows, total = visits.list_visits(_ctx(SUP), woreda="ET04-W01")
+			rows, total = visits.list_visits(_ctx(SUP), woreda=self.woreda)
 			self.assertEqual(total, 1)
 			self.assertEqual(rows[0]["name"], self.v1["name"])
-			rows, total = visits.list_visits(_ctx(SUP), kebele="ET04-W01-K03")
+			rows, total = visits.list_visits(_ctx(SUP), kebele=self.kebele)
 			self.assertEqual(total, 1)
 			with self.assertRaises(frappe.PermissionError):
-				visits.list_visits(_ctx(SUP), woreda="ET03-W02")
+				visits.list_visits(_ctx(SUP), woreda=self.other_woreda)
 		finally:
 			frappe.set_user(ADMIN)
 
 		frappe.set_user(DA1)
 		try:
-			rows, total = visits.list_visits(_ctx(DA1), kebele="ET04-W01-K03")
+			rows, total = visits.list_visits(_ctx(DA1), kebele=self.kebele)
 			self.assertEqual(total, 1)
 			with self.assertRaises(frappe.PermissionError):
-				visits.list_visits(_ctx(DA1), kebele="ET04-W01-K01")
+				visits.list_visits(_ctx(DA1), kebele=self.kebele_alt)  # same Woreda, not DA1's posting
 		finally:
 			frappe.set_user(ADMIN)

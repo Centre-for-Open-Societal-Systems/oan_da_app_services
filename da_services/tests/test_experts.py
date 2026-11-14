@@ -12,9 +12,11 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
 from da_services.api.v1 import experts as api
+from da_services.integrations.da_registry.client import get_client
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import experts as svc
+from da_services.tests.fixtures import aligned_mock_geo, bind_da_user, require_geo_masters
 from da_services.utils.permissions import get_scope_context
 
 DA_SELF = "ex-da-self@da.local"  # DA-000001, ET04-W01 -> only itself in the Woreda
@@ -55,18 +57,23 @@ class TestExperts(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
+		require_geo_masters()
 		MockDARegistryClient.reset()
+		g = aligned_mock_geo()
+		self.geo = g
 		_user(DA_SELF, [C.ROLE_DA])
 		_user(DA_NEW, [C.ROLE_DA])
 		_user(SUP_W01, [C.ROLE_SUPERVISOR])
 		_user(EXEC_Z02, [C.ROLE_EXECUTIVE])
 		_user(EXEC_ET04, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA_SELF, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA_NEW, C.ROLE_DA, da_id="DA-000099", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC_Z02, C.ROLE_EXECUTIVE, region_scope="ET03", zone_scope="ET03-Z02")
-		_grant(EXEC_ET04, C.ROLE_EXECUTIVE, region_scope="ET04")
+		bind_da_user(DA_SELF, "DA-000001")
+		bind_da_user(DA_NEW, "DA-000099")
+		_grant(DA_SELF, C.ROLE_DA, da_id="DA-000001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA_NEW, C.ROLE_DA, da_id="DA-000099", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(EXEC_Z02, C.ROLE_EXECUTIVE, region_scope=g["other_region"], zone_scope=g["other_zone"])
+		_grant(EXEC_ET04, C.ROLE_EXECUTIVE, region_scope=g["region"])
 		_grant(COMMS, C.ROLE_COMMS)
 
 	def tearDown(self):
@@ -116,8 +123,6 @@ class TestExperts(IntegrationTestCase):
 
 	def test_by_specialisation_groups_case_insensitively(self):
 		"""'Crop production' and 'crop PRODUCTION ' are one bucket, labelled by the first spelling."""
-		from da_services.integrations.da_registry.client import get_client
-
 		get_client()._records["DA-000004"]["specialisation"] = "crop PRODUCTION "
 		ids, meta = self._ids("Administrator")
 		self.assertEqual(ids, ["DA-000001", "DA-000004"])

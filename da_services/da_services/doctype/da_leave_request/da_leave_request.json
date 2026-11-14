@@ -125,14 +125,16 @@
   },
   {
    "fieldname": "region",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Region",
+   "options": "DA Region",
    "read_only": 1
   },
   {
    "fieldname": "zone",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Zone",
+   "options": "DA Zone",
    "read_only": 1
   },
   {
@@ -142,8 +144,9 @@
   },
   {
    "fieldname": "woreda",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Woreda",
+   "options": "DA Woreda",
    "read_only": 1
   },
   {

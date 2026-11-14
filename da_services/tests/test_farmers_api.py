@@ -1,25 +1,37 @@
 """DA-40: Farmer profile API tests (integration tests).
 
 Tests farmer listing, profile retrieval, and permission checks with RBAC enforcement.
-"""
 
-from unittest.mock import patch
+Geography is the chain the mock DA Registry stamps on DA-000001 from the synced masters
+(``aligned_mock_geo``). The mock Farmer Registry aligns fixture farmers the same way
+(``fixture_farmers_aligned``) so registry searches and cached DA Farmer Reference rows
+agree on Woreda / Kebele codes.
+"""
 
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import now_datetime, today
 
+from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.tests.fixtures import (
-	create_administrative_areas,
+	aligned_mock_geo,
+	bind_da_user,
+	cleanup_test_rows,
 	ensure_kebele_assignment,
+	require_geo_masters,
 )
 from da_services.utils.permissions import get_scope_context
 
 # Test users
-DA1 = "farmer-api-da1@da.local"  # DA-000001, ET04 / ET04-W01
-SUP = "farmer-api-sup@da.local"  # Supervisor ET04 / ET04-W01
-EXEC = "farmer-api-exec@da.local"  # Executive ET03
+DA1 = "farmer-api-da1@da.local"  # DA-000001, primary Region / Woreda
+SUP = "farmer-api-sup@da.local"  # Supervisor, primary Woreda
+EXEC = "farmer-api-exec@da.local"  # Executive, other Region
+
+# Rows this module creates; setUp / tearDown delete only these.
+USERS = (DA1, SUP, EXEC)
+DA_IDS = ("DA-000001",)
+FARMER_IDS = ("farmer-uuid-001", "farmer-uuid-002", "farmer-uuid-003")
 
 
 def _user(email, roles):
@@ -60,22 +72,31 @@ class TestFarmersAPI(IntegrationTestCase):
 		self._farmer_backend = frappe.conf.get("farmer_registry_backend")
 		frappe.conf.farmer_registry_backend = "mock"
 
-		# Clean up
-		frappe.db.delete("DA Farmer Reference")
-		frappe.db.delete("DA Farmer Link")
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
+		# Clean up rows left by an earlier run of this module only.
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=FARMER_IDS)
 
+		# Geography: the chain the mock DA Registry stamps from the synced masters.
+		require_geo_masters()
+		MockDARegistryClient.reset()  # rebuilds the fixture postings from the live masters
+		g = aligned_mock_geo()
+		self.geo = g
+		self.region, self.woreda = g["region"], g["woreda"]
+		self.kebele, self.kebele_alt = g["kebele"], g["kebele_alt"]
+		self.other_region, self.other_woreda, self.other_kebele = (
+			g["other_region"],
+			g["other_woreda"],
+			g["other_kebele"],
+		)
 		# Create users
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
+		bind_da_user(DA1, "DA-000001")  # DA scope and visits resolve the DA through User.da_registry_id
 
 		# Create RBAC grants
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope=self.region, woreda_scope=self.woreda)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=self.region, woreda_scope=self.woreda)
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=self.other_region)
 
 		# Seed farmer references (simulating cached data from registry)
 		self.farmer1_id = "farmer-uuid-001"
@@ -86,32 +107,31 @@ class TestFarmersAPI(IntegrationTestCase):
 			self.farmer1_id,
 			"FR-000101",
 			"Abebe Kebede",
-			"ET04",
-			"ET04-W01",
-			"ET04-W01-K01",
+			self.region,
+			self.woreda,
+			self.kebele,
 		)
 		self._create_farmer_reference(
 			self.farmer2_id,
 			"FR-000102",
 			"Almaz Tesfaye",
-			"ET04",
-			"ET04-W01",
-			"ET04-W01-K02",
+			self.region,
+			self.woreda,
+			self.kebele_alt,
 		)
 		self._create_farmer_reference(
 			self.farmer3_id,
 			"FR-000103",
 			"Chaltu Deressa",
-			"ET03",
-			"ET03-W02",
-			"Kebele 03",
+			self.other_region,
+			self.other_woreda,
+			self.other_kebele,
 		)
 
 		# Link farmer1 to DA1, and post the DA to that farmer's Kebele.
 		# Listing and edit rights for a DA follow the Effective Kebele assignment.
 		self._create_farmer_link(DA1, "DA-000001", self.farmer1_id, "Automatic")
-		create_administrative_areas()
-		ensure_kebele_assignment("DA-000001", "ET04-W01-K01")
+		ensure_kebele_assignment("DA-000001", self.kebele)
 
 		# Create some visits for farmer1
 		self._create_visit("DA-000001", self.farmer1_id, "Physical Visit Complete")
@@ -127,8 +147,9 @@ class TestFarmersAPI(IntegrationTestCase):
 		else:
 			frappe.conf.farmer_registry_backend = self._farmer_backend
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=FARMER_IDS)
 		frappe.db.commit()
+		MockDARegistryClient.reset()
 
 	def _create_farmer_reference(self, farmer_id, reg_id, name, region, woreda, kebele):
 		"""Helper to create DA Farmer Reference."""
@@ -175,19 +196,20 @@ class TestFarmersAPI(IntegrationTestCase):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": DA1,  # DA-000001 is bound to DA1 in setUp
 				"da_id": da_id,
 				"farmer_id": farmer_id,
 				"visit_type": "Crop Survey",
 				"physical_status": initial_status,
 				"scheduled_at": now_datetime(),
-				"region": "ET04",
-				"woreda": "ET04-W01",
-				"kebele": "ET04-W01-K01",
+				"region": self.region,
+				"woreda": self.woreda,
+				"kebele": self.kebele,
 			}
 		)
 		doc.insert(ignore_permissions=True, ignore_links=True)
 
-		# If target status is "Physical Visit Complete", follow state machine: Planned → In progress → Complete
+		# If target status is "Physical Visit Complete", follow state machine: Planned ΓåÆ In progress ΓåÆ Complete
 		if status == "Physical Visit Complete":
 			# First move to "In progress"
 			doc.reload()
@@ -218,8 +240,8 @@ class TestFarmersAPI(IntegrationTestCase):
 				"task_type": "Follow-up",
 				"status": "Open",
 				"due_at": now_datetime(),
-				"region": "ET04",
-				"woreda": "ET04-W01",
+				"region": self.region,
+				"woreda": self.woreda,
 			}
 		)
 		doc.insert(ignore_permissions=True, ignore_links=True)
@@ -249,7 +271,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["status"], "success")
 
 		farmers = result["data"]["farmers"]
-		self.assertEqual(len(farmers), 2)  # farmer1 and farmer2 in ET04-W01
+		self.assertEqual(len(farmers), 2)  # farmer1 and farmer2 in the primary Woreda
 		self.assertEqual(result["data"]["total"], 2)
 
 	def test_list_farmers_with_filters(self):
@@ -258,11 +280,11 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import list_farmers
 
-		result = list_farmers(kebele="ET04-W01-K01")
+		result = list_farmers(kebele=self.kebele)
 		farmers = result["data"]["farmers"]
 
 		self.assertEqual(len(farmers), 1)
-		self.assertEqual(farmers[0]["kebele"], "ET04-W01-K01")
+		self.assertEqual(farmers[0]["kebele"], self.kebele)
 
 	# -- DA-272: live search, change requests, registry metadata ---------------
 
@@ -285,7 +307,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["data"]["page"]["number_of_pages"], 1)
 
 	def test_list_farmers_search_stays_inside_woreda_scope(self):
-		"""Chaltu (ET03) is in the mock registry but outside the Supervisor's Woreda."""
+		"""Chaltu (other Region) is in the mock registry but outside the Supervisor's Woreda."""
 		frappe.set_user(SUP)
 
 		from da_services.api.v1.farmers import list_farmers
@@ -295,20 +317,15 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["data"]["total"], 0)
 
 	def test_list_farmers_search_as_da_narrows_to_assigned_kebele(self):
-		"""DA1 is posted to ET04-W01-K01: the registry search is filtered to that Kebele.
-
-		The posting is a DA Kebele code; the mock registry filters on Kebele names, so the
-		filter sent to the registry is asserted instead of the mock's results.
-		"""
+		"""DA1 is posted to ``kebele``: Almaz (``kebele_alt``) is not returned even on a name match."""
 		frappe.set_user(DA1)
 
 		from da_services.api.v1.farmers import list_farmers
 
-		with patch("da_services.services.farmers.get_farmer_registry_client") as client:
-			client.return_value.search_farmers.return_value = {"items": [], "total": 0}
-			list_farmers(search_text="almaz")
-		filter_by = client.return_value.search_farmers.call_args.kwargs["filter_by"]
-		self.assertEqual((filter_by["woreda"], filter_by["kebele"]), ("ET04-W01", "ET04-W01-K01"))
+		self.assertEqual(
+			[f["farmer_id"] for f in list_farmers(search_text="abebe")["data"]["farmers"]], [self.farmer1_id]
+		)
+		self.assertEqual(list_farmers(search_text="almaz")["data"]["farmers"], [])
 
 	def test_list_farmers_page_params_map_to_offsets(self):
 		"""page / page_size are accepted on the cache path too."""
@@ -396,7 +413,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		profile = result["data"]
 		self.assertEqual(profile["farmer_id"], self.farmer1_id)
 		self.assertEqual(profile["name"], "Abebe Kebede")
-		self.assertEqual(profile["kebele"], "ET04-W01-K01")
+		self.assertEqual(profile["kebele"], self.kebele)
 		self.assertTrue(profile["can_edit"])  # Linked farmer
 		self.assertTrue(profile["is_linked"])
 		self.assertIsNotNone(profile["last_visit_date"])
@@ -408,7 +425,7 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import get_farmer_profile
 
-		result = get_farmer_profile(self.farmer3_id)  # ET03, not in DA1's scope
+		result = get_farmer_profile(self.farmer3_id)  # other Region, not in DA1's scope
 		self.assertEqual(result["status"], "error")
 
 	def test_get_farmer_profile_not_found(self):
@@ -539,7 +556,7 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import get_farmer_visits
 
-		# farmer-uuid-003 is in ET03-W02, outside DA1's scope (ET04-W01)
+		# farmer-uuid-003 is in the other Woreda, outside DA1's scope
 		# API functions use @handle_api_errors which returns error response
 		result = get_farmer_visits("farmer-uuid-003")
 		self.assertEqual(result["status"], "error")
@@ -551,19 +568,19 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import get_farmer_plots
 
-		# farmer-uuid-003 is in ET03-W02, outside DA1's scope
+		# farmer-uuid-003 is in the other Woreda, outside DA1's scope
 		result = get_farmer_plots("farmer-uuid-003")
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not linked", result["message"].lower())
 
 	def test_woreda_filter_scope_override_denied(self):
 		"""Test Supervisor cannot query outside their Woreda with ?woreda= (PR #12 fix)."""
-		frappe.set_user(SUP)  # Supervisor of ET04-W01
+		frappe.set_user(SUP)  # Supervisor of the primary Woreda
 
 		from da_services.api.v1.farmers import list_farmers
 
-		# Try to query ET03-W02 (outside supervisor's Woreda)
-		result = list_farmers(woreda="ET03-W02")
+		# Try to query the other Woreda (outside supervisor's Woreda)
+		result = list_farmers(woreda=self.other_woreda)
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not in your scope", result["message"].lower())
 
@@ -572,15 +589,15 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import list_farmers
 
-		result = list_farmers(woreda="ET03-W02")
+		result = list_farmers(woreda=self.other_woreda)
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not in your scope", result["message"].lower())
 
-		result = list_farmers(kebele="ET04-W01-K02")
+		result = list_farmers(kebele=self.kebele_alt)
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not in your assigned kebeles", result["message"].lower())
 
-		result = list_farmers(kebele="ET04-W01-K01")
+		result = list_farmers(kebele=self.kebele)
 		self.assertEqual(result["status"], "success")
 		self.assertEqual(len(result["data"]["farmers"]), 1)
 
@@ -598,5 +615,5 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		# Supervisor with woreda scope should see farmers in their woreda
 		result = list_farmers()
-		# Should see farmer1 and farmer2 (both in ET04-W01)
+		# Should see farmer1 and farmer2 (both in the primary Woreda)
 		self.assertGreaterEqual(len(result["data"]["farmers"]), 2)

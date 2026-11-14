@@ -7,6 +7,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import visit_specializations as svc
+from da_services.tests.fixtures import ensure_da_user
 
 
 class TestVisitSpecializations(IntegrationTestCase):
@@ -16,6 +17,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 		"""Set up test data."""
 		self.da_crop = "DA-000001"  # Crop production (from mock)
 		self.da_livestock = "DA-000002"  # Livestock (from mock)
+		self.user_crop = ensure_da_user(self.da_crop, email="visit-spec-crop@test.da.local")
 
 		# Reset DA Registry mock
 		MockDARegistryClient.reset()
@@ -158,6 +160,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": "FARMER-001",
 				"visit_type": "Crop Survey",

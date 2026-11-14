@@ -1,5 +1,7 @@
 """Broadcast notifications: Communications Officer -> DAs in a scope (T2)."""
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import today
@@ -7,6 +9,7 @@ from frappe.utils import today
 from da_services.api.v1 import notifications as api
 from da_services.services import constants as C
 from da_services.services import notifications as svc
+from da_services.tests.fixtures import aligned_mock_geo, bind_da_user, require_geo_masters
 from da_services.utils.permissions import get_scope_context
 
 DA_W01 = "bc-da-w01@da.local"  # ET04 / ET04-W01
@@ -53,24 +56,58 @@ class TestBroadcast(IntegrationTestCase):
 		frappe.db.delete("DA Notification", {"user": ("in", ALL_USERS)})
 		frappe.db.delete("DA Broadcast", {"sent_by": ("in", SENDERS)})
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
+		# "all" broadcasts count every active DA grant on the site; pause foreign ones
+		# so this module's recipient counts stay deterministic across the suite.
+		self._paused_da_grants = frappe.get_all(
+			"DA RBAC Assignment",
+			filters={"role": C.ROLE_DA, "active": 1, "user": ("not in", ALL_USERS)},
+			pluck="name",
+		)
+		for name in self._paused_da_grants:
+			frappe.db.set_value("DA RBAC Assignment", name, "active", 0, update_modified=False)
 		_user(DA_W01, [C.ROLE_DA])
 		_user(DA_W02, [C.ROLE_DA])
 		_user(DA_ET03, [C.ROLE_DA])
 		_user(COMMS_NATIONAL, [C.ROLE_COMMS])
 		_user(COMMS_W01, [C.ROLE_COMMS])
 		_user(SUP, [C.ROLE_SUPERVISOR])
-		_grant(DA_W01, C.ROLE_DA, da_id="DA-BC0001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA_W02, C.ROLE_DA, da_id="DA-BC0002", region_scope="ET04", woreda_scope="ET04-W02")
-		_grant(DA_ET03, C.ROLE_DA, da_id="DA-BC0003", region_scope="ET03", woreda_scope="ET03-W01")
+		require_geo_masters()
+		g = aligned_mock_geo()
+		# Second Woreda under the same Region (for region vs woreda broadcast cases).
+		zones = frappe.get_all("DA Zone", filters={"is_active": 1, "region": g["region"]}, pluck="name")
+		sibling = frappe.get_all(
+			"DA Woreda",
+			filters={"is_active": 1, "zone": ("in", zones), "name": ("!=", g["woreda"])},
+			pluck="name",
+			order_by="name asc",
+			limit=1,
+		)
+		self.woreda_b = sibling[0] if sibling else g["other_woreda"]
+		self.geo = g
+		_grant(DA_W01, C.ROLE_DA, da_id="DA-BC0001", region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(DA_W02, C.ROLE_DA, da_id="DA-BC0002", region_scope=g["region"], woreda_scope=self.woreda_b)
+		_grant(
+			DA_ET03,
+			C.ROLE_DA,
+			da_id="DA-BC0003",
+			region_scope=g["other_region"],
+			woreda_scope=g["other_woreda"],
+		)
 		_grant(COMMS_NATIONAL, C.ROLE_COMMS)
-		_grant(COMMS_W01, C.ROLE_COMMS, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(COMMS_W01, C.ROLE_COMMS, region_scope=g["region"], woreda_scope=g["woreda"])
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=g["region"], woreda_scope=g["woreda"])
+		bind_da_user(DA_W01, "DA-BC0001")
+		bind_da_user(DA_W02, "DA-BC0002")
+		bind_da_user(DA_ET03, "DA-BC0003")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.delete("DA Notification", {"user": ("in", ALL_USERS)})
 		frappe.db.delete("DA Broadcast", {"sent_by": ("in", SENDERS)})
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
+		for name in getattr(self, "_paused_da_grants", []):
+			if frappe.db.exists("DA RBAC Assignment", name):
+				frappe.db.set_value("DA RBAC Assignment", name, "active", 1, update_modified=False)
 
 	def _rows(self, user):
 		return frappe.get_all(
@@ -96,7 +133,7 @@ class TestBroadcast(IntegrationTestCase):
 
 	def test_woreda_scope_reaches_only_that_woreda(self):
 		ctx = get_scope_context(COMMS_NATIONAL)
-		out = svc.broadcast(ctx, title="W01 meeting", scope="woreda", scope_value="ET04-W01")
+		out = svc.broadcast(ctx, title="W01 meeting", scope="woreda", scope_value=self.geo["woreda"])
 		self.assertEqual(out["recipients"], 1)
 		self.assertEqual(len(self._rows(DA_W01)), 1)
 		self.assertEqual(self._rows(DA_W02), [])
@@ -104,7 +141,7 @@ class TestBroadcast(IntegrationTestCase):
 
 	def test_region_scope(self):
 		ctx = get_scope_context(COMMS_NATIONAL)
-		out = svc.broadcast(ctx, title="ET04 notice", scope="region", scope_value="ET04")
+		out = svc.broadcast(ctx, title="region notice", scope="region", scope_value=self.geo["region"])
 		self.assertEqual(out["recipients"], 2)
 		self.assertEqual(self._rows(DA_ET03), [])
 
@@ -117,7 +154,7 @@ class TestBroadcast(IntegrationTestCase):
 			update_modified=False,
 		)
 		ctx = get_scope_context(COMMS_NATIONAL)
-		out = svc.broadcast(ctx, title="Active only", scope="region", scope_value="ET04")
+		out = svc.broadcast(ctx, title="Active only", scope="region", scope_value=self.geo["region"])
 		self.assertEqual(out["recipients"], 1)
 		self.assertEqual(self._rows(DA_W02), [])
 
@@ -131,11 +168,11 @@ class TestBroadcast(IntegrationTestCase):
 	def test_scoped_comms_cannot_target_other_woreda(self):
 		ctx = get_scope_context(COMMS_W01)
 		with self.assertRaises(frappe.PermissionError):
-			svc.broadcast(ctx, title="x", scope="woreda", scope_value="ET04-W02")
+			svc.broadcast(ctx, title="x", scope="woreda", scope_value=self.woreda_b)
 
 	def test_scoped_comms_can_target_own_woreda(self):
 		ctx = get_scope_context(COMMS_W01)
-		out = svc.broadcast(ctx, title="own woreda", scope="woreda", scope_value="ET04-W01")
+		out = svc.broadcast(ctx, title="own woreda", scope="woreda", scope_value=self.geo["woreda"])
 		self.assertEqual(out["recipients"], 1)
 
 	def test_admin_is_unrestricted(self):
@@ -160,7 +197,12 @@ class TestBroadcast(IntegrationTestCase):
 	def test_broadcast_record_written(self):
 		ctx = get_scope_context(COMMS_NATIONAL)
 		out = svc.broadcast(
-			ctx, title="recorded", body="b", href="/notifications", scope="region", scope_value="ET04"
+			ctx,
+			title="recorded",
+			body="b",
+			href="/notifications",
+			scope="region",
+			scope_value=self.geo["region"],
 		)
 		row = frappe.db.get_value(
 			"DA Broadcast",
@@ -171,13 +213,12 @@ class TestBroadcast(IntegrationTestCase):
 		self.assertEqual(out["broadcast_id"], row.name)  # no client_op_id: the record name is the id
 		self.assertEqual(row.sent_by, COMMS_NATIONAL)
 		self.assertEqual(
-			(row.scope, row.scope_value, row.recipients, row.href), ("region", "ET04", 2, "/notifications")
+			(row.scope, row.scope_value, row.recipients, row.href),
+			("region", self.geo["region"], 2, "/notifications"),
 		)
 
 	def test_failed_send_leaves_nothing_behind(self):
 		"""Atomic: if sending stops half-way, neither the record nor partial notifications remain."""
-		from unittest.mock import patch
-
 		ctx = get_scope_context(COMMS_NATIONAL)
 		real_notify = svc.notify
 		calls = []
@@ -222,7 +263,7 @@ class TestBroadcast(IntegrationTestCase):
 
 	def test_audit_event_written(self):
 		ctx = get_scope_context(COMMS_NATIONAL)
-		out = svc.broadcast(ctx, title="audited", scope="woreda", scope_value="ET04-W01")
+		out = svc.broadcast(ctx, title="audited", scope="woreda", scope_value=self.geo["woreda"])
 		rows = frappe.get_all(
 			"DA Audit Event",
 			filters={"action": svc.BROADCAST_SENT, "entity_name": out["broadcast_id"]},
