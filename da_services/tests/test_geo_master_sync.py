@@ -8,6 +8,7 @@ from frappe.tests import IntegrationTestCase
 from da_services.integrations.sso import SSOLoginResult
 from da_services.services import geo_master_sync
 from da_services.services.geo_master_sync import GeoSyncError, MasterDataSource
+from da_services.tests.fixtures import ensure_geo_masters
 
 LEVEL_IDS = {"country": "l0", "region": "l1", "zone": "l2", "woreda": "l3", "kebele": "l4"}
 
@@ -54,9 +55,12 @@ class TestGeoMasterSync(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		_clear()
+		# A refused sync rolls back; commit the clear so that rollback cannot bring rows back.
+		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def tearDown(self):
 		_clear()
+		ensure_geo_masters()  # other modules' tests link to the shared test geo masters
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def test_first_run_inserts_with_parents(self):

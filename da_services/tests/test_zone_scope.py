@@ -9,7 +9,7 @@ from frappe.utils import add_days, now_datetime, today
 from da_services.patches import backfill_zone
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
-from da_services.tests.fixtures import ensure_doctype_schema
+from da_services.tests.fixtures import ensure_doctype_schema, ensure_geo_masters, set_da_registry_id
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "zone-da1@da.local"  # DA-000001: ET04 / ET04-Z01 / ET04-W01
@@ -61,6 +61,8 @@ def _grant(user, role, **kw):
 	doc.user = user
 	doc.role = role
 	doc.effective_from = today()
+	if kw.get("da_id"):
+		set_da_registry_id(user, kw["da_id"])  # da_id is fetched from the user's DA Registry ID
 	for k, v in kw.items():
 		setattr(doc, k, v)
 	doc.insert(ignore_permissions=True)
@@ -81,6 +83,7 @@ class TestZoneScope(IntegrationTestCase):
 			doc = frappe.new_doc("DA Administrative Area")
 			doc.code, doc.level, doc.parent_area, doc.name_en = code, level, parent, code
 			doc.insert(ignore_permissions=True)
+		ensure_geo_masters()  # RBAC scopes link to DA Region / Zone / Woreda
 		_user(DA1, [C.ROLE_DA])
 		_user(ZONE_SUP, [C.ROLE_SUPERVISOR])
 		for e in (ZONE_EXEC, OTHER_ZONE_EXEC, MIXED_EXEC, REGION_EXEC):

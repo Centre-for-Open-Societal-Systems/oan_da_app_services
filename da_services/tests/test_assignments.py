@@ -11,6 +11,7 @@ from da_services.api.v1 import assignments as api
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import assignments as svc
 from da_services.services import constants as C
+from da_services.tests.fixtures import ensure_da_user, ensure_geo_masters
 from da_services.utils import geofence
 from da_services.utils.permissions import get_scope_context
 
@@ -108,6 +109,7 @@ class TestAssignments(IntegrationTestCase):
 			if code == "ET04-W01-K03":
 				doc.boundary_geojson = json.dumps(BOX)
 			doc.insert(ignore_permissions=True, ignore_links=True)
+		ensure_geo_masters()  # DA Kebele Assignment.kebele links to DA Kebele
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
@@ -306,6 +308,7 @@ class TestAssignments(IntegrationTestCase):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user("DA-000001"),
 				"da_id": "DA-000001",
 				"kebele": "ET04-W01-K01",
 				"state": "Effective",

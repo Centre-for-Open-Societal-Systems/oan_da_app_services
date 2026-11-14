@@ -10,7 +10,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_kebele_assignment
+from da_services.tests.fixtures import create_administrative_areas, ensure_da_user, ensure_kebele_assignment
 from da_services.utils.permissions import get_scope_context
 
 DA_ID = "DA-000001"
@@ -101,6 +101,7 @@ class TestResolveFarmerForCapture(IntegrationTestCase):
 		frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user(DA_ID),
 				"da_id": DA_ID,
 				"kebele": "ET04-W01-K02",
 				"state": "Effective",
