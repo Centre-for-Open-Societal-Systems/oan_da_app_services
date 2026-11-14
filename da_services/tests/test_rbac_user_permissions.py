@@ -5,16 +5,21 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, getdate, nowdate
 
 from da_services.services import constants as C
+from da_services.services import kebele_user_permissions as kup
 from da_services.services import rbac_user_permissions as rup
+from da_services.setup.install import seed_not_assigned_kebele
 
 USER = "rbac-up-test@example.com"
+DA_ID = "DA-RUP-TEST"
 GEO = (
 	("DA Country", {"country_code": "XU", "country_name": "Upland"}),
 	("DA Region", {"region_code": "XU01", "region_name": "Upland North", "country": "XU"}),
 	("DA Region", {"region_code": "XU02", "region_name": "Upland South", "country": "XU"}),
 	("DA Zone", {"zone_code": "XU0101", "zone_name": "North Zone", "region": "XU01"}),
 	("DA Woreda", {"woreda_code": "XU010101", "woreda_name": "North Woreda", "zone": "XU0101"}),
+	("DA Kebele", {"kebele_code": "XU01010101", "kebele_name": "North Kebele", "woreda": "XU010101"}),
 )
+KEBELE = "XU01010101"
 
 
 def _perms(user=USER) -> set:
@@ -24,6 +29,30 @@ def _perms(user=USER) -> set:
 		fields=["allow", "for_value"],
 	)
 	return {(r.allow, r.for_value) for r in rows}
+
+
+def _not_assigned(user=USER) -> bool:
+	return bool(
+		frappe.db.exists(
+			"User Permission", {"user": user, "allow": "DA Kebele", "for_value": C.NOT_ASSIGNED_KEBELE}
+		)
+	)
+
+
+def _post(**values):
+	"""An Effective DA Kebele Assignment for USER, in force today."""
+	return frappe.get_doc(
+		{
+			"doctype": "DA Kebele Assignment",
+			"user": USER,
+			"kebele": KEBELE,
+			"state": "Effective",
+			"mode": "Automatic",
+			"effective_date": nowdate(),
+			"registry_sync_state": "Not sent",
+			**values,
+		}
+	).insert(ignore_permissions=True)
 
 
 def _assign(**values):
@@ -49,6 +78,8 @@ class TestRBACUserPermissions(IntegrationTestCase):
 			frappe.get_doc(
 				{"doctype": "User", "email": USER, "first_name": "RBAC UP", "send_welcome_email": 0}
 			).insert(ignore_permissions=True)
+		frappe.db.set_value("User", USER, "da_registry_id", DA_ID)  # a DA's DA-ID comes from the user
+		seed_not_assigned_kebele()
 		for doctype, values in GEO:
 			code = next(v for k, v in values.items() if k.endswith("_code"))
 			if not frappe.db.exists(doctype, code):
@@ -60,6 +91,7 @@ class TestRBACUserPermissions(IntegrationTestCase):
 
 	@staticmethod
 	def _clear():
+		frappe.db.delete("DA Kebele Assignment", {"user": USER})
 		frappe.db.delete("DA RBAC Assignment", {"user": USER})
 		frappe.db.delete("User Permission", {"user": USER})
 		for doctype, values in reversed(GEO):
@@ -109,3 +141,44 @@ class TestRBACUserPermissions(IntegrationTestCase):
 		doc = _assign()
 		doc.delete(ignore_permissions=True)
 		self.assertEqual(_perms(), set())
+
+	def test_development_agent_gets_not_assigned_kebele(self):
+		_assign(role=C.ROLE_DA)
+		self.assertTrue(_not_assigned())
+		self.assertEqual(len(_perms()), 3)  # the scope permissions as usual
+
+	def test_other_roles_get_no_not_assigned_kebele(self):
+		_assign()
+		self.assertFalse(_not_assigned())
+
+	def test_not_assigned_follows_the_development_agent_window(self):
+		doc = _assign(role=C.ROLE_DA, effective_to=nowdate())
+		self.assertTrue(_not_assigned())
+		rup.sync_user_permissions(USER, today=getdate(add_days(nowdate(), 1)))
+		self.assertFalse(_not_assigned())  # ended
+		rup.sync_user_permissions(USER)
+		doc.active = 0
+		doc.save(ignore_permissions=True)
+		self.assertFalse(_not_assigned())
+
+	def test_kebele_sync_leaves_not_assigned_alone(self):
+		_assign(role=C.ROLE_DA)
+		kup.sync_user_permissions(USER)
+		kup.sync_all_user_permissions()
+		self.assertTrue(_not_assigned())
+
+	def test_kebele_assignment_removes_not_assigned_and_supersede_brings_it_back(self):
+		_assign(role=C.ROLE_DA)
+		self.assertTrue(_not_assigned())
+		posting = _post()
+		self.assertFalse(_not_assigned())  # the DA now has a DA Kebele permission
+		self.assertTrue(rup.has_kebele_permission(USER))
+		posting.state = "Superseded"
+		posting.save(ignore_permissions=True)
+		self.assertFalse(rup.has_kebele_permission(USER))
+		self.assertTrue(_not_assigned())  # no Kebele left
+
+	def test_no_not_assigned_when_the_da_already_has_a_kebele(self):
+		_post()
+		_assign(role=C.ROLE_DA)
+		self.assertFalse(_not_assigned())

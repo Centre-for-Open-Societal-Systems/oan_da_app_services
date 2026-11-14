@@ -26,11 +26,19 @@ class KBArticle(Document):
 
 
 def _check_audience(doc):
-	"""Shared by KB Article and KB Video: audience scope rows must be consistent."""
+	"""Shared by KB Article and KB Video: audience scope rows must be consistent.
+
+	The fields link to DA Region / DA Zone / DA Woreda, so the level is guaranteed; a
+	Zone needs its Region and must sit in it, and a Woreda needs its Zone and must sit in it.
+	"""
 	for row in doc.audience_scopes or []:
 		if not (row.region or row.zone or row.woreda):
 			frappe.throw(_("Audience scope row {0} is empty.").format(row.idx))
-		for field, level in (("region", "Region"), ("zone", "Zone"), ("woreda", "Woreda")):
-			value = row.get(field)
-			if value and frappe.db.get_value("DA Administrative Area", value, "level") != level:
-				frappe.throw(_("Row {0}: {1} must be a {2}.").format(row.idx, value, level))
+		if row.zone and not row.region:
+			frappe.throw(_("Row {0}: a Zone needs its Region.").format(row.idx))
+		if row.woreda and not row.zone:
+			frappe.throw(_("Row {0}: a Woreda needs its Zone.").format(row.idx))
+		if row.zone and frappe.db.get_value("DA Zone", row.zone, "region") != row.region:
+			frappe.throw(_("Row {0}: Zone {1} is not in Region {2}.").format(row.idx, row.zone, row.region))
+		if row.woreda and frappe.db.get_value("DA Woreda", row.woreda, "zone") != row.zone:
+			frappe.throw(_("Row {0}: Woreda {1} is not in Zone {2}.").format(row.idx, row.woreda, row.zone))

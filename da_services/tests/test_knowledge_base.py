@@ -10,7 +10,6 @@ from da_services.integrations.knowledge_base import categories as category_api
 from da_services.integrations.knowledge_base import common
 from da_services.integrations.knowledge_base import videos as video_api
 from da_services.services import constants as C
-from da_services.tests.fixtures import create_administrative_areas
 from da_services.utils.permissions import get_scope_context
 
 TAG = "KBTEST"
@@ -24,6 +23,21 @@ COMMS = "kbtest-comms@da.local"  # Communications Officer: read only
 READER_W01 = "kbtest-da-w01@da.local"  # Woreda ET04-W01 (Region ET04)
 READER_W02 = "kbtest-da-w02@da.local"  # Woreda ET03-W02 (Region ET03)
 USERS = (WRITER, SUPERVISOR, EXECUTIVE, COMMS, READER_W01, READER_W02)
+
+# Geo masters the audience scopes and RBAC scopes link to: (doctype, code, parent link, parent).
+W01_PATH = {"region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01"}
+GEO = (
+	("DA Country", "ET", None, None),
+	("DA Region", "ET04", "country", "ET"),
+	("DA Region", "ET03", "country", "ET"),
+	("DA Zone", "ET04-Z01", "region", "ET04"),
+	("DA Zone", "ET04-Z02", "region", "ET04"),
+	("DA Zone", "ET03-Z02", "region", "ET03"),
+	("DA Woreda", "ET04-W01", "zone", "ET04-Z01"),
+	("DA Woreda", "ET04-W09", "zone", "ET04-Z02"),
+	("DA Woreda", "ET03-W02", "zone", "ET03-Z02"),
+	("DA Kebele", "ET04-W01-K01", "woreda", "ET04-W01"),
+)
 
 EN = {"language": "EN", "title": "en title", "summary": "en summary", "body": "<p>en</p>"}
 AM = {"language": "አማ", "title": "am title", "summary": "am summary", "body": "<p>am</p>"}
@@ -48,6 +62,19 @@ def _grant(user, role, **kw):
 	for k, v in kw.items():
 		setattr(doc, k, v)
 	doc.insert(ignore_permissions=True, ignore_links=True)
+
+
+def _ensure_geo():
+	"""Create the GEO rows that are missing and reactivate inactive ones (shared rows: not deleted)."""
+	for doctype, code, parent_field, parent in GEO:
+		if frappe.db.exists(doctype, code):
+			frappe.db.set_value(doctype, code, "is_active", 1, update_modified=False)
+			continue
+		level = doctype.removeprefix("DA ").lower()
+		doc = {"doctype": doctype, f"{level}_code": code, f"{level}_name": code, "is_active": 1}
+		if parent_field:
+			doc[parent_field] = parent
+		frappe.get_doc(doc).insert(ignore_permissions=True)
 
 
 def _code(response: dict):
@@ -95,7 +122,7 @@ def _cleanup():
 class TestKnowledgeBase(IntegrationTestCase):
 	def setUp(self):
 		_cleanup()
-		create_administrative_areas()
+		_ensure_geo()
 		frappe.get_doc({"doctype": "KB Category", "category_name": CATEGORY}).insert()
 		frappe.get_doc({"doctype": "KB Category", "category_name": CATEGORY_OFF, "enabled": 0}).insert()
 		frappe.get_doc({"doctype": "KB Source", "source_name": SOURCE}).insert()
@@ -194,10 +221,23 @@ class TestKnowledgeBase(IntegrationTestCase):
 
 	def test_article_audience_scope_must_match_level(self):
 		self.assertRaises(
-			frappe.ValidationError,
-			self._article_doc(audience_scopes=[{"region": "ET04-W01"}]).insert,  # a Woreda in the Region slot
+			frappe.LinkValidationError,
+			self._article_doc(audience_scopes=[{"region": "ET04-W01"}]).insert,  # a Woreda is not a DA Region
 		)
 		self.assertRaises(frappe.ValidationError, self._article_doc(audience_scopes=[{}]).insert)  # empty row
+
+	def test_article_audience_scope_must_follow_the_hierarchy(self):
+		for bad in (
+			{"zone": "ET04-Z01"},  # a Zone needs its Region
+			{"region": "ET04", "woreda": "ET04-W01"},  # a Woreda needs its Zone
+			{"region": "ET03", "zone": "ET04-Z01"},  # the Zone is in ET04
+			{"region": "ET04", "zone": "ET04-Z02", "woreda": "ET04-W01"},  # the Woreda is in ET04-Z01
+		):
+			with self.subTest(bad=bad):
+				self.assertRaises(frappe.ValidationError, self._article_doc(audience_scopes=[bad]).insert)
+		for good in ({"region": "ET04"}, {"region": "ET04", "zone": "ET04-Z01"}, W01_PATH):
+			with self.subTest(good=good):
+				self._article_doc(audience_scopes=[good]).insert()
 
 	def test_article_sets_published_date_when_published(self):
 		doc = self._article_doc(status="Published").insert()
@@ -306,9 +346,9 @@ class TestKnowledgeBase(IntegrationTestCase):
 	def test_audience_scope_limits_who_can_read(self):
 		frappe.set_user(WRITER)
 		everyone = _article(title=f"{TAG} everyone", status="Published")["data"]["name"]
-		woreda = _article(
-			title=f"{TAG} woreda", status="Published", audience_scopes=[{"woreda": "ET04-W01"}]
-		)["data"]["name"]
+		woreda = _article(title=f"{TAG} woreda", status="Published", audience_scopes=[W01_PATH])["data"][
+			"name"
+		]
 		region = _article(title=f"{TAG} region", status="Published", audience_scopes=[{"region": "ET04"}])[
 			"data"
 		]["name"]
@@ -334,7 +374,7 @@ class TestKnowledgeBase(IntegrationTestCase):
 
 	def test_video_audience_is_enforced_too(self):
 		frappe.set_user(WRITER)
-		vid = _video(status="Published", audience_scopes=[{"woreda": "ET04-W01"}])["data"]["name"]
+		vid = _video(status="Published", audience_scopes=[W01_PATH])["data"]["name"]
 		frappe.set_user(READER_W01)
 		self.assertEqual(_code(video_api.get_video(vid)), "ok")
 		frappe.set_user(READER_W02)
@@ -346,9 +386,13 @@ class TestKnowledgeBase(IntegrationTestCase):
 		self.assertIn("ET04-W01", woreda_user)
 		self.assertIn("ET04-Z01", woreda_user)  # ancestor: content aimed at the Zone reaches the Woreda
 		self.assertIn("ET04", woreda_user)
+		self.assertIn("ET04-W01-K01", woreda_user)  # descendant: the Woreda's Kebeles
 		self.assertNotIn("ET04-W09", woreda_user)  # the Region on the assignment is not a Region grant
+		self.assertNotIn("ET04-Z02", woreda_user)
 		region_user = common._reach(get_scope_context(EXECUTIVE))
-		self.assertTrue({"ET04", "ET04-Z01", "ET04-W01"} <= region_user)
+		self.assertTrue(
+			{"ET04", "ET04-Z01", "ET04-W01", "ET04-Z02", "ET04-W09", "ET04-W01-K01"} <= region_user
+		)
 		self.assertNotIn("ET03", region_user)
 
 	# -- API: list behaviour -------------------------------------------------------

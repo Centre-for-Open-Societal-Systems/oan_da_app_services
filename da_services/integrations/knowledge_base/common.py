@@ -82,10 +82,13 @@ def _reach(ctx: ScopeContext) -> set[str]:
 		return set()
 	parent: dict[str, str | None] = {}
 	children: dict[str, list[str]] = {}
-	for row in frappe.get_all("DA Administrative Area", fields=["name", "parent_area"]):
-		parent[row.name] = row.parent_area
-		if row.parent_area:
-			children.setdefault(row.parent_area, []).append(row.name)
+	# The geo masters: RBAC scopes and KB Audience Scope rows both link to them.
+	for doctype, parent_field in (("DA Zone", "region"), ("DA Woreda", "zone"), ("DA Kebele", "woreda")):
+		for row in frappe.get_all(doctype, fields=["name", parent_field], limit_page_length=0):
+			up = row.get(parent_field)
+			parent[row.name] = up
+			if up:
+				children.setdefault(up, []).append(row.name)
 	reach, stack = set(grants), list(grants)
 	while stack:  # descendants
 		for child in children.get(stack.pop(), []):

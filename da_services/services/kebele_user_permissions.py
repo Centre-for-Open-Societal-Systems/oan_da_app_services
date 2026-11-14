@@ -6,7 +6,10 @@ earlier. A Superseded, Flagged, Proposed or Validated row grants nothing, and ne
 does an Effective row whose date has not come yet.
 
 ``sync_user_permissions(user)`` recomputes that set and adds or removes User
-Permissions to match; the DA Kebele User Permissions are owned by this module.
+Permissions to match; the DA Kebele User Permissions are owned by this module, except
+the one on the ``Not Assigned`` DA Kebele, which services/rbac_user_permissions.py owns.
+After each sync that one is re-checked (``sync_not_assigned``): a Development Agent keeps
+it only while they have no other DA Kebele User Permission.
 
 It runs when an assignment is inserted (also for the users of the rows it supersedes,
 which are written with set_value and fire no hooks) or updated, and daily from the
@@ -19,6 +22,8 @@ from __future__ import annotations
 import frappe
 from frappe.utils import getdate, nowdate
 
+from da_services.services import constants as C
+from da_services.services.rbac_user_permissions import sync_not_assigned
 from da_services.utils.user_permission_sync import reconcile, sync_each, users_with_permissions
 
 ALLOW = "DA Kebele"
@@ -33,13 +38,17 @@ def wanted_permissions(user: str, today=None) -> set[tuple[str, str]]:
 		pluck="kebele",
 		limit_page_length=0,
 	)
-	return {(ALLOW, kebele) for kebele in kebeles if kebele}
+	return {(ALLOW, kebele) for kebele in kebeles if kebele and kebele != C.NOT_ASSIGNED_KEBELE}
 
 
 def sync_user_permissions(user: str, today=None) -> dict:
 	if not user or not frappe.db.exists("User", user):
 		return {"created": 0, "removed": 0}
-	return reconcile(user, [ALLOW], wanted_permissions(user, today))
+	# The Not Assigned DA Kebele permission is the RBAC sync's; leave it alone here ...
+	counts = reconcile(user, [ALLOW], wanted_permissions(user, today), skip_values=[C.NOT_ASSIGNED_KEBELE])
+	# ... then re-check it: removed now that a Kebele is granted, back once none is left.
+	not_assigned = sync_not_assigned(user, today)
+	return {k: counts[k] + not_assigned[k] for k in counts}
 
 
 def sync_all_user_permissions() -> None:

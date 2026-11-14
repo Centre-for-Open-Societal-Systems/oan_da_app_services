@@ -1,8 +1,9 @@
 """Make a user's User Permissions on some doctypes match a wanted set.
 
-Shared by services/rbac_user_permissions.py (DA Region / Zone / Woreda) and
-services/kebele_user_permissions.py (DA Kebele). Each caller owns the User Permissions
-of its own ``allow`` doctypes: one that is not in the wanted set is removed.
+Shared by services/rbac_user_permissions.py (DA Region / Zone / Woreda, and the
+"Not Assigned" DA Kebele) and services/kebele_user_permissions.py (every other DA Kebele).
+Each caller owns the User Permissions of its own ``allow`` doctypes and values: one that
+is not in the wanted set is removed.
 """
 
 from __future__ import annotations
@@ -10,13 +11,29 @@ from __future__ import annotations
 import frappe
 
 
-def reconcile(user: str, allows: list[str], wanted: set[tuple[str, str]]) -> dict:
-	"""Add the missing ``(allow, value)`` User Permissions of ``user``; remove the rest."""
+def reconcile(
+	user: str,
+	allows: list[str],
+	wanted: set[tuple[str, str]],
+	*,
+	only_values: list[str] | None = None,
+	skip_values: list[str] | None = None,
+) -> dict:
+	"""Add the missing ``(allow, value)`` User Permissions of ``user``; remove the rest.
+
+	``only_values`` limits the User Permissions looked at (and so removed) to those
+	values; ``skip_values`` leaves those values alone, for another caller to own.
+	"""
 	if not user or not frappe.db.exists("User", user):
 		return {"created": 0, "removed": 0}
+	filters = {"user": user, "allow": ("in", allows)}
+	if only_values:
+		filters["for_value"] = ("in", only_values)
+	elif skip_values:
+		filters["for_value"] = ("not in", skip_values)
 	existing = frappe.get_all(
 		"User Permission",
-		filters={"user": user, "allow": ("in", allows)},
+		filters=filters,
 		fields=["name", "allow", "for_value"],
 		limit_page_length=0,
 	)

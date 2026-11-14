@@ -3,6 +3,8 @@
 Tests farmer listing, profile retrieval, and permission checks with RBAC enforcement.
 """
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import now_datetime, today
@@ -10,7 +12,6 @@ from frappe.utils import now_datetime, today
 from da_services.services import constants as C
 from da_services.tests.fixtures import (
 	create_administrative_areas,
-	ensure_administrative_area,
 	ensure_kebele_assignment,
 )
 from da_services.utils.permissions import get_scope_context
@@ -87,7 +88,7 @@ class TestFarmersAPI(IntegrationTestCase):
 			"Abebe Kebede",
 			"ET04",
 			"ET04-W01",
-			"Bako 01",
+			"ET04-W01-K01",
 		)
 		self._create_farmer_reference(
 			self.farmer2_id,
@@ -95,7 +96,7 @@ class TestFarmersAPI(IntegrationTestCase):
 			"Almaz Tesfaye",
 			"ET04",
 			"ET04-W01",
-			"Bako 02",
+			"ET04-W01-K02",
 		)
 		self._create_farmer_reference(
 			self.farmer3_id,
@@ -110,8 +111,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		# Listing and edit rights for a DA follow the Effective Kebele assignment.
 		self._create_farmer_link(DA1, "DA-000001", self.farmer1_id, "Automatic")
 		create_administrative_areas()
-		ensure_administrative_area("Bako 01", "Kebele", "ET04-W01", "Bako 01")
-		ensure_kebele_assignment("DA-000001", "Bako 01")
+		ensure_kebele_assignment("DA-000001", "ET04-W01-K01")
 
 		# Create some visits for farmer1
 		self._create_visit("DA-000001", self.farmer1_id, "Physical Visit Complete")
@@ -182,7 +182,7 @@ class TestFarmersAPI(IntegrationTestCase):
 				"scheduled_at": now_datetime(),
 				"region": "ET04",
 				"woreda": "ET04-W01",
-				"kebele": "Bako 01",
+				"kebele": "ET04-W01-K01",
 			}
 		)
 		doc.insert(ignore_permissions=True, ignore_links=True)
@@ -258,11 +258,11 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import list_farmers
 
-		result = list_farmers(kebele="Bako 01")
+		result = list_farmers(kebele="ET04-W01-K01")
 		farmers = result["data"]["farmers"]
 
 		self.assertEqual(len(farmers), 1)
-		self.assertEqual(farmers[0]["kebele"], "Bako 01")
+		self.assertEqual(farmers[0]["kebele"], "ET04-W01-K01")
 
 	# -- DA-272: live search, change requests, registry metadata ---------------
 
@@ -295,15 +295,20 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["data"]["total"], 0)
 
 	def test_list_farmers_search_as_da_narrows_to_assigned_kebele(self):
-		"""DA1 is posted to Bako 01: Almaz (Bako 02) is not returned even on a name match."""
+		"""DA1 is posted to ET04-W01-K01: the registry search is filtered to that Kebele.
+
+		The posting is a DA Kebele code; the mock registry filters on Kebele names, so the
+		filter sent to the registry is asserted instead of the mock's results.
+		"""
 		frappe.set_user(DA1)
 
 		from da_services.api.v1.farmers import list_farmers
 
-		self.assertEqual(
-			[f["farmer_id"] for f in list_farmers(search_text="abebe")["data"]["farmers"]], [self.farmer1_id]
-		)
-		self.assertEqual(list_farmers(search_text="almaz")["data"]["farmers"], [])
+		with patch("da_services.services.farmers.get_farmer_registry_client") as client:
+			client.return_value.search_farmers.return_value = {"items": [], "total": 0}
+			list_farmers(search_text="almaz")
+		filter_by = client.return_value.search_farmers.call_args.kwargs["filter_by"]
+		self.assertEqual((filter_by["woreda"], filter_by["kebele"]), ("ET04-W01", "ET04-W01-K01"))
 
 	def test_list_farmers_page_params_map_to_offsets(self):
 		"""page / page_size are accepted on the cache path too."""
@@ -391,7 +396,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		profile = result["data"]
 		self.assertEqual(profile["farmer_id"], self.farmer1_id)
 		self.assertEqual(profile["name"], "Abebe Kebede")
-		self.assertEqual(profile["kebele"], "Bako 01")
+		self.assertEqual(profile["kebele"], "ET04-W01-K01")
 		self.assertTrue(profile["can_edit"])  # Linked farmer
 		self.assertTrue(profile["is_linked"])
 		self.assertIsNotNone(profile["last_visit_date"])
@@ -571,11 +576,11 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not in your scope", result["message"].lower())
 
-		result = list_farmers(kebele="Bako 02")
+		result = list_farmers(kebele="ET04-W01-K02")
 		self.assertEqual(result["status"], "error")
 		self.assertIn("not in your assigned kebeles", result["message"].lower())
 
-		result = list_farmers(kebele="Bako 01")
+		result = list_farmers(kebele="ET04-W01-K01")
 		self.assertEqual(result["status"], "success")
 		self.assertEqual(len(result["data"]["farmers"]), 1)
 

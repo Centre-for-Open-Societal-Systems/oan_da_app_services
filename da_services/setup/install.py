@@ -48,6 +48,28 @@ def after_install():
 def after_migrate():
 	seed_roles()
 	seed_custom_fields()
+	seed_not_assigned_kebele()
+
+
+def seed_not_assigned_kebele():
+	"""Create the "Not Assigned" DA Kebele when it is missing.
+
+	It has no Woreda, so it is inserted without the mandatory check. It is inactive:
+	the geo master sync only deactivates active rows Master Data does not list, so an
+	inactive row is left alone, and active-only pickers do not offer it.
+	"""
+	from da_services.services.constants import NOT_ASSIGNED_KEBELE
+
+	if frappe.db.exists("DA Kebele", NOT_ASSIGNED_KEBELE):
+		return
+	frappe.get_doc(
+		{
+			"doctype": "DA Kebele",
+			"kebele_code": NOT_ASSIGNED_KEBELE,
+			"kebele_name": NOT_ASSIGNED_KEBELE,
+			"is_active": 0,
+		}
+	).insert(ignore_permissions=True, ignore_mandatory=True)
 
 
 def seed_custom_fields():
