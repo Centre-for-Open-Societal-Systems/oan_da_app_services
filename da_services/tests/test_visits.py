@@ -364,7 +364,8 @@ class TestDAVisit(IntegrationTestCase):
 		try:
 			rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["kebele"])
 			self.assertEqual(total, 1)
-			_rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["other_kebele"])
+			# Equality filter on a kebele this visit does not carry (sibling may equal primary).
+			_rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["foreign_kebele"])
 			self.assertEqual(total, 0)
 		finally:
 			frappe.set_user(ADMIN)
