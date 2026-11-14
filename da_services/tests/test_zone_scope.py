@@ -127,7 +127,7 @@ class TestZoneScope(IntegrationTestCase):
 		t = tasks.create_task(title="Soil sample", ctx=_ctx(DA1))
 		self.assertEqual(frappe.db.get_value("DA Task", t["name"], "zone"), "ET04-Z01")
 		req = profile.submit_change_request(
-			changes={"language": "am"}, reason="Prefer Amharic", ctx=_ctx(DA1)
+			changes={"telegram": "+251911222333"}, reason="New Telegram number", ctx=_ctx(DA1)
 		)
 		self.assertEqual(req["zone"], "ET04-Z01")
 		self.assertEqual(frappe.db.get_value("DA Profile Change Request", req["name"], "zone"), "ET04-Z01")
@@ -193,13 +193,15 @@ class TestZoneScope(IntegrationTestCase):
 				**{k: OTHER[k] for k in ("region", "zone", "woreda")},
 			}
 		).insert(ignore_permissions=True)
-		profile.submit_change_request(changes={"language": "om"}, reason="Prefer Oromo", ctx=_ctx(DA1))
+		profile.submit_change_request(
+			changes={"telegram": "+251911222444"}, reason="New Telegram number", ctx=_ctx(DA1)
+		)
 		frappe.get_doc(
 			{
 				"doctype": "DA Profile Change Request",
 				"da_id": OTHER_DA,
 				"section": "Contact",
-				"status": "Pending",
+				"status": "Pending Supervisor",
 				"requested_by": "Administrator",
 				"changes": "{}",
 				**{k: OTHER[k] for k in ("region", "zone", "woreda")},
