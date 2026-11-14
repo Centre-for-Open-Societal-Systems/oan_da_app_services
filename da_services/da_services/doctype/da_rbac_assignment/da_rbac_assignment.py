@@ -7,6 +7,7 @@ from frappe.model.document import Document
 from frappe.utils import getdate
 
 from da_services.services import constants as C
+from da_services.services.rbac_user_permissions import sync_user_permissions
 from da_services.utils import audit
 
 AUDITED_FIELDS = (
@@ -26,8 +27,9 @@ class DARBACAssignment(Document):
 	"""One role grant for one user, bounded by Region / Zone / Woreda and a date window.
 
 	Saving a row also attaches the role to the User so Frappe's own DocPerm checks agree
-	with ours; the scope questions (which Woreda, which DA) stay in utils.permissions.
-	Every create, change and revocation is written to the audit log.
+	with ours, and keeps the User's DA Region / Zone / Woreda User Permissions in step with
+	the live scopes (services/rbac_user_permissions.py). The scope questions (which Woreda,
+	which DA) stay in utils.permissions. Every create, change and revocation is written to the audit log.
 	"""
 
 	def validate(self):
@@ -52,10 +54,12 @@ class DARBACAssignment(Document):
 
 	def on_update(self):
 		self._sync_user_role()
-		if self.is_new():
-			return
 		before = self.get_doc_before_save()
-		if not before:
+		# User Permissions for the Region / Zone / Woreda scope, as of today's window.
+		sync_user_permissions(self.user)
+		if before and before.user and before.user != self.user:
+			sync_user_permissions(before.user)
+		if self.is_new() or not before:
 			return
 		changes = {
 			f: {"from": before.get(f), "to": self.get(f)}
@@ -71,6 +75,9 @@ class DARBACAssignment(Document):
 			entity_name=self.name,
 			details={"changes": _jsonable(changes), "user": self.user, "role": self.role},
 		)
+
+	def after_delete(self):
+		sync_user_permissions(self.user)
 
 	def _snapshot(self) -> dict:
 		return _jsonable({f: self.get(f) for f in AUDITED_FIELDS})

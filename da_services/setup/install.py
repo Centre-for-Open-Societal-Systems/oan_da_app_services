@@ -21,12 +21,61 @@ ROLES = [
 ]
 
 
+# Custom fields this app adds to other apps' doctypes; create_custom_fields is idempotent.
+CUSTOM_FIELDS = {
+	"User": [
+		{
+			"fieldname": "da_registry_id",
+			"fieldtype": "Data",
+			"label": "DA Registry ID",
+			"insert_after": "username",
+			"unique": 1,
+			"in_standard_filter": 1,
+			"description": (
+				"DA-ID issued by the DA Registry. Required for the Development Agent role; "
+				"it is the record relationship that limits a DA to their own data."
+			),
+		}
+	]
+}
+
+
 def after_install():
 	seed_roles()
+	seed_custom_fields()
 
 
 def after_migrate():
 	seed_roles()
+	seed_custom_fields()
+	seed_not_assigned_kebele()
+
+
+def seed_not_assigned_kebele():
+	"""Create the "Not Assigned" DA Kebele when it is missing.
+
+	It has no Woreda, so it is inserted without the mandatory check. It is inactive:
+	the geo master sync only deactivates active rows Master Data does not list, so an
+	inactive row is left alone, and active-only pickers do not offer it.
+	"""
+	from da_services.services.constants import NOT_ASSIGNED_KEBELE
+
+	if frappe.db.exists("DA Kebele", NOT_ASSIGNED_KEBELE):
+		return
+	frappe.get_doc(
+		{
+			"doctype": "DA Kebele",
+			"kebele_code": NOT_ASSIGNED_KEBELE,
+			"kebele_name": NOT_ASSIGNED_KEBELE,
+			"is_active": 0,
+		}
+	).insert(ignore_permissions=True, ignore_mandatory=True)
+
+
+def seed_custom_fields():
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True, update=True)
 
 
 def before_tests():

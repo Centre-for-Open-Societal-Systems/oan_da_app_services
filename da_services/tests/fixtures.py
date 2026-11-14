@@ -56,6 +56,81 @@ def ensure_administrative_area(code: str, level: str, parent: str | None, name_e
 	doc.insert(ignore_permissions=True, ignore_links=True)
 
 
+# Geo masters (DA Country / Region / Zone / Woreda / Kebele) with the same codes as the
+# administrative areas above, plus the extra Zones / Woredas that RBAC scopes in tests use.
+# DA Kebele Assignment.kebele and DA RBAC Assignment scopes link to these masters.
+GEO_COUNTRY = ("ET", "Ethiopia")
+GEO_EXTRA = [
+	("ET04-Z02", "Zone", "ET04", "Zone 02"),
+	("ET03-Z01", "Zone", "ET03", "Zone 01"),
+	("ET04-W02", "Woreda", "ET04-Z01", "Woreda 02"),
+	("ET04-W09", "Woreda", "ET04-Z02", "Woreda 09"),
+	("ET03-W01", "Woreda", "ET03-Z01", "Woreda 01"),
+	("ET04-W09-K01", "Kebele", "ET04-W09", "Kebele 09-01"),
+]
+# level -> (doctype, parent link field)
+GEO_LEVELS = {
+	"Country": ("DA Country", None),
+	"Region": ("DA Region", "country"),
+	"Zone": ("DA Zone", "region"),
+	"Woreda": ("DA Woreda", "zone"),
+	"Kebele": ("DA Kebele", "woreda"),
+}
+
+
+def ensure_geo_masters() -> None:
+	"""Create the test geo master rows that are missing and reactivate inactive ones.
+
+	Idempotent; test_geo_master_sync empties these tables, so call it from setUp.
+	"""
+	rows = [(GEO_COUNTRY[0], "Country", None, GEO_COUNTRY[1])]
+	rows += [
+		(code, level, parent or GEO_COUNTRY[0], name) for code, level, parent, name in ADMINISTRATIVE_AREAS
+	]
+	rows += GEO_EXTRA
+	order = list(GEO_LEVELS)
+	for code, level, parent, name_en in sorted(rows, key=lambda r: order.index(r[1])):
+		doctype, parent_field = GEO_LEVELS[level]
+		if frappe.db.exists(doctype, code):
+			if not frappe.db.get_value(doctype, code, "is_active"):
+				frappe.db.set_value(doctype, code, "is_active", 1, update_modified=False)
+			continue
+		prefix = level.lower()
+		doc = {"doctype": doctype, f"{prefix}_code": code, f"{prefix}_name": name_en, "is_active": 1}
+		if parent_field:
+			doc[parent_field] = parent
+		frappe.get_doc(doc).insert(ignore_permissions=True)
+
+
+def set_da_registry_id(user: str, da_id: str) -> None:
+	"""Give `user` the DA Registry ID `da_id`, taking it off any other user (it is unique)."""
+	frappe.db.sql(
+		"update `tabUser` set da_registry_id = null where da_registry_id = %s and name != %s",
+		(da_id, user),
+	)
+	frappe.db.set_value("User", user, "da_registry_id", da_id, update_modified=False)
+
+
+def ensure_da_user(da_id: str) -> str:
+	"""The User that holds DA Registry ID `da_id`, for a DA Kebele Assignment.
+
+	DA Kebele Assignment requires `user` and fetches `da_id` from its DA Registry ID.
+	The user of the DA's latest RBAC assignment is preferred, so the posting belongs to
+	the login the test acts as; then a user already holding the ID; else one is created.
+	"""
+	user = frappe.db.get_value("DA RBAC Assignment", {"da_id": da_id}, "user", order_by="creation desc")
+	if not user:
+		user = frappe.db.get_value("User", {"da_registry_id": da_id})
+	if not user:
+		user = f"{da_id.lower()}@da-test.local"
+		if not frappe.db.exists("User", user):
+			frappe.get_doc(
+				{"doctype": "User", "email": user, "first_name": da_id, "send_welcome_email": 0}
+			).insert(ignore_permissions=True)
+	set_da_registry_id(user, da_id)
+	return user
+
+
 def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic") -> None:
 	"""Replace this DA's assignments with one Effective posting for `kebele`.
 
@@ -67,6 +142,7 @@ def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic"
 	frappe.get_doc(
 		{
 			"doctype": "DA Kebele Assignment",
+			"user": ensure_da_user(da_id),
 			"da_id": da_id,
 			"kebele": kebele,
 			"state": "Effective",
@@ -90,6 +166,7 @@ def create_administrative_areas():
 	"""
 	for code, level, parent, name_en in ADMINISTRATIVE_AREAS:
 		ensure_administrative_area(code, level, parent, name_en)
+	ensure_geo_masters()
 
 
 def cleanup_test_data():

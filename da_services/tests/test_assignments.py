@@ -11,6 +11,7 @@ from da_services.api.v1 import assignments as api
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import assignments as svc
 from da_services.services import constants as C
+from da_services.tests.fixtures import ensure_da_user, ensure_geo_masters, set_da_registry_id
 from da_services.utils import geofence
 from da_services.utils.permissions import get_scope_context
 
@@ -108,10 +109,12 @@ class TestAssignments(IntegrationTestCase):
 			if code == "ET04-W01-K03":
 				doc.boundary_geojson = json.dumps(BOX)
 			doc.insert(ignore_permissions=True, ignore_links=True)
+		ensure_geo_masters()  # DA Kebele Assignment.kebele links to DA Kebele
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
+		set_da_registry_id(DA1, "DA-000001")  # assign() posts DA-000001 to this user
 		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
@@ -298,6 +301,18 @@ class TestAssignments(IntegrationTestCase):
 		with self.assertRaises(ValueError):
 			geofence.validate_coordinates(float("nan"), 0)
 
+	def test_assign_maps_the_da_id_to_its_user(self):
+		frappe.set_user("Administrator")
+		out = svc.assign(da_id="DA-000001", kebele="ET04-W01-K03", ctx=_ctx("Administrator"))
+		self.assertEqual(frappe.db.get_value("DA Kebele Assignment", out["name"], "user"), DA1)
+
+	def test_assign_needs_a_user_with_the_da_id(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_value("User", DA1, "da_registry_id", None)
+		with self.assertRaisesRegex(frappe.ValidationError, "No user has DA Registry ID DA-000001"):
+			svc.assign(da_id="DA-000001", kebele="ET04-W01-K03", ctx=_ctx("Administrator"))
+		self.assertEqual(frappe.db.count("DA Kebele Assignment"), 0)
+
 	def test_client_op_id_is_unique_in_the_database(self):
 		frappe.set_user("Administrator")
 		a = svc.assign(
@@ -306,6 +321,7 @@ class TestAssignments(IntegrationTestCase):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user("DA-000001"),
 				"da_id": "DA-000001",
 				"kebele": "ET04-W01-K01",
 				"state": "Effective",

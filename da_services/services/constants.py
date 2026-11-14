@@ -13,6 +13,9 @@ ROLE_EXECUTIVE = "Executive"
 ROLE_ADMIN = "OAN Administrator"
 ROLE_COMMS = "Communications Officer"
 
+# DA Kebele row created on migrate (setup/install.py) for "no Kebele"; it keeps this spelling.
+NOT_ASSIGNED_KEBELE = "Not Assigned"
+
 DA_SERVICES_ROLES = (ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN, ROLE_COMMS)
 
 # Grievance access: Comms is excluded — FSD Appendix D forbids Comms seeing DA identity.

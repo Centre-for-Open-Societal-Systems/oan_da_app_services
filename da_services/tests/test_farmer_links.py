@@ -6,7 +6,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmer_links as svc
-from da_services.tests.fixtures import create_administrative_areas
+from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
 from da_services.utils.permissions import ScopeContext
 
 
@@ -38,6 +38,7 @@ class TestFarmerLinks(IntegrationTestCase):
 		self.assignment = frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user(self.da_id),
 				"da_id": self.da_id,
 				"kebele": self.kebele,
 				"state": "Effective",

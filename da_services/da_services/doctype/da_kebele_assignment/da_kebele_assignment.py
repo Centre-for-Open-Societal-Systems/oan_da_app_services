@@ -15,7 +15,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
-from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
+from da_services.services.kebele_user_permissions import sync_user_permissions
 
 LIVE_STATES = ("Proposed", "Validated", "Flagged", "Effective")
 PENDING_STATES = ("Proposed", "Validated", "Flagged")
@@ -23,15 +23,15 @@ PENDING_STATES = ("Proposed", "Validated", "Flagged")
 
 class DAKebeleAssignment(Document):
 	def validate(self):
-		area = frappe.db.get_value("DA Administrative Area", self.kebele, ["level", "active"], as_dict=True)
-		if not area:
-			frappe.throw(_("Kebele {0} is not in the administrative area master.").format(self.kebele))
-		if area.level != "Kebele":
-			frappe.throw(_("{0} is a {1}, not a Kebele.").format(self.kebele, area.level))
-		if not area.active and self.is_new():
+		kebele = frappe.db.get_value("DA Kebele", self.kebele, ["woreda", "is_active"], as_dict=True)
+		if not kebele:
+			frappe.throw(_("Kebele {0} is not in the DA Kebele master.").format(self.kebele))
+		if not kebele.is_active and self.is_new():
 			frappe.throw(_("Kebele {0} is inactive.").format(self.kebele))
-		tree = ancestors_of(self.kebele)
-		self.region, self.zone, self.woreda = tree["region"], tree["zone"], tree["woreda"]
+		# Scope from the geo masters: Kebele -> Woreda -> Zone -> Region.
+		self.woreda = kebele.woreda
+		self.zone = frappe.db.get_value("DA Woreda", self.woreda, "zone") if self.woreda else None
+		self.region = frappe.db.get_value("DA Zone", self.zone, "region") if self.zone else None
 		self.client_op_id = (self.client_op_id or "").strip() or None  # NULL, so the unique index ignores it
 		if self.is_new() and self.client_op_id:
 			# Fast path with a clear message; the unique index on client_op_id is the guarantee.
@@ -51,8 +51,28 @@ class DAKebeleAssignment(Document):
 		locked (SELECT ... FOR UPDATE) for the rest of the transaction, so two decisions
 		for the same DA at the same moment are applied one after the other.
 		"""
+		prior = self._supersede_prior()
+		# User Permission on the Kebele; the superseded rows fire no hooks, so their users too.
+		users = {self.user}
+		if prior:
+			users |= set(
+				frappe.get_all("DA Kebele Assignment", filters={"name": ("in", prior)}, pluck="user")
+			)
+		for user in users:
+			sync_user_permissions(user)
+
+	def on_update(self):
+		if self.flags.in_insert:
+			return  # after_insert has synced, after superseding
+		sync_user_permissions(self.user)
+		before = self.get_doc_before_save()
+		if before and before.user and before.user != self.user:
+			sync_user_permissions(before.user)
+
+	def _supersede_prior(self) -> list[str]:
+		"""Mark the rows this decision replaces Superseded; returns their names."""
 		if self.state not in LIVE_STATES:
-			return
+			return []
 		replace = LIVE_STATES if self.state == "Effective" else PENDING_STATES
 		prior = frappe.db.sql(
 			"""select name from `tabDA Kebele Assignment`
@@ -70,6 +90,7 @@ class DAKebeleAssignment(Document):
 			)
 		if prior:
 			self.db_set("supersedes", prior[-1], update_modified=False)
+		return prior
 
 	def on_trash(self):
 		frappe.throw(_("Assignments are history; supersede them instead of deleting."))

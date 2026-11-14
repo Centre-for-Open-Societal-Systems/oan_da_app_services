@@ -9,7 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
 from da_services.services import visit_specializations as spec_svc
-from da_services.tests.fixtures import create_administrative_areas
+from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
 from da_services.utils.permissions import ScopeContext
 
 
@@ -35,6 +35,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user(self.da_id),
 				"da_id": self.da_id,
 				"kebele": self.kebele,
 				"state": "Effective",
