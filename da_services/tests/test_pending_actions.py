@@ -20,6 +20,7 @@ from da_services.services.pending_actions import (
 	derive_pending_action,
 	derive_pending_actions_batch,
 )
+from da_services.tests.fixtures import ensure_da_user
 
 
 class TestPendingActions(IntegrationTestCase):
@@ -99,6 +100,7 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -131,6 +133,7 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -161,6 +164,7 @@ class TestPendingActions(IntegrationTestCase):
 		crop_visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -178,6 +182,7 @@ class TestPendingActions(IntegrationTestCase):
 		livestock_visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-002"),
 				"da_id": "DA-TEST-002",
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
@@ -206,6 +211,7 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -244,6 +250,7 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",

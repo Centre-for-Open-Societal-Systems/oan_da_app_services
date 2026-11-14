@@ -9,7 +9,12 @@ from frappe.utils import add_days, now_datetime, today
 from da_services.patches import backfill_zone
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
-from da_services.tests.fixtures import ensure_doctype_schema, ensure_geo_masters, set_da_registry_id
+from da_services.tests.fixtures import (
+	ensure_da_user,
+	ensure_doctype_schema,
+	ensure_geo_masters,
+	set_da_registry_id,
+)
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "zone-da1@da.local"  # DA-000001: ET04 / ET04-Z01 / ET04-W01
@@ -95,13 +100,26 @@ class TestZoneScope(IntegrationTestCase):
 		_grant(MIXED_EXEC, C.ROLE_EXECUTIVE, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(MIXED_EXEC, C.ROLE_EXECUTIVE, region_scope="ET04", zone_scope="ET04-Z02")
 		_grant(REGION_EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		set_da_registry_id(DA1, "DA-000001")
 
 		self.v1 = visits.plan_visit(
-			farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", purpose="Crop inspection", ctx=_ctx(DA1)
+			farmer_id="FR-88466",
+			scheduled_at=f"{today()} 08:30:00",
+			purpose="Crop inspection",
+			user=DA1,
+			ctx=_ctx(DA1),
+		)
+		# Plan no longer fills geo from registry; stamp posting codes for scope assertions.
+		frappe.db.set_value(
+			"DA Visit",
+			self.v1["name"],
+			{"region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01", "kebele": "ET04-W01-K03"},
+			update_modified=False,
 		)
 		self.v9 = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user(OTHER_DA),
 				"da_id": OTHER_DA,
 				"farmer_id": "FR-77009",
 				"scheduled_at": f"{add_days(today(), 1)} 09:00:00",
@@ -235,19 +253,40 @@ class TestZoneScope(IntegrationTestCase):
 	# -- single document --------------------------------------------------------------
 
 	def test_single_document_scope_honours_zone(self):
-		visits.get_visit(self.v1["name"], ctx=_ctx(ZONE_EXEC))
-		with self.assertRaises(frappe.PermissionError):
-			visits.get_visit(self.v9.name, ctx=_ctx(ZONE_EXEC))
-		visits.get_visit(self.v9.name, ctx=_ctx(OTHER_ZONE_EXEC))
-		visits.get_visit(self.v9.name, ctx=_ctx(REGION_EXEC))
-		with self.assertRaises(frappe.PermissionError):
-			visits.get_visit(self.v9.name, ctx=_ctx(ZONE_SUP))
+		# check_permission uses frappe.session.user (ctx is not a substitute).
+		frappe.set_user(ZONE_EXEC)
+		try:
+			visits.get_visit(self.v1["name"])
+			with self.assertRaises(frappe.PermissionError):
+				visits.get_visit(self.v9.name)
+		finally:
+			frappe.set_user("Administrator")
+		frappe.set_user(OTHER_ZONE_EXEC)
+		try:
+			visits.get_visit(self.v9.name)
+		finally:
+			frappe.set_user("Administrator")
+		frappe.set_user(REGION_EXEC)
+		try:
+			visits.get_visit(self.v9.name)
+		finally:
+			frappe.set_user("Administrator")
+		frappe.set_user(ZONE_SUP)
+		try:
+			with self.assertRaises(frappe.PermissionError):
+				visits.get_visit(self.v9.name)
+		finally:
+			frappe.set_user("Administrator")
 
 	def test_row_without_zone_is_denied_to_zone_grant_not_widened(self):
 		frappe.db.set_value("DA Visit", self.v1["name"], "zone", None)
 		self.assertEqual(self._visible("DA Visit", ZONE_EXEC), set())
-		with self.assertRaises(frappe.PermissionError):
-			visits.get_visit(self.v1["name"], ctx=_ctx(ZONE_EXEC))
+		frappe.set_user(ZONE_EXEC)
+		try:
+			with self.assertRaises(frappe.PermissionError):
+				visits.get_visit(self.v1["name"])
+		finally:
+			frappe.set_user("Administrator")
 		# The Region-only grant still covers it.
 		self.assertEqual(self._visible("DA Visit", REGION_EXEC), {"DA-000001", OTHER_DA})
 

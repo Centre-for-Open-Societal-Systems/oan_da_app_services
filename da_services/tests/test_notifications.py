@@ -8,6 +8,7 @@ from da_services.api.v1 import notifications as api
 from da_services.services import constants as C
 from da_services.services import notifications as svc
 from da_services.services import visits
+from da_services.tests.fixtures import set_da_registry_id
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "ntf-da1@da.local"  # DA-000001
@@ -51,6 +52,8 @@ class TestDANotification(IntegrationTestCase):
 		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(COMMS, C.ROLE_COMMS)
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA2, "DA-000002")
 		self.n1 = svc.notify(
 			DA1,
 			kind="Task",
@@ -165,7 +168,7 @@ class TestDANotification(IntegrationTestCase):
 
 	def test_visit_follow_up_notifies_the_da(self):
 		ctx = get_scope_context(DA1)
-		v = visits.plan_visit(farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", ctx=ctx)
+		v = visits.plan_visit(farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", user=DA1, ctx=ctx)
 		visits.submit_outcome(
 			v["name"],
 			observed="ok",
