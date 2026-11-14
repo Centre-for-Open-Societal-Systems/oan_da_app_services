@@ -37,6 +37,26 @@ DA_ID = "DA-000001"
 FARMERS = ["FRM-000101", "FRM-000102", "FRM-000103", "FRM-000104"]
 
 
+def _geo_masters() -> None:
+	"""DA Country / Region / Zone / Woreda / Kebele rows for the demo geography (missing ones only)."""
+	if not frappe.db.exists("DA Country", DEMO_COUNTRY[0]):
+		frappe.get_doc(
+			{"doctype": "DA Country", "country_code": DEMO_COUNTRY[0], "country_name": DEMO_COUNTRY[1]}
+		).insert(ignore_permissions=True)
+	for code, level, parent, name in FIXTURE_GEO:  # parents come before their children
+		doctype, parent_field = GEO_DOCTYPES[level]
+		if frappe.db.exists(doctype, code):
+			continue
+		frappe.get_doc(
+			{
+				"doctype": doctype,
+				f"{level}_code": code,
+				f"{level}_name": name,
+				parent_field: parent or DEMO_COUNTRY[0],
+			}
+		).insert(ignore_permissions=True)
+
+
 def _user(email: str, first_name: str, role: str, grant: dict) -> None:
 	if not frappe.db.exists("User", email):
 		u = frappe.new_doc("User")
@@ -48,6 +68,14 @@ def _user(email: str, first_name: str, role: str, grant: dict) -> None:
 	u = frappe.get_doc("User", email)
 	if role not in frappe.get_roles(email):
 		u.add_roles(role)
+	if grant.get("da_id") and u.get("da_registry_id") != grant["da_id"]:
+		# The grant's DA-ID is fetched from the user's DA Registry ID (unique): the demo
+		# user takes it over from any other user on this developer site.
+		frappe.db.sql(
+			"update `tabUser` set da_registry_id = null where da_registry_id = %s and name != %s",
+			(grant["da_id"], email),
+		)
+		frappe.db.set_value("User", email, "da_registry_id", grant["da_id"])
 	if not frappe.db.exists("DA RBAC Assignment", {"user": email, "role": role, "active": 1}):
 		doc = frappe.new_doc("DA RBAC Assignment")
 		doc.user = email
@@ -119,6 +147,15 @@ def _tasks(ctx) -> None:
 # Names are placeholders until the administrative master is synced.
 # The demo geography is the mock registry's Master Data (one list, two readers).
 AREAS = [(code, level.capitalize(), parent, name) for code, level, parent, name in FIXTURE_GEO]
+# The same geography in the geo masters, which RBAC scopes and Kebele postings link to:
+# level -> (doctype, parent link field). The Regions sit under DEMO_COUNTRY.
+DEMO_COUNTRY = ("ET", "Ethiopia")
+GEO_DOCTYPES = {
+	"region": ("DA Region", "country"),
+	"zone": ("DA Zone", "region"),
+	"woreda": ("DA Woreda", "zone"),
+	"kebele": ("DA Kebele", "woreda"),
+}
 # One demo boundary so the geofence check can be exercised: a box around Dambi Gobu.
 DEMO_BOUNDARY = {
 	"ET04-W01-K03": {
@@ -172,6 +209,7 @@ def run(force: str | int | bool = False) -> dict:
 	if not (frappe.conf.get("developer_mode") or str(force).lower() in ("1", "true", "yes")):
 		frappe.throw("seed_demo only runs on a developer_mode site (or with force=1).")
 	frappe.set_user("Administrator")
+	_geo_masters()  # before the grants: their scopes link to the geo masters
 	for email, first_name, role, grant in USERS:
 		_user(email, first_name, role, grant)
 	ctx = get_scope_context("Administrator")

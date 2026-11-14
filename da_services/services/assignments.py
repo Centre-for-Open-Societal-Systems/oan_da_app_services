@@ -407,6 +407,15 @@ def assign(
 	ref = get_da_reference(da_id, ctx)  # the DA must be inside the officer's scope
 	if ref.active_status == C.ACTIVE_STATUS_SEPARATED:
 		frappe.throw(_("DA {0} is separated and cannot be assigned.").format(da_id), frappe.ValidationError)
+	# The assignment belongs to the User whose DA Registry ID is this DA-ID (its da_id is fetched from it).
+	user = frappe.db.get_value("User", {"da_registry_id": ref.da_id}, "name")
+	if not user:
+		frappe.throw(
+			_("No user has DA Registry ID {0}; set it on the DA's User before assigning a Kebele.").format(
+				ref.da_id
+			),
+			frappe.ValidationError,
+		)
 
 	area = frappe.db.get_value(
 		"DA Administrative Area", kebele, ["level", "active", "name_en", "boundary_geojson"], as_dict=True
@@ -433,6 +442,7 @@ def assign(
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": user,
 				"da_id": ref.da_id,
 				"kebele": kebele,
 				"state": state,
