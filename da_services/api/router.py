@@ -71,6 +71,7 @@ def _register() -> None:
 		agent_import,
 		agents,
 		assignments,
+		beneficiary_segments,
 		crop_sown,
 		da,
 		dashboard,
