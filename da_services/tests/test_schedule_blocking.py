@@ -9,6 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
+from da_services.tests.fixtures import set_da_registry_id
 from da_services.utils.permissions import ScopeContext
 
 
@@ -20,20 +21,32 @@ class TestScheduleBlocking(IntegrationTestCase):
 		self.da_crop = "DA-BLOCK-CROP"
 		self.da_livestock = "DA-BLOCK-LIVESTOCK"
 		self.farmer_id = "FARMER-BLOCK-001"
+		self.user_crop = "da-crop@test.com"
+		self.user_livestock = "da-livestock@test.com"
 
 		# Clean up
 		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
 
+		for email, da_id in (
+			(self.user_crop, self.da_crop),
+			(self.user_livestock, self.da_livestock),
+		):
+			if not frappe.db.exists("User", email):
+				frappe.get_doc(
+					{"doctype": "User", "email": email, "first_name": email.split("@")[0], "send_welcome_email": 0}
+				).insert(ignore_permissions=True)
+			set_da_registry_id(email, da_id)
+
 		# Create DA context
 		self.ctx_crop = ScopeContext(
-			user="da-crop@test.com",
+			user=self.user_crop,
 			roles={"Development Agent"},
 			da_ids={self.da_crop},
 			unrestricted=False,
 		)
 
 		self.ctx_livestock = ScopeContext(
-			user="da-livestock@test.com",
+			user=self.user_livestock,
 			roles={"Development Agent"},
 			da_ids={self.da_livestock},
 			unrestricted=False,
@@ -49,6 +62,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -63,6 +77,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -73,6 +88,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				farmer_id=self.farmer_id,
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Crop Survey",
+				user=self.user_crop,
 				da_id=self.da_crop,
 				ctx=self.ctx_crop,
 			)
@@ -86,6 +102,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -95,6 +112,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=2),
 			visit_type="Livestock Survey",
+			user=self.user_livestock,
 			da_id=self.da_livestock,
 			ctx=self.ctx_livestock,
 		)
@@ -111,6 +129,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -132,6 +151,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -146,6 +166,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -160,6 +181,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -171,6 +193,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -186,6 +209,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				farmer_id=self.farmer_id,
 				scheduled_at=datetime.now() + timedelta(days=1),
 				visit_type="Crop Survey",
+				user=self.user_crop,
 				da_id=self.da_crop,
 				ctx=self.ctx_crop,
 			)
@@ -200,6 +224,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
@@ -212,6 +237,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Services",
@@ -228,6 +254,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				farmer_id=self.farmer_id,
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Crop Survey",
+				user=self.user_crop,
 				da_id=self.da_crop,
 				ctx=self.ctx_crop,
 			)
@@ -240,6 +267,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				farmer_id=self.farmer_id,
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Livestock Survey",
+				user=self.user_livestock,
 				da_id=self.da_livestock,
 				ctx=self.ctx_livestock,
 			)
@@ -255,6 +283,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			client_op_id=client_op_id,
 			ctx=self.ctx_crop,
@@ -265,6 +294,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=2),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			client_op_id=client_op_id,
 			ctx=self.ctx_crop,
@@ -279,13 +309,20 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
+			user=self.user_crop,
 			da_id=self.da_crop,
 			ctx=self.ctx_crop,
 		)
 
 		# DA-2 tries to create Crop visit (should fail)
+		other_user = "da-other@test.com"
+		if not frappe.db.exists("User", other_user):
+			frappe.get_doc(
+				{"doctype": "User", "email": other_user, "first_name": "other", "send_welcome_email": 0}
+			).insert(ignore_permissions=True)
+		set_da_registry_id(other_user, "DA-OTHER-CROP")
 		ctx_other = ScopeContext(
-			user="da-other@test.com",
+			user=other_user,
 			roles={"Development Agent"},
 			da_ids={"DA-OTHER-CROP"},
 			unrestricted=False,
@@ -296,6 +333,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				farmer_id=self.farmer_id,
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Crop Survey",
+				user=other_user,
 				da_id="DA-OTHER-CROP",
 				ctx=ctx_other,
 			)
@@ -309,6 +347,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 			farmer_id=self.farmer_id,
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Livestock Survey",
+			user=self.user_livestock,
 			da_id=self.da_livestock,
 			ctx=self.ctx_livestock,
 		)
@@ -319,6 +358,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				farmer_id=self.farmer_id,
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Livestock Survey",
+				user=self.user_livestock,
 				da_id=self.da_livestock,
 				ctx=self.ctx_livestock,
 			)

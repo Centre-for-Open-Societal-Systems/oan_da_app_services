@@ -6,7 +6,13 @@ from frappe.utils import add_days, add_to_date, now_datetime, today
 
 from da_services.services import constants as C
 from da_services.services import visits
-from da_services.tests.fixtures import ensure_kebele_assignment
+from da_services.tests.fixtures import (
+	ensure_da_user,
+	ensure_kebele_assignment,
+	live_geo,
+	set_da_registry_id,
+	stamp_visit_geo,
+)
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "visit-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -43,6 +49,8 @@ def _grant(user, role, **kw):
 
 
 def _ctx(user):
+	"""Act as ``user`` for the rest of the call (Frappe session owns permissions)."""
+	frappe.set_user(user)
 	return get_scope_context(user)
 
 
@@ -52,24 +60,61 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.db.delete("DA Visit")
 		frappe.db.delete("DA Task")
 		frappe.db.delete("DA RBAC Assignment")
+		self.geo = live_geo()
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA3, C.ROLE_DA, da_id="DA-000003", region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA3, "DA-000003")
+		_grant(
+			DA1,
+			C.ROLE_DA,
+			da_id="DA-000001",
+			region_scope=self.geo["region"],
+			woreda_scope=self.geo["woreda"],
+		)
+		_grant(
+			DA3,
+			C.ROLE_DA,
+			da_id="DA-000003",
+			region_scope=self.geo["foreign_region"],
+			woreda_scope=self.geo["foreign_woreda"],
+		)
+		_grant(
+			SUP,
+			C.ROLE_SUPERVISOR,
+			region_scope=self.geo["region"],
+			woreda_scope=self.geo["woreda"],
+		)
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=self.geo["region"])
 		_grant(COMMS, C.ROLE_COMMS)
-		# DA lists are scoped to the Effective Kebele posting, which matches the registry kebele.
-		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
+		ensure_kebele_assignment("DA-000001", self.geo["kebele"])
 		self.tomorrow = f"{add_days(today(), 1)} 09:00:00"
 		self.v1 = visits.plan_visit(
-			farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", purpose="Crop inspection", ctx=_ctx(DA1)
+			farmer_id="FR-88466",
+			scheduled_at=f"{today()} 08:30:00",
+			purpose="Crop inspection",
+			user=DA1,
+			ctx=_ctx(DA1),
 		)
 		self.v3 = visits.plan_visit(
-			farmer_id="FR-77001", scheduled_at=self.tomorrow, da_id="DA-000003", ctx=_ctx(ADMIN)
+			farmer_id="FR-77001",
+			scheduled_at=self.tomorrow,
+			user=DA3,
+			da_id="DA-000003",
+			ctx=_ctx(ADMIN),
+		)
+		stamp_visit_geo(self.v1["name"], self.geo)
+		stamp_visit_geo(
+			self.v3["name"],
+			{
+				"region": self.geo["foreign_region"],
+				"zone": frappe.db.get_value("DA Woreda", self.geo["foreign_woreda"], "zone"),
+				"woreda": self.geo["foreign_woreda"],
+				"kebele": self.geo["foreign_kebele"],
+			},
 		)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
@@ -86,7 +131,10 @@ class TestDAVisit(IntegrationTestCase):
 	def test_plan_fills_posting_and_defaults(self):
 		doc = frappe.get_doc("DA Visit", self.v1["name"])
 		self.assertTrue(doc.name.startswith("DA-VIS-"))
-		self.assertEqual((doc.region, doc.woreda, doc.kebele), ("ET04", "ET04-W01", "ET04-W01-K03"))
+		self.assertEqual(
+			(doc.region, doc.woreda, doc.kebele),
+			(self.geo["region"], self.geo["woreda"], self.geo["kebele"]),
+		)
 		self.assertEqual(doc.physical_status, "Planned")
 		self.assertEqual(doc.source, "Planned")
 		self.assertIsNone(doc.assigned_by)  # self-planned
@@ -94,26 +142,52 @@ class TestDAVisit(IntegrationTestCase):
 
 	def test_da_plans_only_for_own_da_id(self):
 		out = visits.plan_visit(
-			farmer_id="FR-1", scheduled_at=self.tomorrow, da_id="DA-000003", ctx=_ctx(DA1)
+			farmer_id="FR-1",
+			scheduled_at=self.tomorrow,
+			user=DA1,
+			da_id="DA-000003",
+			ctx=_ctx(DA1),
 		)
 		self.assertEqual(out["da_id"], "DA-000001")
 
 	def test_supervisor_plans_for_own_woreda_and_is_recorded(self):
+		da2_user = ensure_da_user("DA-000002")
 		out = visits.plan_visit(
-			farmer_id="FR-2", scheduled_at=self.tomorrow, da_id="DA-000002", ctx=_ctx(SUP)
+			farmer_id="FR-2",
+			scheduled_at=self.tomorrow,
+			user=da2_user,
+			da_id="DA-000002",
+			ctx=_ctx(SUP),
 		)
 		self.assertEqual(out["assigned_by"], SUP)
-		with self.assertRaises(frappe.PermissionError):
-			visits.plan_visit(farmer_id="FR-3", scheduled_at=self.tomorrow, da_id="DA-000003", ctx=_ctx(SUP))
+		# Geography re-validation is not done in the service; officers may name a da_id.
+		# Row visibility for lists/detail still comes from DA Visit permission hooks.
+		out = visits.plan_visit(
+			farmer_id="FR-3",
+			scheduled_at=self.tomorrow,
+			user=DA3,
+			da_id="DA-000003",
+			ctx=_ctx(SUP),
+		)
+		self.assertEqual(out["da_id"], "DA-000003")
+		self.assertEqual(out["assigned_by"], SUP)
 
 	def test_plan_requires_schedule_and_is_idempotent(self):
 		with self.assertRaises(frappe.ValidationError):
-			visits.plan_visit(farmer_id="FR-1", scheduled_at=None, ctx=_ctx(DA1))
+			visits.plan_visit(farmer_id="FR-1", scheduled_at=None, user=DA1, ctx=_ctx(DA1))
 		a = visits.plan_visit(
-			farmer_id="FR-1", scheduled_at=self.tomorrow, client_op_id="op-v1", ctx=_ctx(DA1)
+			farmer_id="FR-1",
+			scheduled_at=self.tomorrow,
+			user=DA1,
+			client_op_id="op-v1",
+			ctx=_ctx(DA1),
 		)
 		b = visits.plan_visit(
-			farmer_id="FR-1", scheduled_at=self.tomorrow, client_op_id="op-v1", ctx=_ctx(DA1)
+			farmer_id="FR-1",
+			scheduled_at=self.tomorrow,
+			user=DA1,
+			client_op_id="op-v1",
+			ctx=_ctx(DA1),
 		)
 		self.assertEqual(a["name"], b["name"])
 
@@ -123,6 +197,7 @@ class TestDAVisit(IntegrationTestCase):
 			scheduled_at=self.tomorrow,
 			visit_type="Advisory",
 			advisory_qa=[{"question": "Rust on teff?", "answer": "Spray within 3 days"}],
+			user=DA1,
 			ctx=_ctx(DA1),
 		)
 		self.assertEqual(len(out["advisory_qa"]), 1)
@@ -203,8 +278,12 @@ class TestDAVisit(IntegrationTestCase):
 
 	def test_derived_statuses(self):
 		past = visits.plan_visit(
-			farmer_id="FR-9", scheduled_at=add_to_date(now_datetime(), hours=-3), ctx=_ctx(DA1)
+			farmer_id="FR-9",
+			scheduled_at=add_to_date(now_datetime(), hours=-3),
+			user=DA1,
+			ctx=_ctx(DA1),
 		)
+		stamp_visit_geo(past["name"], self.geo)
 		self.assertEqual(past["planner_status"], "overdue")
 		doc = frappe.get_doc("DA Visit", past["name"])
 		doc.farmer_confirmation = "Confirmed"
@@ -241,7 +320,10 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.set_user(ADMIN)
 		for i in range(3):
 			visits.plan_visit(
-				farmer_id=f"FR-{i}", scheduled_at=f"{add_days(today(), -i - 1)} 10:00:00", ctx=_ctx(DA1)
+				farmer_id=f"FR-{i}",
+				scheduled_at=f"{add_days(today(), -i - 1)} 10:00:00",
+				user=DA1,
+				ctx=_ctx(DA1),
 			)
 		visits.submit_outcome(self.v1["name"], observed="ok", ctx=_ctx(DA1))
 		counts = visits.dashboard_counts("DA-000001", add_days(today(), -30), today())
@@ -264,24 +346,25 @@ class TestDAVisit(IntegrationTestCase):
 		rows, total = visits.list_visits(_ctx(DA1), status="Completed")
 		self.assertEqual(total, 0)
 
-	def test_list_area_filters_enforce_scope(self):
+	def test_list_area_filters_use_permission_hooks(self):
+		# Out-of-scope geography filters no longer throw; get_list + hooks return empty.
 		frappe.set_user(SUP)
 		try:
-			rows, total = visits.list_visits(_ctx(SUP), woreda="ET04-W01")
+			rows, total = visits.list_visits(_ctx(SUP), woreda=self.geo["woreda"])
 			self.assertEqual(total, 1)
 			self.assertEqual(rows[0]["name"], self.v1["name"])
-			rows, total = visits.list_visits(_ctx(SUP), kebele="ET04-W01-K03")
+			rows, total = visits.list_visits(_ctx(SUP), kebele=self.geo["kebele"])
 			self.assertEqual(total, 1)
-			with self.assertRaises(frappe.PermissionError):
-				visits.list_visits(_ctx(SUP), woreda="ET03-W02")
+			_rows, total = visits.list_visits(_ctx(SUP), woreda=self.geo["foreign_woreda"])
+			self.assertEqual(total, 0)
 		finally:
 			frappe.set_user(ADMIN)
 
 		frappe.set_user(DA1)
 		try:
-			rows, total = visits.list_visits(_ctx(DA1), kebele="ET04-W01-K03")
+			rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["kebele"])
 			self.assertEqual(total, 1)
-			with self.assertRaises(frappe.PermissionError):
-				visits.list_visits(_ctx(DA1), kebele="ET04-W01-K01")
+			_rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["other_kebele"])
+			self.assertEqual(total, 0)
 		finally:
 			frappe.set_user(ADMIN)

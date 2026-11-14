@@ -131,13 +131,84 @@ def ensure_da_user(da_id: str) -> str:
 	return user
 
 
+def kebele_chain(kebele: str) -> dict:
+	"""Region / zone / woreda / kebele codes for a master Kebele name."""
+	woreda = frappe.db.get_value("DA Kebele", kebele, "woreda")
+	zone = frappe.db.get_value("DA Woreda", woreda, "zone")
+	region = frappe.db.get_value("DA Zone", zone, "region")
+	return {"kebele": kebele, "woreda": woreda, "zone": zone, "region": region}
+
+
+def live_geo() -> dict:
+	"""Active master chain for this site (do not invent Admin Area / dummy codes)."""
+	row = frappe.get_all(
+		"DA Kebele", filters={"is_active": 1}, fields=["name", "woreda"], order_by="name asc", limit=1
+	)[0]
+	primary = kebele_chain(row.name)
+	siblings = frappe.get_all(
+		"DA Kebele",
+		filters={"woreda": primary["woreda"], "is_active": 1, "name": ("!=", primary["kebele"])},
+		pluck="name",
+		order_by="name asc",
+		limit=1,
+	)
+	foreign = None
+	for other_region in frappe.get_all(
+		"DA Region", filters={"name": ("!=", primary["region"])}, pluck="name", order_by="name asc"
+	):
+		zones = frappe.get_all("DA Zone", filters={"region": other_region}, pluck="name", limit=1)
+		if not zones:
+			continue
+		woredas = frappe.get_all("DA Woreda", filters={"zone": zones[0]}, pluck="name", limit=1)
+		if not woredas:
+			continue
+		kebeles = frappe.get_all(
+			"DA Kebele", filters={"woreda": woredas[0], "is_active": 1}, pluck="name", limit=1
+		)
+		if kebeles:
+			foreign = kebele_chain(kebeles[0])
+			break
+	if foreign is None:
+		cand = frappe.get_all(
+			"DA Kebele",
+			filters={"is_active": 1, "woreda": ("!=", primary["woreda"])},
+			pluck="name",
+			order_by="name asc",
+			limit=1,
+		)[0]
+		foreign = kebele_chain(cand)
+	return {
+		**primary,
+		"other_kebele": siblings[0] if siblings else primary["kebele"],
+		"foreign_kebele": foreign["kebele"],
+		"foreign_woreda": foreign["woreda"],
+		"foreign_region": foreign["region"],
+	}
+
+
+def stamp_visit_geo(name: str, geo: dict) -> None:
+	"""Overwrite visit posting codes with live master links (registry mock may use legacy codes)."""
+	frappe.db.set_value(
+		"DA Visit",
+		name,
+		{
+			"region": geo["region"],
+			"zone": geo["zone"],
+			"woreda": geo["woreda"],
+			"kebele": geo["kebele"],
+		},
+		update_modified=False,
+	)
+
+
 def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic") -> None:
 	"""Replace this DA's assignments with one Effective posting for `kebele`.
 
 	Visit and farmer lists for a Development Agent are scoped to Effective
 	DA Kebele Assignment rows, so tests that read those lists need one.
+	Uses ignore_links so the posting can reference a synced master row that
+	tests already assume exists (do not invent Admin Area / master rows here).
 	"""
-	create_administrative_areas()
 	frappe.db.delete("DA Kebele Assignment", {"da_id": da_id})
 	frappe.get_doc(
 		{
@@ -149,7 +220,7 @@ def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic"
 			"mode": mode,
 			"effective_date": "2026-10-01",
 		}
-	).insert(ignore_permissions=True)
+	).insert(ignore_permissions=True, ignore_links=True)
 
 
 def create_administrative_areas():
