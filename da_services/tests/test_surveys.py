@@ -309,6 +309,52 @@ class TestSurveys(IntegrationTestCase):
 		row.insert(ignore_permissions=True)
 		return row.name
 
+	def _insert_response(
+		self,
+		survey,
+		*,
+		farmer_id,
+		da_id,
+		answers,
+		sync_state="Synced",
+		consent="granted",
+		kebele="ET04-W01-K01",
+		**over,
+	):
+		"""Write a response row directly, bypassing the submit-path kebele checks.
+
+		Results aggregation reads stored rows regardless of how they were captured,
+		so this keeps the aggregation fixtures deterministic.
+		"""
+		data = {
+			"doctype": "DA Survey Response",
+			"survey": survey["id"],
+			"template_version": survey["templateVersion"],
+			"da_id": da_id,
+			"farmer_id": farmer_id,
+			"consent": consent,
+			"answers_json": frappe.as_json(answers),
+			"sync_state": sync_state,
+			"started_at": now_datetime(),
+			"completed_at": now_datetime(),
+			"region": "ET04",
+			"zone": "ET04-Z01",
+			"woreda": "ET04-W01",
+			"kebele": kebele,
+		}
+		data.update(over)
+		row = frappe.get_doc(data)
+		row.insert(ignore_permissions=True)
+		return row.name
+
+	def _results_param_ids(self, survey_id):
+		"""Map answer types to stored parameter ids for a freshly created survey."""
+		res = svc.survey_results(survey_id, _ctx(SUP))
+		ratings = [p["question_id"] for p in res["parameters"] if p["answer_type"] == "rating"]
+		mc = [p["question_id"] for p in res["parameters"] if p["answer_type"] == "multiple_choice"]
+		text = [p["question_id"] for p in res["parameters"] if p["answer_type"] == "free_text"]
+		return ratings, mc, text
+
 	# -- create ----------------------------------------------------------------
 
 	def test_supervisor_creates_open_survey_with_standard_params(self):
@@ -1623,6 +1669,175 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(out["survey_id"], survey["id"])
 		with self.assertRaises(frappe.PermissionError):
 			self._create(user=EXEC)
+
+	# -- results: summary cards, contract shape, zero-fill ---------------------
+
+	def _results_fixture(self):
+		"""A 2-rating / 1-multiple-choice / 1-free-text survey."""
+		return self._create(
+			questions=[
+				{"prompt": "Rate the support", "type": "rating", "options": "", "required": True},
+				{"prompt": "Rate the advice", "type": "rating", "options": "", "required": True},
+				{
+					"prompt": "Services received",
+					"type": "single",
+					"options": ["training", "field_visit"],
+					"required": True,
+				},
+				{"prompt": "Suggestions", "type": "text", "options": "", "required": False},
+			]
+		)
+
+	def test_results_summary_cards_and_contract_shape(self):
+		survey = self._results_fixture()
+		(q1, q2), (mc,), (text,) = self._results_param_ids(survey["id"])
+		self._insert_response(
+			survey,
+			farmer_id=FARMER_A,
+			da_id="DA-000001",
+			answers={q1: "5", q2: "4", mc: "training", text: "more seeds"},
+		)
+		self._insert_response(
+			survey,
+			farmer_id=FARMER_D,
+			da_id="DA-000001",
+			answers={q1: "3", q2: "4", mc: "field_visit", text: "better timing"},
+		)
+		self._insert_response(
+			survey,
+			farmer_id=FARMER_B,
+			da_id="DA-000002",
+			answers={q1: "5", q2: "5", mc: "field_visit", text: ""},
+		)
+
+		res = svc.survey_results(survey["id"], _ctx(SUP))
+		self.assertEqual(res["collected"], 3)
+		self.assertEqual(res["completed"], 3)
+		self.assertEqual(res["farmers_per_da"], 20)
+		self.assertEqual(res["eligible_da_count"], 2)
+		self.assertEqual(res["total_target"], 40)
+		self.assertEqual(res["completion_percentage"], 7.5)
+		self.assertEqual(res["rating_answer_count"], 6)
+		self.assertEqual(res["rating_question_count"], 2)
+		self.assertEqual(res["average_rating"], 4.33)
+
+		params = {p["question_id"]: p for p in res["parameters"]}
+		self.assertEqual(params[q1]["answer_type"], "rating")
+		self.assertEqual(params[q1]["average_rating"], 4.33)
+		self.assertEqual(params[q1]["total_answers"], 3)
+		self.assertEqual(params[q1]["rating_distribution"], {"1": 0, "2": 0, "3": 1, "4": 0, "5": 2})
+		self.assertEqual(sum(params[q1]["rating_distribution"].values()), params[q1]["total_answers"])
+		self.assertEqual(params[q2]["average_rating"], 4.33)
+
+		mc_param = params[mc]
+		self.assertEqual(mc_param["answer_type"], "multiple_choice")
+		mc_counts = {o["value"]: o["count"] for o in mc_param["options"]}
+		self.assertEqual(mc_counts, {"training": 1, "field_visit": 2})
+
+		text_param = params[text]
+		self.assertEqual(text_param["answer_type"], "free_text")
+		self.assertEqual(text_param["total_answers"], 3)
+		self.assertEqual(len(text_param["answers"]), 3)
+
+	def test_results_zero_fills_unanswered_questions(self):
+		survey = self._results_fixture()
+		res = svc.survey_results(survey["id"], _ctx(SUP))
+		self.assertEqual(res["collected"], 0)
+		self.assertIsNone(res["average_rating"])
+		self.assertEqual(res["rating_answer_count"], 0)
+		self.assertEqual(res["rating_question_count"], 0)
+		self.assertEqual(res["eligible_da_count"], 2)
+		self.assertEqual(res["total_target"], 40)
+		self.assertEqual(res["completion_percentage"], 0.0)
+
+		params = {p["question_id"]: p for p in res["parameters"]}
+		(q1, _q2), (mc,), (text,) = self._results_param_ids(survey["id"])
+		self.assertIsNone(params[q1]["average_rating"])
+		self.assertEqual(params[q1]["rating_distribution"], {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0})
+		self.assertEqual(params[q1]["total_answers"], 0)
+		mc_counts = {o["value"]: o["count"] for o in params[mc]["options"]}
+		self.assertEqual(mc_counts, {"training": 0, "field_visit": 0})
+		self.assertEqual(params[text]["total_answers"], 0)
+		self.assertEqual(params[text]["answers"], [])
+
+	# -- responses: search, contract fields, filters, pagination --------------
+
+	def test_list_responses_search_and_contract_fields(self):
+		survey = self._create()
+		self._submit(survey["id"], user=DA1, farmer_id=FARMER_A)
+		self._submit(survey["id"], user=DA2, farmer_id=FARMER_D)
+
+		# Search by farmer display id (FR-000101 → canonical farmer-uuid-001).
+		rows, total = svc.list_responses(survey["id"], _ctx(SUP), search="FR-000101")
+		self.assertEqual(total, 1)
+		self.assertEqual(rows[0]["farmer_id"], FARMER_A)
+		self.assertEqual(rows[0]["farmer_display_id"], "FR-000101")
+		self.assertEqual(rows[0]["farmer_reg_id"], "FR-000101")
+
+		# Search by collector DA (LIKE) matches both collectors.
+		rows, total = svc.list_responses(survey["id"], _ctx(SUP), search="DA-00000")
+		self.assertEqual(total, 2)
+
+		# Contract aliases alongside the legacy keys.
+		row = rows[0]
+		for key in (
+			"response_id",
+			"collector_da",
+			"status",
+			"version",
+			"farmer_display_id",
+			"id",
+			"collector_da_id",
+			"sync_state",
+			"template_version",
+		):
+			self.assertIn(key, row)
+		self.assertEqual(row["response_id"], row["id"])
+		self.assertEqual(row["collector_da"], row["collector_da_id"])
+		self.assertEqual(row["status"], row["sync_state"])
+		self.assertEqual(row["version"], row["template_version"])
+
+	def test_list_responses_status_filter(self):
+		survey = self._create()
+		self._submit(survey["id"], user=DA1, farmer_id=FARMER_A)
+
+		_rows, total = svc.list_responses(survey["id"], _ctx(SUP), status="synced")
+		self.assertEqual(total, 1)
+		_rows, total = svc.list_responses(survey["id"], _ctx(SUP), status="draft")
+		self.assertEqual(total, 0)
+		with self.assertRaises(frappe.ValidationError):
+			svc.list_responses(survey["id"], _ctx(SUP), status="not-a-state")
+
+		# A far-future lower bound excludes every stored row.
+		_rows, total = svc.list_responses(survey["id"], _ctx(SUP), from_date=add_days(today(), 5))
+		self.assertEqual(total, 0)
+
+	def test_api_list_responses_pagination_envelope(self):
+		survey = self._create()
+		self._submit(survey["id"], user=DA1, farmer_id=FARMER_A)
+		self._submit(survey["id"], user=DA2, farmer_id=FARMER_D)
+
+		frappe.set_user(SUP)
+		try:
+			out = api.list_responses(survey["id"], page=1, page_size=1)
+			self.assertEqual(out["status"], "success")
+			self.assertEqual(len(out["data"]["responses"]), 1)
+			pagination = out["data"]["pagination"]
+			self.assertEqual(pagination["total_records"], 2)
+			self.assertEqual(pagination["page_size"], 1)
+			self.assertEqual(pagination["current_page"], 1)
+			self.assertEqual(pagination["total_pages"], 2)
+			self.assertTrue(pagination["has_next"])
+			self.assertFalse(pagination["has_previous"])
+
+			out = api.list_responses(survey["id"], page=2, page_size=1)
+			pagination = out["data"]["pagination"]
+			self.assertEqual(pagination["current_page"], 2)
+			self.assertFalse(pagination["has_next"])
+			self.assertTrue(pagination["has_previous"])
+			self.assertEqual(len(out["data"]["responses"]), 1)
+		finally:
+			frappe.set_user("Administrator")
 
 	# -- Excel export ----------------------------------------------------------
 

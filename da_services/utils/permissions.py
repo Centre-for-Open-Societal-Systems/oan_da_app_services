@@ -101,6 +101,41 @@ def active_assignments(user: str | None = None) -> list[dict]:
 	)
 
 
+def active_da_assignments(
+	*,
+	woreda: str | None = None,
+	region: str | None = None,
+) -> list[dict]:
+	"""Active Development Agent RBAC rows for a survey *area*, across all users.
+
+	Unlike :func:`active_assignments`, this is not scoped to one user: it answers
+	"which DAs are eligible to collect for this survey", so it omits the ``user``
+	filter and narrows by role and area instead. The effective-date-window predicate
+	is identical (``active = 1``, ``effective_from <= today``, open or future
+	``effective_to``). Callers dedupe on ``da_id``.
+
+	DA grants are **Woreda-bound**: they carry ``region_scope`` and ``woreda_scope``
+	but no ``zone_scope``. A Woreda code is globally unique, so matching on
+	``woreda_scope`` alone identifies the survey's eligible DAs; filtering on
+	``zone_scope`` would wrongly exclude every (zone-less) DA grant.
+	"""
+	filters: dict = {
+		"role": C.ROLE_DA,
+		"active": 1,
+		"effective_from": ("<=", today()),
+	}
+	if woreda:
+		filters["woreda_scope"] = woreda
+	if region:
+		filters["region_scope"] = region
+	return frappe.get_all(
+		"DA RBAC Assignment",
+		filters=filters,
+		or_filters=[["effective_to", "is", "not set"], ["effective_to", ">=", today()]],
+		fields=["name", "da_id", "region_scope", "woreda_scope"],
+	)
+
+
 OFFICER_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE)
 
 

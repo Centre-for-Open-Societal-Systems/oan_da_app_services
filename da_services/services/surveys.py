@@ -29,6 +29,7 @@ from da_services.services import farmers as farmer_svc
 from da_services.services import tasks as task_svc
 from da_services.utils.permissions import (
 	ScopeContext,
+	active_da_assignments,
 	get_officer_scope_context,
 	require_roles,
 )
@@ -487,13 +488,17 @@ def serialize_survey(
 def serialize_response(doc) -> dict:
 	return {
 		"id": doc.name,
+		"response_id": doc.name,
 		"survey_id": doc.survey,
 		"template_version": doc.template_version or None,
+		"version": doc.template_version or None,
 		"collector_da_id": doc.da_id,
+		"collector_da": doc.da_id,
 		"farmer_id": doc.farmer_id,
 		"consent": doc.consent or None,
 		"answers": _json_load(doc.answers_json, {}) or {},
 		"sync_state": doc.sync_state,
+		"status": doc.sync_state,
 		"started_at": doc.started_at.isoformat() if doc.started_at else None,
 		"completed_at": doc.completed_at.isoformat() if doc.completed_at else None,
 		"client_op_id": doc.client_op_id,
@@ -1873,6 +1878,40 @@ def submit_response(
 	return serialize_response(row)
 
 
+_RESPONSE_STATUS_MAP = {
+	"draft": "Draft",
+	"queued": "Queued",
+	"synced": "Synced",
+	"rejected": "Rejected",
+	"conflict": "Conflict",
+	"declined": "Declined",
+}
+
+_RESPONSE_SORT_FIELDS = frozenset({"completed_at", "creation", "modified", "farmer_id", "da_id"})
+
+
+def _response_order_by(sort_by: str | None, sort_order: str | None) -> str:
+	"""Whitelisted ``order_by`` for the response listing; defaults to ``modified desc``."""
+	field = (sort_by or "").strip()
+	if field not in _RESPONSE_SORT_FIELDS:
+		field = "modified"
+	direction = "asc" if (sort_order or "").strip().lower() == "asc" else "desc"
+	return f"{field} {direction}"
+
+
+def _date_range_filter(from_date, to_date):
+	"""Inclusive ``completed_at`` range as a Frappe filter; one-sided bounds supported."""
+	start = getdate(from_date) if from_date else None
+	end = getdate(to_date) if to_date else None
+	if start and end:
+		return ("between", [f"{start} 00:00:00", f"{end} 23:59:59"])
+	if start:
+		return (">=", f"{start} 00:00:00")
+	if end:
+		return ("<=", f"{end} 23:59:59")
+	return None
+
+
 def list_responses(
 	survey_id: str,
 	ctx: ScopeContext | None = None,
@@ -1883,6 +1922,12 @@ def list_responses(
 	zone: str | None = None,
 	woreda: str | None = None,
 	kebele: str | None = None,
+	search: str | None = None,
+	status: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	sort_by: str | None = None,
+	sort_order: str | None = None,
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
@@ -1916,18 +1961,94 @@ def list_responses(
 	elif officer_ctx is None:
 		filters["da_id"] = ("in", list(ctx.da_ids))
 
+	# Status filter → stored sync_state (case-insensitive); unknown value is a 400.
+	if status and str(status).strip():
+		mapped = _RESPONSE_STATUS_MAP.get(str(status).strip().lower())
+		if not mapped:
+			frappe.throw(_("Unknown status filter: {0}.").format(status), frappe.ValidationError)
+		filters["sync_state"] = mapped
+
+	# Inclusive completed_at date range (one-sided supported).
+	date_bounds = _date_range_filter(from_date, to_date)
+	if date_bounds is not None:
+		filters["completed_at"] = date_bounds
+
+	# Free-text search across collector DA, kebele, canonical farmer id and farmer
+	# display id. ORed among themselves, ANDed with scope — search cannot widen rows.
+	or_filters: list | None = None
+	if search and search.strip():
+		like = f"%{search.strip()}%"
+		display_matches = [
+			ref.name
+			for ref in frappe.get_all(
+				"DA Farmer Reference",
+				filters={"reg_id": ("like", like)},
+				fields=["name"],
+			)
+		]
+		or_filters = [
+			["farmer_id", "like", like],
+			["da_id", "like", like],
+			["kebele", "like", like],
+		]
+		if display_matches:
+			or_filters.append(["farmer_id", "in", display_matches])
+
+	query: dict = {"filters": filters}
+	if or_filters:
+		query["or_filters"] = or_filters
+
 	names = frappe.get_list(
 		RESPONSE_DOCTYPE,
-		filters=filters,
 		fields=["name"],
-		order_by="modified desc",
+		order_by=_response_order_by(sort_by, sort_order),
 		limit_page_length=limit,
 		limit_start=start,
+		**query,
 	)
-	total = len(frappe.get_list(RESPONSE_DOCTYPE, filters=filters, fields=["name"], limit_page_length=0))
+	total = len(frappe.get_list(RESPONSE_DOCTYPE, fields=["name"], limit_page_length=0, **query))
 
 	rows = [serialize_response(frappe.get_doc(RESPONSE_DOCTYPE, n.name)) for n in names]
+
+	# Resolve farmer display IDs in one batch (same pattern as export_responses); no N+1.
+	farmer_ids = sorted({row["farmer_id"] for row in rows if row.get("farmer_id")})
+	reg_ids: dict[str, str | None] = {}
+	if farmer_ids:
+		for ref in frappe.get_all(
+			"DA Farmer Reference",
+			filters={"name": ("in", farmer_ids)},
+			fields=["name", "reg_id"],
+		):
+			reg_ids[ref.name] = ref.reg_id
+	for row in rows:
+		display = reg_ids.get(row.get("farmer_id"))
+		row["farmer_display_id"] = display
+		row["farmer_reg_id"] = display
+
 	return rows, total
+
+
+def _answer_type(response_type: str) -> str:
+	"""Map the stored response type to the contract's answer-type vocabulary."""
+	if response_type == "rating":
+		return "rating"
+	if response_type in CHOICE_TYPES:
+		return "multiple_choice"
+	return "free_text"
+
+
+def _eligible_da_count(doc) -> int:
+	"""Number of DAs eligible to collect for this survey.
+
+	Selected-assignment mode counts the survey's DA Task markers; whole-Woreda mode
+	counts active Development Agent RBAC grants for the survey area. The count is a
+	property of the survey, never narrowed by the caller's scope.
+	"""
+	assigned = _assigned_da_ids(doc.name)
+	if assigned:
+		return len(set(assigned))
+	rows = active_da_assignments(woreda=doc.woreda)
+	return len({row.da_id for row in rows if row.da_id})
 
 
 def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
@@ -1957,6 +2078,8 @@ def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 		by_status[r.sync_state] = by_status.get(r.sync_state, 0) + 1
 
 	param_summaries = []
+	rating_values: list[int] = []
+	rating_question_count = 0
 	for p in doc.parameters:
 		if p.response_type in ("consent", "auto"):
 			continue
@@ -1971,37 +2094,81 @@ def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 			val = answers[p.parameter_id]
 			summary["response_count"] += 1
 			values.append(val)
-		if p.response_type == "rating" and values:
+
+		entry: dict = {
+			# Legacy keys (kept for existing clients/tests).
+			"id": p.parameter_id,
+			"prompt": p.prompt,
+			"type": p.response_type,
+			"summary": summary,
+			# Contract keys (additive).
+			"question_id": p.parameter_id,
+			"question_no": p.question_no,
+			"question": p.prompt,
+			"answer_type": _answer_type(p.response_type),
+			"required": bool(p.required),
+		}
+
+		if p.response_type == "rating":
 			low = int(p.rating_min or DEFAULT_RATING_SCALE["min"])
 			high = int(p.rating_max or DEFAULT_RATING_SCALE["max"])
 			nums = [int(v) for v in values if str(v).isdigit() and low <= int(v) <= high]
-			summary["average"] = round(sum(nums) / len(nums), 2) if nums else None
-			summary["counts"] = {str(i): nums.count(i) for i in range(low, high + 1)}
+			# Always zero-fill the full scale, even with no answers (R4).
+			distribution = {str(i): nums.count(i) for i in range(low, high + 1)}
+			average = round(sum(nums) / len(nums), 2) if nums else None
+			summary["average"] = average
+			summary["counts"] = distribution
+			entry["total_answers"] = len(nums)
+			entry["average_rating"] = average
+			entry["rating_distribution"] = distribution
+			rating_values.extend(nums)
+			if nums:
+				rating_question_count += 1
 		elif p.response_type in CHOICE_TYPES:
-			counts: dict[str, int] = {}
+			option_rows = _option_rows(p.options_json)
+			# Seed every configured option at zero before counting selections (R5).
+			counts: dict[str, int] = {row["value"]: 0 for row in option_rows}
 			for val in values:
 				items = val if isinstance(val, list) else [val]
 				for item in items:
 					key = str(item)
 					counts[key] = counts.get(key, 0) + 1
 			summary["counts"] = counts
-		param_summaries.append(
-			{
-				"id": p.parameter_id,
-				"prompt": p.prompt,
-				"type": p.response_type,
-				"summary": summary,
-			}
-		)
+			entry["total_answers"] = summary["response_count"]
+			entry["options"] = [
+				{"value": row["value"], "label": row["label"], "count": counts.get(row["value"], 0)}
+				for row in option_rows
+			]
+		else:
+			entry["total_answers"] = summary["response_count"]
+			# Cap the exposed free-text answers to bound payload size (R7).
+			entry["answers"] = [str(v) for v in values][:200]
+
+		param_summaries.append(entry)
 
 	counts = _response_counts(survey_id)
+	collected = counts["collected"]
+	eligible_da_count = _eligible_da_count(doc)
+	farmers_per_da = int(doc.target_farmers or 0)
+	total_target = eligible_da_count * farmers_per_da
+	completion_percentage = round(collected / total_target * 100, 2) if total_target else 0.0
+	average_rating = round(sum(rating_values) / len(rating_values), 2) if rating_values else None
+
 	return {
 		"survey_id": doc.name,
 		"name": doc.title,
-		"target_farmers": int(doc.target_farmers or 0),
-		"collected": counts["collected"],
+		"target_farmers": farmers_per_da,
+		"farmers_per_da": farmers_per_da,
+		"collected": collected,
+		"completed": collected,
 		"queued": counts["queued"],
 		"by_status": by_status,
+		"eligible_da_count": eligible_da_count,
+		"total_target": total_target,
+		"completion_percentage": completion_percentage,
+		"rating_answer_count": len(rating_values),
+		"rating_question_count": rating_question_count,
+		"average_rating": average_rating,
 		"parameters": param_summaries,
 	}
 

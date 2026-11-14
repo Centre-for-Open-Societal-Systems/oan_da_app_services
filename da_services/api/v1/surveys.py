@@ -152,7 +152,9 @@ def list_templates(**kwargs):
 			"has_previous": current_page > 1,
 		},
 	}
-	return success_response(data=data, meta={"total": total})
+	return success_response(
+		data=data, message="Survey templates retrieved successfully", meta={"total": total}
+	)
 
 
 def _int_param(value, default):
@@ -278,11 +280,24 @@ def list_responses(survey_id: str, **kwargs):
 		"zone",
 		"woreda",
 		"kebele",
+		"search",
+		"status",
+		"from_date",
+		"to_date",
+		"sort_by",
+		"sort_order",
+		"page",
+		"page_size",
 		"limit",
 		"start",
 	)
-	limit = int(q.get("limit") or 50)
-	start = int(q.get("start") or 0)
+	# Legacy limit/start wins when supplied, otherwise 1-based page/page_size.
+	if q.get("limit") is not None or q.get("start") is not None:
+		size = max(1, min(_int_param(q.get("limit"), 50), 200))
+		start = max(0, _int_param(q.get("start"), 0))
+	else:
+		size = max(1, min(_int_param(q.get("page_size"), 10), 200))
+		start = (max(1, _int_param(q.get("page"), 1)) - 1) * size
 	rows, total = svc.list_responses(
 		survey_id,
 		ctx,
@@ -292,10 +307,29 @@ def list_responses(survey_id: str, **kwargs):
 		zone=q.get("zone"),
 		woreda=q.get("woreda"),
 		kebele=q.get("kebele"),
-		limit=limit,
+		search=q.get("search"),
+		status=q.get("status"),
+		from_date=q.get("from_date"),
+		to_date=q.get("to_date"),
+		sort_by=q.get("sort_by"),
+		sort_order=q.get("sort_order"),
+		limit=size,
 		start=start,
 	)
-	return success_response(data=rows, meta={"total": total, "limit": limit, "start": start})
+	current_page = start // size + 1
+	total_pages = max(1, -(-total // size))
+	data = {
+		"responses": rows,
+		"pagination": {
+			"current_page": current_page,
+			"page_size": size,
+			"total_records": total,
+			"total_pages": total_pages,
+			"has_next": current_page < total_pages,
+			"has_previous": current_page > 1,
+		},
+	}
+	return success_response(data=data, meta={"total": total, "limit": size, "start": start})
 
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
