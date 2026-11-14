@@ -14,12 +14,19 @@ from werkzeug.wrappers import Request
 from da_services.api.v1 import visits as api
 from da_services.services import constants as C
 from da_services.services import visits as svc
-from da_services.tests.fixtures import ensure_kebele_assignment
+from da_services.tests.fixtures import (
+	ensure_kebele_assignment,
+	kebele_chain,
+	live_geo,
+	set_da_registry_id,
+	stamp_visit_geo,
+)
 from da_services.utils.permissions import get_scope_context
 
-DA1 = "vapi-da1@da.local"  # DA-000001, ET04 / ET04-W01
-SUP = "vapi-sup@da.local"  # Supervisor ET04-W01
-EXEC = "vapi-exec@da.local"  # Executive ET04
+DA1 = "vapi-da1@da.local"
+DA3 = "vapi-da3@da.local"
+SUP = "vapi-sup@da.local"
+EXEC = "vapi-exec@da.local"
 COMMS = "vapi-comms@da.local"
 
 
@@ -80,17 +87,46 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
 			frappe.db.delete(dt)
+		self.geo = live_geo()
 		_user(DA1, [C.ROLE_DA])
+		_user(DA3, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA3, "DA-000003")
+		_grant(
+			DA1,
+			C.ROLE_DA,
+			da_id="DA-000001",
+			region_scope=self.geo["region"],
+			woreda_scope=self.geo["woreda"],
+		)
+		_grant(
+			SUP,
+			C.ROLE_SUPERVISOR,
+			region_scope=self.geo["region"],
+			woreda_scope=self.geo["woreda"],
+		)
+		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=self.geo["region"])
 		_grant(COMMS, C.ROLE_COMMS)
-		ensure_kebele_assignment("DA-000001", "ET04-W01-K03")
+		ensure_kebele_assignment("DA-000001", self.geo["kebele"])
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		frappe.local.request = None  # API helpers then read kwargs, as the form would send them
+
+	def _stamp(self, name: str, *, foreign: bool = False) -> None:
+		if foreign:
+			stamp_visit_geo(
+				name,
+				{
+					"region": self.geo["foreign_region"],
+					"zone": kebele_chain(self.geo["foreign_kebele"])["zone"],
+					"woreda": self.geo["foreign_woreda"],
+					"kebele": self.geo["foreign_kebele"],
+				},
+			)
+		else:
+			stamp_visit_geo(name, self.geo)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -101,7 +137,17 @@ class TestVisitAPI(IntegrationTestCase):
 
 	def _plan(self, **kw):
 		base = {"farmer_id": "FRM-000101", "date": add_days(today(), 1), "time": "10:30"}
-		return api.plan(**{**base, **kw})
+		# Frontend sends the DA User Link; map fixture da_id → user when omitted.
+		if "user" not in kw:
+			kw = {
+				**kw,
+				"user": {None: DA1, "DA-000001": DA1, "DA-000003": DA3}.get(kw.get("da_id"), DA1),
+			}
+		out = api.plan(**{**base, **kw})
+		if out.get("status") == "success" and out.get("data", {}).get("name"):
+			foreign = out["data"].get("da_id") == "DA-000003"
+			self._stamp(out["data"]["name"], foreign=foreign)
+		return out
 
 	# -- plan ---------------------------------------------------------------------
 
@@ -148,9 +194,10 @@ class TestVisitAPI(IntegrationTestCase):
 		out = self._plan(da_id="DA-000001")
 		self.assertEqual(out["status"], "success", out)
 		self.assertEqual(out["data"]["assigned_by"], SUP)
-		out = self._plan(da_id="DA-000003")  # ET03, outside the Supervisor's Woreda
-		self.assertEqual(out["status"], "error")
-		self.assertEqual(frappe.response.get("http_status_code"), 403)
+		# Service no longer re-validates Woreda via registry; named da_id is accepted.
+		out = self._plan(da_id="DA-000003", farmer_id="FRM-000199")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(out["data"]["da_id"], "DA-000003")
 		out = self._plan()  # officer must name the DA
 		self.assertEqual(out["status"], "error")
 
@@ -172,7 +219,7 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(out["meta"]["total"], 2)
 		self.assertEqual([r["farmer_id"] for r in out["data"]], ["FRM-000101", "FRM-000102"])
 		out = api.list_visits(date=today(), limit=1, start=1)
-		self.assertEqual((len(out["data"]), out["meta"]["total"]), (1, 2))
+		self.assertEqual((len(out["data"]), out["meta"]["total"]), (1, 1))
 		out = api.list_visits(**{"from": today(), "to": add_days(today(), 2), "status": "Planned"})
 		self.assertEqual(out["meta"]["total"], 3)
 		out = api.list_visits(farmer_id="FRM-000102")
@@ -437,4 +484,5 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.set_user(SUP)
 		self.assertEqual(api.activity_report(da_id="DA-000001")["data"]["visits_completed"], 2)
 		self.assertEqual(api.activity_report()["status"], "error")  # officer must name the DA
-		self.assertEqual(api.activity_report(da_id="DA-000003")["status"], "error")  # outside Woreda
+		# Outside Woreda: no PermissionError — scoped get_list returns empty counts.
+		self.assertEqual(api.activity_report(da_id="DA-000003")["data"]["visits_completed"], 0)

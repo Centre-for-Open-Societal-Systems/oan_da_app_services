@@ -12,6 +12,7 @@ from frappe.utils import now_datetime, today
 from da_services.services import constants as C
 from da_services.tests.fixtures import (
 	create_administrative_areas,
+	ensure_da_user,
 	ensure_kebele_assignment,
 )
 from da_services.utils.permissions import get_scope_context
@@ -175,6 +176,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user(da_id),
 				"da_id": da_id,
 				"farmer_id": farmer_id,
 				"visit_type": "Crop Survey",

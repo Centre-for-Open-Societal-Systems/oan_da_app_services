@@ -96,6 +96,7 @@ def _visits(ctx) -> None:
 		("seed-v5", FARMERS[0], f"{t} 10:00:00", "Follow-up", False),
 		("seed-v6", FARMERS[1], f"{t} 15:00:00", "Crop Survey", False),
 	]
+	da_user = "da.demo@da.local"
 	for op, farmer, when, vtype, complete in plan:
 		out = visits.plan_visit(
 			farmer_id=farmer,
@@ -103,6 +104,7 @@ def _visits(ctx) -> None:
 			visit_type=vtype,
 			purpose=f"{vtype} at {farmer}",
 			da_id=DA_ID,
+			user=da_user,
 			client_op_id=op,
 			ctx=ctx,
 		)
