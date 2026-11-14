@@ -198,11 +198,18 @@ scheduler_events = {
 	"daily": [
 		# Start approved leaves on their first day; end active leaves after their last day.
 		"da_services.services.leave.process_leave_schedule",
+		# Grant DA RBAC Assignment scopes as User Permissions on effective_from; revoke after effective_to.
+		"da_services.services.rbac_user_permissions.sync_all_user_permissions",
+		# DA Kebele User Permission for an Effective DA Kebele Assignment from its effective_date.
+		"da_services.services.kebele_user_permissions.sync_all_user_permissions",
 	],
 	"daily_long": [
 		# Region / Zone / Woreda / Kebele from Master Data: about a thousand calls, needs
 		# the long queue's timeout and the service identity.
 		"da_services.services.area_sync.sync_areas_scheduled",
+		# DA Country / Region / Zone / Woreda / Kebele masters, logged in with the
+		# Master Data Sync account of DA Services Settings.
+		"da_services.services.geo_master_sync.sync_geo_masters_scheduled",
 	],
 }
 

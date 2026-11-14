@@ -1,8 +1,7 @@
 {
  "actions": [],
- "allow_rename": 0,
  "autoname": "format:DA-RBAC-{#####}",
- "creation": "2026-10-01 00:00:00.000000",
+ "creation": "2026-10-01 00:00:00",
  "description": "Grants a user one DA Services role within a Region / Woreda scope for a date window. RBAC assignment entity of the FSD Part 1 data model; the same shape governs Part 2 authorization.",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -58,8 +57,9 @@
   {
    "depends_on": "eval:doc.role == 'Development Agent'",
    "description": "DA-ID issued by the DA Registry. Required for the Development Agent role; it is the record relationship that limits a DA to their own data.",
+   "fetch_from": "user.da_registry_id",
    "fieldname": "da_id",
-   "fieldtype": "Data",
+   "fieldtype": "Read Only",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "DA-ID",
@@ -73,17 +73,19 @@
   {
    "description": "Region code from the administrative master. Leave empty only for unrestricted roles.",
    "fieldname": "region_scope",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Region"
+   "label": "Region",
+   "options": "DA Region"
   },
   {
    "description": "Zone code (between Region and Woreda in the Ethiopian hierarchy). Optional until the field list is final.",
    "fieldname": "zone_scope",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_standard_filter": 1,
-   "label": "Zone"
+   "label": "Zone",
+   "options": "DA Zone"
   },
   {
    "fieldname": "col_scope",
@@ -92,10 +94,11 @@
   {
    "description": "Woreda code. Required for Supervisor; a Supervisor acts only inside their Woreda (FSD 3.1.1).",
    "fieldname": "woreda_scope",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Woreda"
+   "label": "Woreda",
+   "options": "DA Woreda"
   },
   {
    "fieldname": "sec_validity",
@@ -130,18 +133,16 @@
    "label": "Notes"
   }
  ],
- "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-06 00:00:00.000000",
+ "modified": "2026-11-14 11:14:56.711530",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA RBAC Assignment",
- "naming_rule": "Expression",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
    "create": 1,
-   "delete": 0,
    "email": 1,
    "export": 1,
    "print": 1,
@@ -153,7 +154,6 @@
   },
   {
    "create": 1,
-   "delete": 0,
    "email": 1,
    "export": 1,
    "print": 1,

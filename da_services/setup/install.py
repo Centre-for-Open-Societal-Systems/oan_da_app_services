@@ -21,12 +21,39 @@ ROLES = [
 ]
 
 
+# Custom fields this app adds to other apps' doctypes; create_custom_fields is idempotent.
+CUSTOM_FIELDS = {
+	"User": [
+		{
+			"fieldname": "da_registry_id",
+			"fieldtype": "Data",
+			"label": "DA Registry ID",
+			"insert_after": "username",
+			"unique": 1,
+			"in_standard_filter": 1,
+			"description": (
+				"DA-ID issued by the DA Registry. Required for the Development Agent role; "
+				"it is the record relationship that limits a DA to their own data."
+			),
+		}
+	]
+}
+
+
 def after_install():
 	seed_roles()
+	seed_custom_fields()
 
 
 def after_migrate():
 	seed_roles()
+	seed_custom_fields()
+
+
+def seed_custom_fields():
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	create_custom_fields(CUSTOM_FIELDS, ignore_validate=True, update=True)
 
 
 def before_tests():

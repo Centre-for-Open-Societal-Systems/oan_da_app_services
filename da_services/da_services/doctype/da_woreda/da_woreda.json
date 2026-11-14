@@ -1,0 +1,144 @@
+{
+ "actions": [],
+ "autoname": "field:woreda_code",
+ "creation": "2026-11-13 12:00:00",
+ "description": "Woreda from Master Data (geo level woreda). Kept in step by da_services.services.geo_master_sync; a row Master Data no longer lists is made inactive, never deleted.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "woreda_code",
+  "woreda_name",
+  "zone",
+  "col_break_1",
+  "is_active",
+  "sec_sync",
+  "level_id",
+  "col_break_2",
+  "last_synced_at"
+ ],
+ "fields": [
+  {
+   "description": "Master Data level_value_id, e.g. ET010101",
+   "fieldname": "woreda_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Woreda Code",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "woreda_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Woreda Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Zone",
+   "options": "DA Zone",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Is Active"
+  },
+  {
+   "fieldname": "sec_sync",
+   "fieldtype": "Section Break",
+   "label": "Sync"
+  },
+  {
+   "description": "Master Data level_id of this level (l0 country ... l4 kebele).",
+   "fieldname": "level_id",
+   "fieldtype": "Data",
+   "label": "Level ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "last_synced_at",
+   "fieldtype": "Datetime",
+   "label": "Last Synced At",
+   "read_only": 1
+  }
+ ],
+ "links": [
+  {
+   "group": "Masters",
+   "link_doctype": "DA Kebele",
+   "link_fieldname": "woreda"
+  }
+ ],
+ "modified": "2026-11-13 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Woreda",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor"
+  },
+  {
+   "read": 1,
+   "role": "Development Agent"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
+  },
+  {
+   "read": 1,
+   "role": "Communications Officer"
+  }
+ ],
+ "row_format": "Dynamic",
+ "search_fields": "woreda_name,zone",
+ "show_title_field_in_link": 1,
+ "sort_field": "woreda_code",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "woreda_name",
+ "track_changes": 1
+}

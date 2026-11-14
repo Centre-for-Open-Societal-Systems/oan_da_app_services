@@ -1,7 +1,7 @@
 {
  "app": "da_services",
  "charts": [],
- "content": "[{\"id\": \"dasvc0000\", \"type\": \"card\", \"data\": {\"card_name\": \"Knowledge Base\", \"col\": 4}}, {\"id\": \"dasvc0001\", \"type\": \"card\", \"data\": {\"card_name\": \"Others\", \"col\": 4}}, {\"id\": \"dasvc0002\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}]",
+ "content": "[{\"id\": \"dasvcmstr\", \"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}, {\"id\": \"dasvc0000\", \"type\": \"card\", \"data\": {\"card_name\": \"Knowledge Base\", \"col\": 4}}, {\"id\": \"dasvc0001\", \"type\": \"card\", \"data\": {\"card_name\": \"Others\", \"col\": 4}}, {\"id\": \"dasvc0002\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}]",
  "creation": "2026-11-09 12:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -13,6 +13,64 @@
  "is_hidden": 0,
  "label": "DA Services",
  "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Masters",
+   "link_count": 5,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "DA Country",
+   "link_count": 0,
+   "link_to": "DA Country",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "DA Region",
+   "link_count": 0,
+   "link_to": "DA Region",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "DA Zone",
+   "link_count": 0,
+   "link_to": "DA Zone",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "DA Woreda",
+   "link_count": 0,
+   "link_to": "DA Woreda",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "DA Kebele",
+   "link_count": 0,
+   "link_to": "DA Kebele",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
   {
    "hidden": 0,
    "is_query_report": 0,
@@ -228,7 +286,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-11-09 14:00:00.000000",
+ "modified": "2026-11-13 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services",
