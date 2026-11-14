@@ -1,4 +1,4 @@
-﻿"""Master Data geography -> DA Country / Region / Zone / Woreda / Kebele (services/geo_master_sync.py)."""
+"""Master Data geography -> DA Country / Region / Zone / Woreda / Kebele (services/geo_master_sync.py)."""
 
 from unittest.mock import patch
 

@@ -1,4 +1,4 @@
-﻿"""DA-40: Farmer profile API tests (integration tests).
+"""DA-40: Farmer profile API tests (integration tests).
 
 Tests farmer listing, profile retrieval, and permission checks with RBAC enforcement.
 

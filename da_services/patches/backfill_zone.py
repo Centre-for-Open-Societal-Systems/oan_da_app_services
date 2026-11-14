@@ -13,8 +13,8 @@ operator can see what was left empty and why.
 
 import frappe
 
-from da_services.services import geo
 from da_services.integrations.da_registry.client import DARegistryError, get_client
+from da_services.services import geo
 
 DOCTYPES = ("DA Visit", "DA Task", "DA Farmer Link", "DA Profile Change Request")
 EMPTY = "ifnull(`zone`, '') = ''"

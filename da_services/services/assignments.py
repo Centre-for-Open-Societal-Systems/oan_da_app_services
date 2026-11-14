@@ -1,4 +1,4 @@
-﻿"""Agent Γåö Kebele assignment: list, coverage, assign / reassign (FSD FR-05; DA-37, DA-38).
+"""Agent Γåö Kebele assignment: list, coverage, assign / reassign (FSD FR-05; DA-37, DA-38).
 
 What is ours and what is not:
 

@@ -1,4 +1,4 @@
-﻿"""Tests for cross-DA visit outcome visibility (DA-211 Phase 6)."""
+"""Tests for cross-DA visit outcome visibility (DA-211 Phase 6)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""Tests for manual farmer-to-DA assignment (DA-211 Phase 1)."""
+"""Tests for manual farmer-to-DA assignment (DA-211 Phase 1)."""
 
 from __future__ import annotations
 

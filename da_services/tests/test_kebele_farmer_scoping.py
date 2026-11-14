@@ -1,4 +1,4 @@
-﻿"""Tests for Kebele-based farmer scoping (DA-211 Phase 2)."""
+"""Tests for Kebele-based farmer scoping (DA-211 Phase 2)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""Knowledge Base: doctypes (KB Article / KB Video / KB Send Log / KB Category) and the REST handlers."""
+"""Knowledge Base: doctypes (KB Article / KB Video / KB Send Log / KB Category) and the REST handlers."""
 
 import frappe
 from frappe.tests import IntegrationTestCase

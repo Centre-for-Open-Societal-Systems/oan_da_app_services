@@ -1,4 +1,4 @@
-﻿"""Tests for farmer assignment specialization flags (DA-211 Phase 4)."""
+"""Tests for farmer assignment specialization flags (DA-211 Phase 4)."""
 
 from __future__ import annotations
 

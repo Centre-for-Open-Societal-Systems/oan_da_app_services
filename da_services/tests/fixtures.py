@@ -1,4 +1,4 @@
-﻿"""Shared test fixtures for DA Services tests.
+"""Shared test fixtures for DA Services tests.
 
 Geography comes only from live ``DA Region`` / ``DA Zone`` / ``DA Woreda`` / ``DA Kebele``
 rows populated by ``geo_master_sync``. Tests must not invent or seed master rows, and

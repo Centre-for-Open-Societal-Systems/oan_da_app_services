@@ -1,4 +1,4 @@
-﻿"""Zone level in the scope model: rows carry `zone`, lists and single-document checks
+"""Zone level in the scope model: rows carry `zone`, lists and single-document checks
 honour a Zone grant, Woreda beats Zone, Region covers every Zone, and the backfill
 patch fills `zone` on rows created before the column existed.
 

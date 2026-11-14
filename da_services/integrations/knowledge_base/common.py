@@ -1,4 +1,4 @@
-﻿"""Access rules and generic list / get / create / update plumbing for KB content.
+"""Access rules and generic list / get / create / update plumbing for KB content.
 
 Who may do what (checked in the backend on every call; hiding a card in the UI is not
 authorization):

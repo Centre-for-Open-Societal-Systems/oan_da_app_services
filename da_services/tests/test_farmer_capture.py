@@ -1,4 +1,4 @@
-﻿"""Farmer resolution for survey capture (FR-09d Stage 1).
+"""Farmer resolution for survey capture (FR-09d Stage 1).
 
 These tests do not need the survey DocTypes, so they run on a site that has not
 migrated the survey tables yet. Geography is the mock DA Registry posting for

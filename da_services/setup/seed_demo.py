@@ -1,4 +1,4 @@
-﻿"""Demo data for a development site: two users and a filled DA dashboard (DA-198).
+"""Demo data for a development site: two users and a filled DA dashboard (DA-198).
 
     bench --site da-services.localhost execute da_services.setup.seed_demo.run
 
@@ -151,9 +151,9 @@ def run(force: str | int | bool = False) -> dict:
 			"Geography masters are empty. Run geo_master_sync before seed_demo "
 			"(seed_demo does not create DA Region/Zone/Woreda/Kebele)."
 		)
-	kebele = frappe.get_all("DA Kebele", filters={"is_active": 1}, pluck="name", order_by="name asc", limit=1)[
-		0
-	]
+	kebele = frappe.get_all(
+		"DA Kebele", filters={"is_active": 1}, pluck="name", order_by="name asc", limit=1
+	)[0]
 	tree = geo.ancestors_of_kebele(kebele)
 	users = []
 	for email, first_name, role, grant in USERS:

@@ -1,4 +1,4 @@
-﻿"""Agent Γåö Kebele assignment: geography masters, geofence, list, coverage, assign (DA-37, DA-38).
+"""Agent Γåö Kebele assignment: geography masters, geofence, list, coverage, assign (DA-37, DA-38).
 
 Geography comes from the synced DA Region / Zone / Woreda / Kebele masters. The mock DA
 Registry rewrites its fixture postings from those masters (``aligned_mock_geo``):
