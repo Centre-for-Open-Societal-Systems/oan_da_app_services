@@ -25,6 +25,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		self.farmer_id = "FARMER-FLAGS-001"
 		self.kebele = "ET04-W01-K03"
 		self.woreda = "ET04-W01"
+		self.user = ensure_da_user(self.da_id)
 
 		# Clean up
 		frappe.db.delete("DA Visit", {"da_id": self.da_id})
@@ -35,7 +36,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
-				"user": ensure_da_user(self.da_id),
+				"user": self.user,
 				"da_id": self.da_id,
 				"kebele": self.kebele,
 				"state": "Effective",
@@ -85,6 +86,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -106,6 +108,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
@@ -126,6 +129,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Services",
@@ -148,6 +152,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Crop Survey",
@@ -169,6 +174,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Livestock Survey",
@@ -208,6 +214,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			visit = frappe.get_doc(
 				{
 					"doctype": "DA Visit",
+					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": fid,
 					"visit_type": "Crop Survey",
@@ -236,6 +243,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			visit = frappe.get_doc(
 				{
 					"doctype": "DA Visit",
+					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": self.farmer_id,
 					"visit_type": "Crop Survey",
@@ -257,6 +265,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": self.user,
 				"da_id": self.da_id,
 				"farmer_id": self.farmer_id,
 				"visit_type": "Services",

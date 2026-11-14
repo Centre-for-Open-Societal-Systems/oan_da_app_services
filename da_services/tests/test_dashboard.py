@@ -10,7 +10,7 @@ from da_services.da_services.doctype.da_visit.da_visit import COMPLETE, IN_PROGR
 from da_services.services import constants as C
 from da_services.services import dashboard, tasks, visits
 from da_services.setup import seed_demo
-from da_services.tests.fixtures import create_administrative_areas
+from da_services.tests.fixtures import create_administrative_areas, ensure_da_user, set_da_registry_id
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "dash-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -59,6 +59,7 @@ class TestDashboard(IntegrationTestCase):
 		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
+		set_da_registry_id(DA1, "DA-000001")
 		admin = _ctx("Administrator")
 		t = today()
 		# 3 visits in range: 2 complete, 1 still open today; 1 outside range (40 days ago)
@@ -71,7 +72,12 @@ class TestDashboard(IntegrationTestCase):
 			("d-v3", f"{t} 23:30:00", False),  # late enough to stay "Upcoming" during a test run
 		):
 			v = visits.plan_visit(
-				farmer_id="FRM-1", scheduled_at=when, da_id="DA-000001", client_op_id=op, ctx=admin
+				farmer_id="FRM-1",
+				scheduled_at=when,
+				da_id="DA-000001",
+				user=DA1,
+				client_op_id=op,
+				ctx=admin,
 			)
 			if complete:
 				visits.submit_outcome(v["name"], observed="ok", ctx=admin)
@@ -210,6 +216,7 @@ class TestWoredaHealth(IntegrationTestCase):
 		_grant(SUP2, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP2, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
+		set_da_registry_id(DA1, "DA-000001")
 
 		frappe.get_doc(
 			{
@@ -264,10 +271,13 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def _insert_visit(self, kebele, scheduled_at, status, client_op_id, *, woreda="ET04-W01"):
 		"""Insert a visit respecting DA Visit status transitions (new rows cannot be Complete)."""
+		da_id = "DA-000001" if woreda == "ET04-W01" else "DA-000003"
+		user = DA1 if da_id == "DA-000001" else ensure_da_user(da_id)
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
-				"da_id": "DA-000001" if woreda == "ET04-W01" else "DA-000003",
+				"user": user,
+				"da_id": da_id,
 				"farmer_id": "FRM-1",
 				"visit_type": "Crop Survey",
 				"scheduled_at": scheduled_at,

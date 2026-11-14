@@ -1,9 +1,9 @@
 """DA Visit use-cases behind the dashboard, planner and outcome form (data-model 5.3).
 
-Scope (FSD Appendix D): a DA plans, starts and submits visits for their own DA-ID; a
-Supervisor may plan for a DA in their Woreda (recorded in `assigned_by`) and read the
-Woreda's visits; an Executive reads their Region; OAN Administrator is unrestricted;
-Communications Officer has no access.
+Visibility is enforced by Frappe User Permissions and the DA Visit hooks
+(``da_visit_query_conditions`` / ``has_da_visit_permission``). These services apply
+request filters and product rules only; they do not re-check Woreda/Kebele/role scope.
+API handlers use ``require_roles`` as the coarse endpoint gate.
 """
 
 from __future__ import annotations
@@ -25,17 +25,14 @@ from da_services.da_services.doctype.da_visit.da_visit import (
 	PLANNED_STATES,
 	RESCHEDULED,
 )
-from da_services.services import area_scope
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
-from da_services.services.da_lookup import get_da_reference
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.utils.permissions import ScopeContext, get_scope_context
 
 WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 
 # Open visits block another visit that covers the same specialization.
-# Completed, missed, and cancelled visits do not.
 BLOCKING_STATUSES = list(OPEN_STATES)
 
 FIELDS = [
@@ -104,6 +101,12 @@ def serialize(doc) -> dict:
 		)
 	)
 	if hasattr(doc, "get_doc_before_save"):  # a Document, not a list row
+		creation = doc.get("creation")
+		out["creation"] = (
+			creation.isoformat() if creation is not None and hasattr(creation, "isoformat") else creation
+		)
+		out["created_by_user"] = doc.get("created_by_user")
+		out["modified_by"] = doc.get("modified_by")
 		out["advisory_qa"] = [
 			{"question": r.question, "answer": r.answer} for r in (doc.get("advisory_qa") or [])
 		]
@@ -115,40 +118,25 @@ def serialize(doc) -> dict:
 			}
 			for r in (doc.get("attachments") or [])
 		]
-		# DA-211 Phase 3: Include specializations in response
 		out["specializations"] = [r.specialization for r in (doc.get("specializations") or [])]
 	return out
 
 
 def _check_specialization_conflict(farmer_id: str, new_specializations: list[str]) -> dict | None:
-	"""Check if farmer has active visit with overlapping specializations (DA-211 Phase 5).
-
-	Args:
-		farmer_id: Farmer identifier
-		new_specializations: Specializations for the new visit being scheduled
-
-	Returns:
-		Conflict dict if overlap found, None if no conflict
-		Conflict dict: {
-			"blocked": True,
-			"reason": "...",
-			"blocked_specializations": [...],
-			"conflicting_visit_id": "..."
-		}
-	"""
+	"""Block scheduling when the farmer has an open visit covering the same specialization."""
 	if not farmer_id or not new_specializations:
 		return None
 
-	# Lock the farmer's visit records to prevent race conditions
-	# Use SELECT FOR UPDATE to ensure no concurrent scheduling for same farmer
-	active_visits = frappe.db.sql(
+	rows = frappe.db.sql(
 		"""
 		SELECT
 			v.name,
 			v.visit_type,
 			v.physical_status,
-			v.scheduled_at
+			s.specialization
 		FROM `tabDA Visit` v
+		LEFT JOIN `tabDA Visit Specialization` s
+			ON s.parent = v.name AND s.parenttype = 'DA Visit'
 		WHERE
 			v.farmer_id = %(farmer_id)s
 			AND v.physical_status IN %(blocking_statuses)s
@@ -157,47 +145,47 @@ def _check_specialization_conflict(farmer_id: str, new_specializations: list[str
 		{"farmer_id": farmer_id, "blocking_statuses": BLOCKING_STATUSES},
 		as_dict=True,
 	)
-
-	if not active_visits:
+	if not rows:
 		return None
 
-	# Check each active visit for specialization overlap
-	for visit in active_visits:
-		# Get visit specializations
-		visit_specs = frappe.get_all(
-			"DA Visit Specialization",
-			filters={"parent": visit["name"]},
-			pluck="specialization",
+	by_visit: dict[str, dict] = {}
+	for row in rows:
+		bucket = by_visit.setdefault(
+			row.name,
+			{
+				"name": row.name,
+				"visit_type": row.visit_type,
+				"physical_status": row.physical_status,
+				"specs": set(),
+			},
 		)
+		if row.specialization:
+			bucket["specs"].add(row.specialization)
 
-		if not visit_specs:
-			continue
-
-		# Check for overlap
-		overlap = set(new_specializations) & set(visit_specs)
-
+	wanted = set(new_specializations)
+	for visit in by_visit.values():
+		overlap = wanted & visit["specs"]
 		if overlap:
 			return {
 				"blocked": True,
-				"reason": f"Farmer already has an active {visit['visit_type']} visit covering: {', '.join(sorted(overlap))}",
-				"blocked_specializations": sorted(list(overlap)),
+				"reason": (
+					f"Farmer already has an active {visit['visit_type']} visit covering: "
+					f"{', '.join(sorted(overlap))}"
+				),
+				"blocked_specializations": sorted(overlap),
 				"conflicting_visit_id": visit["name"],
 				"conflicting_visit_status": visit["physical_status"],
 			}
-
 	return None
 
 
 def _resolve_da_for_write(da_id: str | None, ctx: ScopeContext) -> tuple[str, str | None]:
-	"""(da_id, assigned_by). A DA acts on their own DA-ID; an officer names a DA in scope."""
-	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
-		own = sorted(ctx.da_ids)
-		if not own:
-			frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
+	"""(da_id, assigned_by). Bound DAs always act as their own DA-ID."""
+	own = sorted(ctx.da_ids)
+	if own and ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
 		return own[0], None
 	if not da_id:
 		frappe.throw(_("da_id is required."), frappe.ValidationError)
-	get_da_reference(da_id, ctx)  # raises PermissionError when out of scope, audited
 	return da_id, ctx.user
 
 
@@ -214,15 +202,19 @@ def plan_visit(
 	location: dict | None = None,
 	notify_farmer_sms: bool = False,
 	advisory_qa: list[dict] | None = None,
+	user: str | None = None,
 	da_id: str | None = None,
 	client_op_id: str | None = None,
 	ctx: ScopeContext | None = None,
 ) -> dict:
-	ctx = ctx or require_roles(*WRITE_ROLES)
+	ctx = ctx or get_scope_context()
 	if not farmer_id:
 		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
 	if not scheduled_at:
 		frappe.throw(_("scheduled_at is required."), frappe.ValidationError)
+	user = (user or "").strip()
+	if not user:
+		frappe.throw(_("user is required."), frappe.ValidationError)
 	da_id, assigned_by = _resolve_da_for_write(da_id, ctx)
 
 	if client_op_id:
@@ -230,10 +222,8 @@ def plan_visit(
 		if existing:
 			return serialize(frappe.get_doc("DA Visit", existing))
 
-	# DA-211 Phase 5: Check for specialization conflicts before creating visit
 	new_specializations = spec_svc.derive_visit_specializations(visit_type or "Crop Survey", da_id)
 	conflict = _check_specialization_conflict(farmer_id, new_specializations)
-
 	if conflict:
 		frappe.throw(
 			_(conflict["reason"]),
@@ -245,6 +235,7 @@ def plan_visit(
 	doc = frappe.get_doc(
 		{
 			"doctype": "DA Visit",
+			"user": user,
 			"da_id": da_id,
 			"farmer_id": farmer_id,
 			"visit_type": visit_type or "Crop Survey",
@@ -270,42 +261,20 @@ def plan_visit(
 					{"question": row["question"].strip(), "answer": (row.get("answer") or "").strip()},
 				)
 
-	# DA-211 Phase 3: Set visit specializations (already derived above for conflict check)
 	spec_svc.set_visit_specializations(doc, new_specializations)
-
 	doc.insert(ignore_permissions=True)
 	return serialize(doc)
 
 
-def _da_can_read_peer_kebele(doc, ctx: ScopeContext) -> bool:
-	"""True when a DA may read another DA's visit in a shared Effective Kebele (Phase 6)."""
-	if not doc.kebele or not ctx.da_ids:
-		return False
-	from da_services.services.farmers import _get_da_assigned_kebeles
-
-	return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
-
-
-def _load_in_scope(name: str, ctx: ScopeContext, write: bool = False):
+def _load_visit(name: str, *, write: bool = False):
+	"""Load a visit; visibility comes from ``has_da_visit_permission`` via check_permission."""
 	doc = frappe.get_doc("DA Visit", name)
-	if ctx.unrestricted:
-		return doc
-	if ctx.has_any_role(C.ROLE_DA):
-		if ctx.owns_da(doc.da_id):
-			return doc
-		# Peer Kebele visits are read-only; start/submit/cancel stay on own DA-ID.
-		if not write and _da_can_read_peer_kebele(doc, ctx):
-			return doc
-	elif ctx.has_any_role(C.ROLE_SUPERVISOR) and ctx.covers(doc.region, doc.woreda, doc.zone):
-		return doc
-	elif not write and ctx.has_any_role(C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda, doc.zone):
-		return doc
-	frappe.throw(_("Visit {0} is outside your scope.").format(name), frappe.PermissionError)
+	doc.check_permission("write" if write else "read")
+	return doc
 
 
 def get_visit(name: str, ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(*READ_ROLES)
-	return serialize(_load_in_scope(name, ctx))
+	return serialize(_load_visit(name, write=False))
 
 
 def start_visit(
@@ -317,20 +286,18 @@ def start_visit(
 	client_op_id: str | None = None,
 	ctx=None,
 ) -> dict:
-	ctx = ctx or require_roles(*WRITE_ROLES)
-	doc = _load_in_scope(name, ctx, write=True)
+	doc = _load_visit(name, write=True)
 	if client_op_id and doc.physical_status == IN_PROGRESS:
-		return serialize(doc)  # device replay of a check-in that already landed
+		return serialize(doc)
 	doc.flags.ignore_permissions = True
 	doc.start_visit(arrived_at=arrived_at, gps=gps, farmer_present=farmer_present)
 	return serialize(doc)
 
 
 def submit_outcome(name: str, *, ctx=None, client_op_id: str | None = None, **outcome) -> dict:
-	ctx = ctx or require_roles(*WRITE_ROLES)
-	doc = _load_in_scope(name, ctx, write=True)
+	doc = _load_visit(name, write=True)
 	if client_op_id and doc.physical_status == COMPLETE and doc.outcome_client_op_id == client_op_id:
-		return serialize(doc)  # same device operation again: same answer, no second follow-up
+		return serialize(doc)
 	doc.flags.ignore_permissions = True
 	doc.submit_outcome(**outcome)
 	if client_op_id:
@@ -339,8 +306,6 @@ def submit_outcome(name: str, *, ctx=None, client_op_id: str | None = None, **ou
 	return serialize(doc)
 
 
-# Evidence a visit may carry: photos of the farm and scanned documents. Anything else is
-# refused by extension *and* by content, so a renamed executable never reaches storage.
 EVIDENCE_TYPES: dict[str, str] = {
 	"jpg": "image",
 	"jpeg": "image",
@@ -356,8 +321,7 @@ def _evidence_max_bytes() -> int:
 
 
 def validate_evidence(content: bytes, filename: str) -> str:
-	"""Refuse evidence that is too large, of a type we do not take, or whose bytes do not
-	match the extension. Returns the file type ("image" / "pdf")."""
+	"""Refuse evidence that is too large, wrong type, or whose bytes do not match the extension."""
 	if not content:
 		frappe.throw(_("file is required."), frappe.ValidationError)
 	if len(content) > _evidence_max_bytes():
@@ -417,19 +381,9 @@ def add_attachment(
 	content_hash: str | None = None,
 	ctx=None,
 ) -> dict:
-	"""Store one piece of geo-tagged evidence on a visit (HLD 9.2: duplicates by content hash).
-
-	The same bytes sent twice (a retry after a lost response) return the existing row.
-	A `content_hash` the device computed is checked against the bytes received, so a
-	corrupted upload is refused rather than stored.
-	"""
-	ctx = ctx or require_roles(*WRITE_ROLES)
+	"""Store one piece of geo-tagged evidence on a visit (duplicates by content hash)."""
 	validate_evidence(content, filename)
-	# Row lock for the rest of the transaction: two uploads of the same bytes at the same
-	# moment then run one after the other, and the second sees the first's row.
-	if not frappe.db.get_value("DA Visit", name, "name", for_update=True):
-		frappe.throw(_("Visit {0} not found.").format(name), frappe.DoesNotExistError)
-	doc = _load_in_scope(name, ctx, write=True)
+	doc = _load_visit(name, write=True)
 	if doc.physical_status not in (*OPEN_STATES, COMPLETE):
 		frappe.throw(_("Visit {0} is closed; evidence cannot be added.").format(name), frappe.ValidationError)
 	digest = hashlib.sha256(content).hexdigest()
@@ -467,15 +421,12 @@ def add_attachment(
 
 
 def resolve_da_for_read(da_id: str | None, ctx: ScopeContext) -> str:
-	"""The DA-ID a report is about: a DA's own, or one an officer names inside their scope."""
-	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
-		own = sorted(ctx.da_ids)
-		if not own:
-			frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
-		return own[0]
+	"""DA-ID for a report: session binding when omitted, otherwise the named id."""
+	own = sorted(ctx.da_ids)
 	if not da_id:
-		frappe.throw(_("da_id is required."), frappe.ValidationError)
-	get_da_reference(da_id, ctx)
+		if not own:
+			frappe.throw(_("da_id is required."), frappe.ValidationError)
+		return own[0]
 	return da_id
 
 
@@ -486,7 +437,6 @@ def _week_range(week: str | None) -> tuple[date, date, str]:
 		if not m:
 			frappe.throw(_("week must look like 2026-W42."), frappe.ValidationError)
 		try:
-			# rejects week 0, 54, and 53 in a 52-week year
 			start = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
 		except ValueError:
 			frappe.throw(_("{0} is not a valid ISO week.").format(week), frappe.ValidationError)
@@ -500,17 +450,19 @@ def _week_range(week: str | None) -> tuple[date, date, str]:
 def activity_report(
 	ctx: ScopeContext | None = None, *, week: str | None = None, da_id: str | None = None
 ) -> dict:
-	"""Weekly activity report (docs/api-da-screens.md 2.9) from DA Visit and DA Task.
-
-	`issues_raised` stays 0 until grievances are linked to visits (DA Grievance Link).
-	"""
-	ctx = ctx or require_roles(*READ_ROLES)
+	"""Weekly activity report from DA Visit rows (one scoped get_list)."""
+	ctx = ctx or get_scope_context()
 	da_id = resolve_da_for_read(da_id, ctx)
 	start, end, label = _week_range(week)
-	rng = ("between", [datetime.combine(start, time.min), datetime.combine(end, time.max)])
-	done = frappe.get_all(
+	start_dt = datetime.combine(start, time.min)
+	end_dt = datetime.combine(end, time.max)
+	rows = frappe.get_list(
 		"DA Visit",
-		filters={"da_id": da_id, "physical_status": COMPLETE, "completed_at": rng},
+		filters={"da_id": da_id},
+		or_filters=[
+			["completed_at", "between", [start_dt, end_dt]],
+			["scheduled_at", "between", [start_dt, end_dt]],
+		],
 		fields=[
 			"name",
 			"farmer_id",
@@ -521,11 +473,25 @@ def activity_report(
 			"advice_given",
 			"follow_up_task",
 			"completed_at",
+			"scheduled_at",
+			"physical_status",
 		],
 		order_by="completed_at desc",
+		limit_page_length=0,
 	)
-	planned = frappe.db.count(
-		"DA Visit", {"da_id": da_id, "scheduled_at": rng, "physical_status": ("in", list(PLANNED_STATES))}
+	done = [
+		r
+		for r in rows
+		if r.physical_status == COMPLETE
+		and r.completed_at
+		and start_dt <= get_datetime(r.completed_at) <= end_dt
+	]
+	planned = sum(
+		1
+		for r in rows
+		if r.physical_status in PLANNED_STATES
+		and r.scheduled_at
+		and start_dt <= get_datetime(r.scheduled_at) <= end_dt
 	)
 	return {
 		"da_id": da_id,
@@ -555,16 +521,13 @@ def activity_report(
 
 
 def reschedule_visit(name: str, *, scheduled_at, reason: str | None = None, ctx=None) -> dict:
-	ctx = ctx or require_roles(*WRITE_ROLES)
-	doc = _load_in_scope(name, ctx, write=True)
+	doc = _load_visit(name, write=True)
 	doc.flags.ignore_permissions = True
-	new = doc.reschedule(scheduled_at, reason)
-	return serialize(new)
+	return serialize(doc.reschedule(scheduled_at, reason))
 
 
 def cancel_visit(name: str, *, reason: str | None = None, ctx=None) -> dict:
-	ctx = ctx or require_roles(*WRITE_ROLES)
-	doc = _load_in_scope(name, ctx, write=True)
+	doc = _load_visit(name, write=True)
 	doc.flags.ignore_permissions = True
 	doc.cancel_visit(reason)
 	return serialize(doc)
@@ -586,17 +549,8 @@ def list_visits(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Visits the caller may see (DA-211 Phase 6: Kebele-scoped for DAs).
-
-	DAs see their own scheduled visits, and (when listing without ``da_id``) other visits
-	in their assigned Kebele. ``da_id`` filters to that DA's visits and does not also
-	require a Kebele match, so a Planned visit with blank geography still appears.
-	Supervisors/Executives see their Woreda/Region scope.
-	``status`` may be a physical_status or a UI chip (Planned / Confirmed / Completed / Missed).
-	"""
-	ctx = ctx or require_roles(*READ_ROLES)
+	"""Visits visible via permission hooks. Optional query args narrow the permitted set."""
 	filters: dict = {}
-	or_filters: list[list] = []
 	if date:
 		d = getdate(date)
 		filters["scheduled_at"] = ("between", [f"{d} 00:00:00", f"{d} 23:59:59"])
@@ -607,44 +561,16 @@ def list_visits(
 		)
 	if farmer_id:
 		filters["farmer_id"] = farmer_id
-	filters.update(
-		area_scope.resolve_area_filters(ctx, region=region, zone=zone, woreda=woreda, kebele=kebele)
-	)
-
-	# Scope already validated for officers when da_id is named (registry), so query by
-	# da_id with get_all and skip the woreda/zone permission clause that hides visits
-	# whose geography was never filled from the registry.
-	officer_da_filter = False
-
-	# DA-211 Phase 6: Kebele-based visit visibility for DAs
-	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
-		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-		if not da_ids_list:
-			return [], 0
-
-		from da_services.services.farmers import _get_da_assigned_kebeles
-
-		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
-		if da_id:
-			if da_id not in ctx.da_ids:
-				frappe.throw(_("da_id is outside your scope."), frappe.PermissionError)
-			# Explicit own-DA filter: that DA's scheduled visits (date/status/farmer still apply)
-			filters["da_id"] = da_id
-		elif assigned_kebeles:
-			# Departmental list: own visits (incl. blank kebele) OR peers in assigned Kebeles
-			or_filters = [
-				["da_id", "in", da_ids_list],
-				["kebele", "in", assigned_kebeles],
-			]
-		else:
-			# No Effective Kebele assignment — still return this DA's own visits
-			filters["da_id"] = ("in", da_ids_list)
-	elif da_id:
-		# Explicit DA filter (Supervisors/Executives/Admin). Officers must be in scope for that DA.
-		if not ctx.unrestricted and ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-			get_da_reference(da_id, ctx)
-			officer_da_filter = True
+	if da_id:
 		filters["da_id"] = da_id
+	if region:
+		filters["region"] = region
+	if zone:
+		filters["zone"] = zone
+	if woreda:
+		filters["woreda"] = woreda
+	if kebele:
+		filters["kebele"] = kebele
 
 	if status == "Completed":
 		filters["physical_status"] = COMPLETE
@@ -655,41 +581,40 @@ def list_visits(
 
 	limit = max(1, min(int(limit), 500))
 	start = max(0, int(start))
-	list_args = {
-		"filters": filters,
-		"fields": [*FIELDS, "farmer_confirmation"],
-		"order_by": "scheduled_at asc",
-		"limit_page_length": limit,
-		"limit_start": start,
-	}
-	count_args = {"filters": filters, "pluck": "name", "limit_page_length": 0}
-	if or_filters:
-		list_args["or_filters"] = or_filters
-		count_args["or_filters"] = or_filters
-	# get_all skips permission_query_conditions; used only after get_da_reference for officers.
-	fetcher = frappe.get_all if officer_da_filter else frappe.get_list
-	rows = fetcher("DA Visit", **list_args)
-	if officer_da_filter:
-		total = frappe.db.count("DA Visit", filters)
-	else:
-		total = len(fetcher("DA Visit", **count_args))
-	return [serialize(frappe._dict(r)) for r in rows], total
+	rows = frappe.get_list(
+		"DA Visit",
+		filters=filters,
+		fields=[*FIELDS, "farmer_confirmation"],
+		order_by="scheduled_at asc",
+		limit_page_length=limit,
+		limit_start=start,
+	)
+	return rows, len(rows)
 
 
 def dashboard_counts(da_id: str, from_date, to_date) -> dict:
-	"""Farm visits tile: planned (everything meant to happen in the range) vs completed."""
+	"""Farm visits tile: planned vs completed (one read, counted in Python)."""
 	rng = ("between", [f"{getdate(from_date)} 00:00:00", f"{getdate(to_date)} 23:59:59"])
-	base_filters = {"da_id": da_id, "scheduled_at": rng}
-
-	return {
-		"planned": frappe.db.count(
-			"DA Visit", {**base_filters, "physical_status": ("in", list(PLANNED_STATES))}
-		),
-		"completed": frappe.db.count("DA Visit", {**base_filters, "physical_status": COMPLETE}),
-		"missed": frappe.db.count("DA Visit", {**base_filters, "physical_status": MISSED}),
-		"rescheduled": frappe.db.count("DA Visit", {**base_filters, "physical_status": RESCHEDULED}),
-		"in_progress": frappe.db.count("DA Visit", {**base_filters, "physical_status": IN_PROGRESS}),
-	}
+	rows = frappe.get_all(
+		"DA Visit",
+		filters={"da_id": da_id, "scheduled_at": rng},
+		fields=["physical_status"],
+		limit_page_length=0,
+	)
+	out = {"planned": 0, "completed": 0, "missed": 0, "rescheduled": 0, "in_progress": 0}
+	for r in rows:
+		status = r.physical_status
+		if status in PLANNED_STATES:
+			out["planned"] += 1
+		if status == COMPLETE:
+			out["completed"] += 1
+		elif status == MISSED:
+			out["missed"] += 1
+		elif status == RESCHEDULED:
+			out["rescheduled"] += 1
+		elif status == IN_PROGRESS:
+			out["in_progress"] += 1
+	return out
 
 
 def today_items(da_id: str, date=None) -> list[dict]:

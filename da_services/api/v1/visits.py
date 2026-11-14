@@ -16,17 +16,19 @@ POST /api/v1/da-services/visits/<visit_id>/attachments multipart: file + kind, l
 GET  /api/v1/da-services/reports/activity?week=2026-W42[&da_id=]
 
 The plan body accepts either
-`scheduled_at` or the form's separate `date` + `time`. `notify_farmer_sms` is recorded
-on the visit; the SMS itself needs the gateway (not yet available) and is sent by a
-later job, never from this request. `location` comes from the client (the farmer's
-parcel, once the Farmer Registry API exists) and is stored as given.
+`scheduled_at` or the form's separate `date` + `time`. `user` is the DA User Link
+(required from the frontend). `notify_farmer_sms` is recorded on the visit; the SMS
+itself needs the gateway (not yet available) and is sent by a later job, never from this
+request. `location` comes from the client (the farmer's parcel, once the Farmer Registry
+API exists) and is stored as given.
 
 Datetimes: every `*_at` value is site-local time (System Settings time zone, Africa/Addis_Ababa
 in production) serialised as ISO 8601 without an offset, the Frappe convention; `date` and
 `time` in the plan form are read the same way. Clients must not apply a UTC offset.
 
-Scope is enforced in services/visits.py: a DA acts on their own DA-ID, a Supervisor on
-DAs in their Woreda (recorded as `assigned_by`), an Executive reads their Region.
+Endpoint access is gated with require_roles. Row visibility comes from DA Visit
+permission hooks and User Permissions via frappe.get_list / check_permission;
+services apply request filters and product rules only.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ PLAN_FIELDS = (
 	"location",
 	"notify_farmer_sms",
 	"advisory_qa",
+	"user",
 	"da_id",
 	"client_op_id",
 )
@@ -139,6 +142,7 @@ def plan(**kwargs):
 		location=b.get("location") or None,
 		notify_farmer_sms=_truthy(b.get("notify_farmer_sms")),
 		advisory_qa=b.get("advisory_qa") or None,
+		user=(b.get("user") or "").strip(),
 		da_id=b.get("da_id"),
 		client_op_id=b.get("client_op_id") or None,
 		ctx=ctx,
@@ -192,16 +196,16 @@ def list_visits(**kwargs):
 def get_visit(visit_id: str):
 	ctx = require_roles(*svc.READ_ROLES)
 	out = svc.get_visit(visit_id, ctx)
-	meta = (
-		frappe.db.get_value(
-			"DA Visit",
-			visit_id,
-			["creation", "created_by_user", "modified", "modified_by", "farmer_confirmation"],
-			as_dict=True,
-		)
-		or {}
+	out["timeline"] = _timeline(
+		out,
+		{
+			"creation": out.get("creation"),
+			"created_by_user": out.get("created_by_user"),
+			"modified": out.get("modified"),
+			"modified_by": out.get("modified_by"),
+			"farmer_confirmation": out.get("farmer_confirmation"),
+		},
 	)
-	out["timeline"] = _timeline({**out, "farmer_confirmation": meta.get("farmer_confirmation")}, meta)
 	return success_response(data=out)
 
 

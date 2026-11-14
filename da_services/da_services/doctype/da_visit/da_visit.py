@@ -6,7 +6,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import get_datetime, getdate, now_datetime
 
-from da_services.integrations.da_registry.client import DARegistryError, get_client
+from da_services.services.notifications import notify_da
 
 PLANNED = "Planned"
 CONFIRMED = "Confirmed"
@@ -18,9 +18,10 @@ CANCELLED = "Cancelled"
 SUPERSEDED = "Superseded"
 
 # HLD 9.4 / FSD 3.6: what a visit may move to from each state. Terminal states have no exits.
+# Planned/Confirmed may go straight to Complete when outcome is submitted without start_visit.
 TRANSITIONS = {
-	PLANNED: {CONFIRMED, IN_PROGRESS, MISSED, RESCHEDULED, CANCELLED, SUPERSEDED},
-	CONFIRMED: {IN_PROGRESS, MISSED, RESCHEDULED, CANCELLED, SUPERSEDED},
+	PLANNED: {CONFIRMED, IN_PROGRESS, COMPLETE, MISSED, RESCHEDULED, CANCELLED, SUPERSEDED},
+	CONFIRMED: {IN_PROGRESS, COMPLETE, MISSED, RESCHEDULED, CANCELLED, SUPERSEDED},
 	IN_PROGRESS: {COMPLETE, CANCELLED},
 	COMPLETE: set(),
 	MISSED: set(),
@@ -47,7 +48,6 @@ class DAVisit(Document):
 	def before_insert(self):
 		self.created_by_user = self.created_by_user or frappe.session.user
 		self.physical_status = self.physical_status or PLANNED
-		self._fill_scope_from_registry()
 
 	def validate(self):
 		self._validate_transition()
@@ -93,26 +93,6 @@ class DAVisit(Document):
 				_("A visit with client_op_id {0} already exists ({1}).").format(self.client_op_id, dup),
 				frappe.DuplicateEntryError,
 			)
-
-	def _fill_scope_from_registry(self):
-		if self.region and self.zone and self.woreda and self.kebele:
-			return
-		try:
-			ref = get_client().get_da(self.da_id)
-		except DARegistryError as exc:
-			# Unknown DA or registry down: leave the codes empty (the DA still sees the row
-			# by da_id). Logged, not raised, so an outage never blocks planning a visit.
-			frappe.logger("da_services").warning(
-				"DA Visit %s: scope codes not filled, registry lookup of %s failed: %s",
-				self.name or "(new)",
-				self.da_id,
-				exc,
-			)
-			return
-		self.region = self.region or ref.region
-		self.zone = self.zone or ref.zone
-		self.woreda = self.woreda or ref.woreda
-		self.kebele = self.kebele or ref.kebele
 
 	# -- derived (not stored) -----------------------------------------------------
 
@@ -205,10 +185,6 @@ class DAVisit(Document):
 		now = now_datetime()
 		self.completed_at = now
 		self.outcome_submitted_at = now
-		# Go through In progress first so the transition table stays the single source of truth.
-		if self.physical_status != IN_PROGRESS:
-			self.physical_status = IN_PROGRESS
-			self.save()
 		self.physical_status = COMPLETE
 		self.save()
 		self._create_follow_up()
@@ -239,8 +215,6 @@ class DAVisit(Document):
 		)
 		task.insert(ignore_permissions=True)
 		self.db_set("follow_up_task", task.name, update_modified=False)
-		from da_services.services.notifications import notify_da
-
 		notify_da(
 			self.da_id,
 			kind="Task",
@@ -255,6 +229,7 @@ class DAVisit(Document):
 			visit = frappe.get_doc(
 				{
 					"doctype": "DA Visit",
+					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": self.farmer_id,
 					"visit_type": "Follow-up",
