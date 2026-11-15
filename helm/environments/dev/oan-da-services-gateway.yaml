@@ -25,3 +25,12 @@ web:
 corsOriginRegexes:
   - https://da-app\.development\.oanstaging\.com
   - https?://localhost(:[0-9]+)?
+
+# The Frappe desk (/app) on its own host, sent to the frappe nginx Service (templates/desk.yaml). Public on
+# this dev instance; `allowlist` (CIDRs) restricts it, `enabled: false` removes it.
+desk:
+  enabled: true
+  host: da-services-desk.development.oanstaging.com
+  serviceName: da-services-frappe
+  port: 8080
+  allowlist: []
