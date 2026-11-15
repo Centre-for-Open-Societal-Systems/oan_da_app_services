@@ -3,7 +3,7 @@ name: oan-da-services
 description: OAN DA services Frappe app with oan_auth_service for OpenAgriNet (OAN);
   deploys the OAN frappe chart with the DA defaults.
 type: application
-version: 0.1.0
+version: 0.0.1
 appVersion: version-16
 keywords:
 - oan
