@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # deploy-helm-dev.sh - Install or upgrade the `da-services` Helm release on the oan_dev k3s node
-# Called by Jenkins for develop, after "Push image". Same as oan_a2c's ci/deploy-helm-dev.sh.
+# Called by Jenkins for develop, after the DA node deploy. Same as oan_a2c's ci/deploy-helm-dev.sh.
 #
 # Runs on the deploy agent with the kubeconfig Jenkins holds as `oan-dev-kubeconfig` (oan-helm chart
 # oan-cluster-access, which must list this namespace); the agent needs helm and kubectl, no AWS access:
@@ -9,14 +9,14 @@
 set -euo pipefail
 
 : "${KUBECONFIG:?KUBECONFIG is required (credential oan-dev-kubeconfig)}"
-: "${IMAGE_TAG_BUILD:?IMAGE_TAG_BUILD is required}"
+: "${IMMUTABLE_TAG:?IMMUTABLE_TAG is required (<__version__>-develop.<build>)}"
 
 NS="${DA_NAMESPACE:-da-app}"
 RELEASE="${DA_RELEASE:-da-services}"
 CHART=helm/oan-da-services
 VALUES=helm/environments/dev/oan-da-services.yaml
 
-echo "=== Deploying to oan_dev: release ${RELEASE}, namespace ${NS}, image tag ${IMAGE_TAG_BUILD} ==="
+echo "=== Deploying to oan_dev: release ${RELEASE}, namespace ${NS}, image tag ${IMMUTABLE_TAG} ==="
 
 # The postgres password the create-site job uses, copied from the frappe-common release.
 kubectl -n "${NS}" create secret generic oan-frappe-common-db \
@@ -25,7 +25,7 @@ kubectl -n "${NS}" create secret generic oan-frappe-common-db \
 
 # No --atomic: a failed first install would uninstall the release, generated Secrets included.
 if ! helm upgrade --install "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${VALUES}" \
-  --set frappe.image.tag="${IMAGE_TAG_BUILD}" \
+  --set frappe.image.tag="${IMMUTABLE_TAG}" \
   --wait --wait-for-jobs --timeout 30m; then
   echo "=== helm upgrade failed ==="
   helm -n "${NS}" history "${RELEASE}" --max 3 || true
@@ -36,4 +36,4 @@ fi
 helm -n "${NS}" status "${RELEASE}"
 kubectl -n "${NS}" get pods
 
-echo "=== oan_dev deploy complete: ${RELEASE} ${IMAGE_TAG_BUILD} ==="
+echo "=== oan_dev deploy complete: ${RELEASE} ${IMMUTABLE_TAG} ==="

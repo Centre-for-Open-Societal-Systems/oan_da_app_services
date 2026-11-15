@@ -3,12 +3,13 @@
 # (ci/deploy-helm-dev.sh). Release `da-services`, namespace `da-app`.
 #
 # Set at install, not here:
-# - frappe.image.tag: the Jenkins tag `develop-<build>-<sha>`
+# - frappe.image.tag: the Jenkins tag `<__version__>-develop.<build>`
 
 frappe:
   image:
-    # Jenkinsfile IMAGE_REPO. The node pulls from ECR with its IAM role (kubelet ecr-credential-provider).
-    repository: 379220350808.dkr.ecr.ap-south-1.amazonaws.com/da-services-backend
+    # Jenkinsfile ECR_REPO, pushed by "Push image" on develop. The node pulls from ECR with its IAM role
+    # (kubelet ecr-credential-provider).
+    repository: 379220350808.dkr.ecr.ap-south-1.amazonaws.com/eoan/oan-da-services/da-services
 
   # The shared PostgreSQL of the oan-frappe-common release (namespace frappe-common).
   dbHost: oan-frappe-common-db-postgresql-subchart.frappe-common.svc.cluster.local
