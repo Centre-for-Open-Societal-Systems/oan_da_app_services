@@ -140,3 +140,28 @@ frappe:
       installApps:
       - oan_auth_service
       - da_services
+
+# Public base domain of the environment, used to build the hosts in iamServices. Set per environment.
+global:
+  baseDomain: ""
+
+# `OAN IAM Service` rows (the login options) the site-settings Job writes into the DB on every install and
+# upgrade, matched by `key` (templates/site-settings.yaml, da_services.setup.site_settings.sync). Entries
+# use the DocType's field names; `default_roles` is a list of role names. Values are templates, so hosts
+# follow global.baseDomain. Empty: no Job. An environment that changes one entry repeats the whole list,
+# as Helm replaces lists. Rows removed from the list stay in the DB.
+# DA is a staff tool: only the Keycloak staff login, the same row as A2C (oan_a2c helm/oan-a2c-service).
+siteSettingsJob:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  attempts: 20
+iamServices:
+- key: agent
+  label: Agent
+  enabled: 1
+  sort_order: 20
+  base_url: "https://staff-iam.{{ .Values.global.baseDomain }}"
+  provider_id: 1
+  issuer: "https://keycloak.{{ .Values.global.baseDomain }}/realms/staff"
+  client_id: staff-portal
+  application: oan-client
