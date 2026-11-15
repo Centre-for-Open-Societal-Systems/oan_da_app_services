@@ -38,7 +38,15 @@ AREAS = [
 	("ET04-Z02", "Zone", "ET04"),
 	("ET04-W09", "Woreda", "ET04-Z02"),
 ]
-USERS = (DA1, ZONE_EXEC, OTHER_ZONE_EXEC, MIXED_EXEC, REGION_EXEC, ZONE_SUP, f"{OTHER_DA.lower()}@da-test.local")
+USERS = (
+	DA1,
+	ZONE_EXEC,
+	OTHER_ZONE_EXEC,
+	MIXED_EXEC,
+	REGION_EXEC,
+	ZONE_SUP,
+	f"{OTHER_DA.lower()}@da-test.local",
+)
 DA_IDS = ("DA-000001", OTHER_DA)
 
 
