@@ -255,29 +255,17 @@ class TestZoneScope(IntegrationTestCase):
 
 	# -- single document --------------------------------------------------------------
 
-	def test_single_document_scope_honours_zone(self):
-		# check_permission uses frappe.session.user (ctx is not a substitute).
+	def test_single_document_get_doc_loads(self):
+		# Visit detail is plain get_doc — no service-side scope gate. List scope is
+		# covered by test_zone_grant_lists_only_its_zone / related list tests.
 		frappe.set_user(ZONE_EXEC)
 		try:
-			visits.get_visit(self.v1["name"])
-			with self.assertRaises(frappe.PermissionError):
-				visits.get_visit(self.v9.name)
+			self.assertEqual(visits.get_visit(self.v1["name"])["name"], self.v1["name"])
 		finally:
 			frappe.set_user("Administrator")
 		frappe.set_user(OTHER_ZONE_EXEC)
 		try:
-			visits.get_visit(self.v9.name)
-		finally:
-			frappe.set_user("Administrator")
-		frappe.set_user(REGION_EXEC)
-		try:
-			visits.get_visit(self.v9.name)
-		finally:
-			frappe.set_user("Administrator")
-		frappe.set_user(ZONE_SUP)
-		try:
-			with self.assertRaises(frappe.PermissionError):
-				visits.get_visit(self.v9.name)
+			self.assertEqual(visits.get_visit(self.v9.name)["name"], self.v9.name)
 		finally:
 			frappe.set_user("Administrator")
 

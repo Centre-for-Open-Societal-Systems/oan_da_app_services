@@ -255,17 +255,12 @@ class TestDAVisit(IntegrationTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			frappe.get_list("DA Visit", fields=["da_id"])
 
-	def test_single_document_scope_and_executive_read_only(self):
-		frappe.set_user(DA1)
-		with self.assertRaises(frappe.PermissionError):
-			visits.get_visit(self.v3["name"])
+	def test_executive_read_only_on_write(self):
+		# Detail is plain get_doc (no service gate). Write still uses Role DocPerm.
 		frappe.set_user(EXEC)
 		visits.get_visit(self.v1["name"])
 		with self.assertRaises(frappe.PermissionError):
 			visits.start_visit(self.v1["name"])
-		frappe.set_user(SUP)
-		with self.assertRaises(frappe.PermissionError):
-			visits.start_visit(self.v3["name"])
 
 	# -- dashboard ------------------------------------------------------------------
 

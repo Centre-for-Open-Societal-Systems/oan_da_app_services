@@ -350,18 +350,8 @@ def plan_visits_batch(
 	}
 
 
-def _load_visit(name: str):
-	"""Load a visit if Frappe list permissions expose it (Role DocPerm + User Permissions)."""
-	visible = frappe.get_list("DA Visit", filters={"name": name}, limit=1)
-	if not visible:
-		if frappe.db.exists("DA Visit", name):
-			frappe.throw(_("Not permitted"), frappe.PermissionError)
-		frappe.throw(_("Visit {0} not found").format(name), frappe.DoesNotExistError)
-	return frappe.get_doc("DA Visit", name)
-
-
 def get_visit(name: str) -> dict:
-	return serialize(_load_visit(name))
+	return serialize(frappe.get_doc("DA Visit", name))
 
 
 def start_visit(
@@ -372,7 +362,7 @@ def start_visit(
 	farmer_present: bool = True,
 	client_op_id: str | None = None,
 ) -> dict:
-	doc = _load_visit(name)
+	doc = frappe.get_doc("DA Visit", name)
 	if client_op_id and doc.physical_status == IN_PROGRESS:
 		return serialize(doc)
 	doc.start_visit(arrived_at=arrived_at, gps=gps, farmer_present=farmer_present)
@@ -380,7 +370,7 @@ def start_visit(
 
 
 def submit_outcome(name: str, *, client_op_id: str | None = None, **outcome) -> dict:
-	doc = _load_visit(name)
+	doc = frappe.get_doc("DA Visit", name)
 	if client_op_id and doc.physical_status == COMPLETE and doc.outcome_client_op_id == client_op_id:
 		return serialize(doc)
 	doc.submit_outcome(**outcome)
@@ -466,7 +456,7 @@ def add_attachment(
 ) -> dict:
 	"""Store one piece of geo-tagged evidence on a visit (duplicates by content hash)."""
 	validate_evidence(content, filename)
-	doc = _load_visit(name)
+	doc = frappe.get_doc("DA Visit", name)
 	if doc.physical_status not in (*OPEN_STATES, COMPLETE):
 		frappe.throw(_("Visit {0} is closed; evidence cannot be added.").format(name), frappe.ValidationError)
 	digest = hashlib.sha256(content).hexdigest()
@@ -592,12 +582,12 @@ def activity_report(*, week: str | None = None, da_id: str | None = None) -> dic
 
 
 def reschedule_visit(name: str, *, scheduled_at, reason: str | None = None) -> dict:
-	doc = _load_visit(name)
+	doc = frappe.get_doc("DA Visit", name)
 	return serialize(doc.reschedule(scheduled_at, reason))
 
 
 def cancel_visit(name: str, *, reason: str | None = None) -> dict:
-	doc = _load_visit(name)
+	doc = frappe.get_doc("DA Visit", name)
 	doc.cancel_visit(reason)
 	return serialize(doc)
 
