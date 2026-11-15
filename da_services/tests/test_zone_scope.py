@@ -10,6 +10,8 @@ from da_services.patches import backfill_zone
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
 from da_services.tests.fixtures import (
+	cleanup_test_rows,
+	ensure_administrative_area,
 	ensure_da_user,
 	ensure_doctype_schema,
 	ensure_geo_masters,
@@ -36,15 +38,8 @@ AREAS = [
 	("ET04-Z02", "Zone", "ET04"),
 	("ET04-W09", "Woreda", "ET04-Z02"),
 ]
-DOCTYPES = (
-	"DA Visit",
-	"DA Task",
-	"DA Farmer Link",
-	"DA Farmer Reference",
-	"DA Profile Change Request",
-	"DA RBAC Assignment",
-	"DA Administrative Area",
-)
+USERS = (DA1, ZONE_EXEC, OTHER_ZONE_EXEC, MIXED_EXEC, REGION_EXEC, ZONE_SUP, f"{OTHER_DA.lower()}@da-test.local")
+DA_IDS = ("DA-000001", OTHER_DA)
 
 
 def _user(email, roles):
@@ -82,12 +77,9 @@ class TestZoneScope(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		ensure_doctype_schema("DA Profile Change Request")
-		for dt in DOCTYPES:
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
 		for code, level, parent in AREAS:
-			doc = frappe.new_doc("DA Administrative Area")
-			doc.code, doc.level, doc.parent_area, doc.name_en = code, level, parent, code
-			doc.insert(ignore_permissions=True)
+			ensure_administrative_area(code, level, parent, code)
 		ensure_geo_masters()  # RBAC scopes link to DA Region / Zone / Woreda
 		_user(DA1, [C.ROLE_DA])
 		_user(ZONE_SUP, [C.ROLE_SUPERVISOR])
@@ -130,6 +122,8 @@ class TestZoneScope(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _visible(self, doctype, user) -> set[str]:
 		frappe.set_user(user)
@@ -151,15 +145,13 @@ class TestZoneScope(IntegrationTestCase):
 		self.assertEqual(frappe.db.get_value("DA Profile Change Request", req["name"], "zone"), "ET04-Z01")
 
 	def test_follow_up_task_and_visit_inherit_zone(self):
-		visits.start_visit(
-			self.v1["name"], gps={"lat": 9.1236, "lng": 37.0521, "accuracy_m": 12}, ctx=_ctx(DA1)
-		)
+		_ctx(DA1)
+		visits.start_visit(self.v1["name"], gps={"lat": 9.1236, "lng": 37.0521, "accuracy_m": 12})
 		out = visits.submit_outcome(
 			self.v1["name"],
 			observed="Rust",
 			advice_given="Spray",
 			next_action={"type": "Follow-up visit", "note": "Check", "date": add_days(today(), 7)},
-			ctx=_ctx(DA1),
 		)
 		self.assertEqual(frappe.db.get_value("DA Task", out["follow_up_task"], "zone"), "ET04-Z01")
 		self.assertEqual(frappe.db.get_value("DA Visit", out["follow_up_visit"], "zone"), "ET04-Z01")

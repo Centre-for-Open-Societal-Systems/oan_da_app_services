@@ -173,7 +173,6 @@ class TestDANotification(IntegrationTestCase):
 			v["name"],
 			observed="ok",
 			next_action={"type": "Task", "note": "Bring seed", "date": add_days(today(), 3)},
-			ctx=ctx,
 		)
 		rows, _meta = svc.list_notifications(ctx, unread=True)
 		row = next((r for r in rows if r["event"] == "task_created"), None)

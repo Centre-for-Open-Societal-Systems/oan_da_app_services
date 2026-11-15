@@ -35,6 +35,9 @@ READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 # Open visits block another visit that covers the same specialization.
 BLOCKING_STATUSES = list(OPEN_STATES)
 
+# Max farmers in one POST /visits list payload (batch plan).
+MAX_BATCH_VISITS = 5
+
 FIELDS = [
 	"name",
 	"da_id",
@@ -266,6 +269,94 @@ def plan_visit(
 	return serialize(doc)
 
 
+def plan_visits_batch(
+	*,
+	visits: list,
+	user: str | None = None,
+	da_id: str | None = None,
+	ctx: ScopeContext | None = None,
+) -> dict:
+	"""Plan up to MAX_BATCH_VISITS visits sequentially in one request.
+
+	Partial success: each item is independent. Failures echo the received item
+	plus the exact error so the client can correct and resubmit.
+	"""
+	if not visits:
+		frappe.throw(_("visits must not be empty."), frappe.ValidationError)
+	if len(visits) > MAX_BATCH_VISITS:
+		frappe.throw(
+			_("At most {0} visits can be planned at once.").format(MAX_BATCH_VISITS),
+			frappe.ValidationError,
+		)
+	if any(not isinstance(item, dict) for item in visits):
+		frappe.throw(_("visits items must be objects."), frappe.ValidationError)
+
+	seen_farmers: set[str] = set()
+	for item in visits:
+		fid = (item.get("farmer_id") or "").strip()
+		if not fid:
+			continue
+		if fid in seen_farmers:
+			frappe.throw(_("Duplicate farmer_id in visits."), frappe.ValidationError)
+		seen_farmers.add(fid)
+
+	envelope_user = (user or "").strip() or None
+	created: list[dict] = []
+	failed: list[dict] = []
+	for item in visits:
+		request_echo = dict(item)
+		try:
+			scheduled_at = item.get("scheduled_at")
+			if scheduled_at:
+				scheduled_at = get_datetime(scheduled_at)
+			elif item.get("date"):
+				scheduled_at = get_datetime(f"{item['date']} {item.get('time') or '09:00'}")
+			else:
+				scheduled_at = None
+
+			created.append(
+				plan_visit(
+					farmer_id=(item.get("farmer_id") or "").strip(),
+					scheduled_at=scheduled_at,
+					visit_type=item.get("visit_type") or "Crop Survey",
+					purpose=item.get("purpose"),
+					duration_min=int(item.get("duration_min") or 45),
+					priority=item.get("priority") or "Medium",
+					priority_reason=item.get("priority_reason"),
+					plot_ref=item.get("plot_ref"),
+					location=item.get("location") or None,
+					notify_farmer_sms=bool(item.get("notify_farmer_sms")),
+					advisory_qa=item.get("advisory_qa") or None,
+					user=(item.get("user") or envelope_user or "").strip(),
+					da_id=item.get("da_id") or da_id,
+					client_op_id=item.get("client_op_id") or None,
+					ctx=ctx,
+				)
+			)
+		except (frappe.ValidationError, frappe.PermissionError) as exc:
+			frappe.clear_messages()
+			message = str(exc)
+			code = "conflict" if "already has an active" in message else "validation"
+			failed.append({"status": "failed", "error": message, "code": code, "request": request_echo})
+		except Exception:
+			frappe.clear_messages()
+			frappe.log_error(title="plan_visits_batch item failed", message=frappe.get_traceback())
+			failed.append(
+				{
+					"status": "failed",
+					"error": _("Could not plan this visit."),
+					"code": "error",
+					"request": request_echo,
+				}
+			)
+
+	return {
+		"created": created,
+		"failed": failed,
+		"summary": {"total": len(visits), "created": len(created), "failed": len(failed)},
+	}
+
+
 def _load_visit(name: str, *, write: bool = False):
 	"""Load a visit; visibility comes from ``has_da_visit_permission`` via check_permission."""
 	doc = frappe.get_doc("DA Visit", name)
@@ -273,7 +364,7 @@ def _load_visit(name: str, *, write: bool = False):
 	return doc
 
 
-def get_visit(name: str, ctx: ScopeContext | None = None) -> dict:
+def get_visit(name: str) -> dict:
 	return serialize(_load_visit(name, write=False))
 
 
@@ -284,7 +375,6 @@ def start_visit(
 	gps: dict | None = None,
 	farmer_present: bool = True,
 	client_op_id: str | None = None,
-	ctx=None,
 ) -> dict:
 	doc = _load_visit(name, write=True)
 	if client_op_id and doc.physical_status == IN_PROGRESS:
@@ -294,7 +384,7 @@ def start_visit(
 	return serialize(doc)
 
 
-def submit_outcome(name: str, *, ctx=None, client_op_id: str | None = None, **outcome) -> dict:
+def submit_outcome(name: str, *, client_op_id: str | None = None, **outcome) -> dict:
 	doc = _load_visit(name, write=True)
 	if client_op_id and doc.physical_status == COMPLETE and doc.outcome_client_op_id == client_op_id:
 		return serialize(doc)
@@ -379,7 +469,6 @@ def add_attachment(
 	gps: dict | None = None,
 	captured_at=None,
 	content_hash: str | None = None,
-	ctx=None,
 ) -> dict:
 	"""Store one piece of geo-tagged evidence on a visit (duplicates by content hash)."""
 	validate_evidence(content, filename)
@@ -520,13 +609,13 @@ def activity_report(
 	}
 
 
-def reschedule_visit(name: str, *, scheduled_at, reason: str | None = None, ctx=None) -> dict:
+def reschedule_visit(name: str, *, scheduled_at, reason: str | None = None) -> dict:
 	doc = _load_visit(name, write=True)
 	doc.flags.ignore_permissions = True
 	return serialize(doc.reschedule(scheduled_at, reason))
 
 
-def cancel_visit(name: str, *, reason: str | None = None, ctx=None) -> dict:
+def cancel_visit(name: str, *, reason: str | None = None) -> dict:
 	doc = _load_visit(name, write=True)
 	doc.flags.ignore_permissions = True
 	doc.cancel_visit(reason)
@@ -534,7 +623,6 @@ def cancel_visit(name: str, *, reason: str | None = None, ctx=None) -> dict:
 
 
 def list_visits(
-	ctx: ScopeContext | None = None,
 	*,
 	from_date=None,
 	to_date=None,

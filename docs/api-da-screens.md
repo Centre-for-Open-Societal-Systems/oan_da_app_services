@@ -57,10 +57,11 @@ disables items in the UI, but the frontend team should know these screens call D
 
 ### 1.2 Login
 
-The prototype matches `DEMO_ACCOUNTS` in the browser. Real flow: `POST /api/v1/auth/login` (oan_auth_service,
-exists) → JWT → `GET /api/v1/auth/me` (profile with our `profiles.da_services`) or `GET /da-services/me`.
-Logout clears drafts client-side; server side `POST /api/v1/auth/logout` (exists). Password reset and Fayda
-sign-in are not in the prototype.
+The prototype matches `DEMO_ACCOUNTS` in the browser. Real flow:
+`POST /api/v1/da-services/sso/login` with `username`, `password`, `key` (IAM login key) →
+`access_token` (+ `csrf_token` for staff/registry routes) →
+`GET /api/v1/da-services/me` (or auth whoami with `profiles.da_services`).
+Logout clears drafts client-side. Password reset and Fayda sign-in are not in the prototype.
 
 ### 1.3 Lists, filters, search, export
 
@@ -206,12 +207,17 @@ season"), selected farmer card (`registryCode FR-xxxxx, kebele, crop + landHa, l
 (`High — overdue by 4 days | Medium — due this week | Low — routine`), Save as draft / Plan visit.
 Schedule mode (from the priority list) presets `reason`, `visitType`, `level`.
 
+Batch (My Farmers grid, FE pending): select up to **5** farmers, fill schedule fields per farmer, one
+`POST /visits` with `visits: [ {...}, ... ]`. Same route as single plan — no `/visits/batch`. Server runs
+each item sequentially in that request and returns partial success so the DA can fix failed rows.
+
 | Element | API | Source |
 |---|---|---|
 | Farmer search + chips | `GET /farmers?q=&limit=10` → items + `flags[]` (`registered`, `voucher_redeemed_season`) | ours projection; voucher flag external (**contract pending**) |
-| Plan | `POST /visits` body: `client_op_id, farmer_id, visit_type, purpose, scheduled_at, duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng} (optional, server fills from parcel), notify_farmer_sms, advisory_qa[] {question, answer}` → `{id, physical_status: Planned}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
+| Plan (single, legacy) | `POST /visits` flat body: `user` (required User Link), `client_op_id, farmer_id, visit_type, purpose, scheduled_at` (or `date`+`time`), `duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng}` (optional), `notify_farmer_sms, advisory_qa[] {question, answer}`, optional `da_id` (Supervisor). No session-user fallback. → one visit `{name, physical_status: Planned, …}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
+| Plan (single or batch list) | `POST /visits` body: `{ user?, da_id?, visits: [ { same fields as single plan per farmer }, … ] }` — length **1–5**, unique `farmer_id`, per-item schedule allowed. `user` required per item or once on the envelope (not from session). Response `data`: `{ created: [visit…], failed: [ { status, error, code, request } ], summary: { total, created, failed } }`. `failed[].request` echoes that item as received; `code` is `conflict` \| `validation` \| `error`. HTTP **201** if any created; **400** if envelope invalid or zero created. When `visits` is present it is the list path. Row scope stays on Frappe hooks + User Permissions. | ours: loops `plan_visit` (one DA Visit per farmer) |
 | Save as draft | device | device |
-| "Planned offline" banner | idempotent on `client_op_id` | ours |
+| "Planned offline" banner | idempotent on per-item `client_op_id` | ours |
 
 ### 2.7 Visits list (`/visits`, Supervisor nav item; DA reaches it from the dashboard tile)
 
@@ -225,7 +231,7 @@ yet delivered / Other), farmer notified by SMS.
 
 | Element | API | Source |
 |---|---|---|
-| Table + stats + facets | `GET /visits?q&agent&region&zone&woreda&kebele&status&from&to&limit&start` → `VisitRecord` fields (`agent` = DA name, `assigned_by`) + `stats`. Explicit area selections are validated against the caller's scope; unauthorized areas are 403 | ours: DA Visit |
+| Table + stats + facets | `GET /visits?region&zone&woreda&kebele&status&from&to&da_id&farmer_id&limit&start` → visit rows (+ derived `ui_status` / `planner_status`). Row set from permission hooks + User Permissions; query args only narrow. Out-of-grant geography yields an empty page, not a service-layer 403 | ours: DA Visit |
 | View details | `GET /visits/{id}` → record + `timeline[]` (from DA Visit status history) | ours |
 | Reschedule | `POST /visits/{id}/reschedule {scheduled_at, reason}` → new DA Visit with `rescheduled_from`, old one `Rescheduled`; SMS job | ours + SMS |
 | Supervisor assigns a visit to a DA (`assignedBy`) | `POST /visits` with `da_id` by a Supervisor (scope: own Woreda) | ours |

@@ -15,7 +15,7 @@ from frappe.utils import today
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
-from da_services.tests.fixtures import ensure_da_user
+from da_services.tests.fixtures import cleanup_test_rows, ensure_da_user
 
 
 def _grant(user: str, role: str, **kw):
@@ -75,16 +75,14 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		self.farmer_kebele_a = "FARMER-VIS-A-001"
 		self.farmer_kebele_b = "FARMER-VIS-B-001"
 
-		frappe.db.delete("DA Visit", {"da_id": ["in", [self.da1, self.da2, self.da3]]})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", [self.da1, self.da2, self.da3]]})
-		frappe.db.delete(
-			"DA RBAC Assignment",
-			{"da_id": ["in", [self.da1, self.da2, self.da3]]},
-		)
-
 		self.user_da1 = ensure_da_user(self.da1)
 		self.user_da2 = ensure_da_user(self.da2)
 		self.user_da3 = ensure_da_user(self.da3)
+		cleanup_test_rows(
+			users=(self.user_da1, self.user_da2, self.user_da3),
+			da_ids=(self.da1, self.da2, self.da3),
+			farmer_ids=(self.farmer_kebele_a, self.farmer_kebele_b),
+		)
 		for email in (self.user_da1, self.user_da2, self.user_da3):
 			u = frappe.get_doc("User", email)
 			if C.ROLE_DA not in frappe.get_roles(email):
@@ -135,13 +133,10 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 	def tearDown(self):
 		"""Clean up test data."""
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA Visit", {"da_id": ["in", [self.da1, self.da2, self.da3, "DA-NO-ASSIGN"]]})
-		frappe.db.delete(
-			"DA Kebele Assignment", {"da_id": ["in", [self.da1, self.da2, self.da3, "DA-NO-ASSIGN"]]}
-		)
-		frappe.db.delete(
-			"DA RBAC Assignment",
-			{"da_id": ["in", [self.da1, self.da2, self.da3, "DA-NO-ASSIGN"]]},
+		cleanup_test_rows(
+			users=(self.user_da1, self.user_da2, self.user_da3, ensure_da_user("DA-NO-ASSIGN")),
+			da_ids=(self.da1, self.da2, self.da3, "DA-NO-ASSIGN"),
+			farmer_ids=(self.farmer_kebele_a, self.farmer_kebele_b),
 		)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 

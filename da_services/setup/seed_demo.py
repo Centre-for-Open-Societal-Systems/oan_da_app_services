@@ -114,7 +114,6 @@ def _visits(ctx) -> None:
 				observed="Seeded demo visit: crop stand normal, no pest pressure.",
 				advice_given="Continue current practice; next check in two weeks.",
 				farmer_response="Agreed",
-				ctx=ctx,
 			)
 
 

@@ -80,7 +80,7 @@ class TestDashboard(IntegrationTestCase):
 				ctx=admin,
 			)
 			if complete:
-				visits.submit_outcome(v["name"], observed="ok", ctx=admin)
+				visits.submit_outcome(v["name"], observed="ok")
 		# tasks: 2 open due today (1 urgent), 1 open later, 1 done in range
 		tasks.create_task(
 			title="Report", da_id="DA-000001", due_at=f"{t} 13:00:00", priority="Urgent", ctx=admin

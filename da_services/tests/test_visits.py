@@ -7,6 +7,7 @@ from frappe.utils import add_days, add_to_date, now_datetime, today
 from da_services.services import constants as C
 from da_services.services import visits
 from da_services.tests.fixtures import (
+	cleanup_test_rows,
 	ensure_da_user,
 	ensure_kebele_assignment,
 	live_geo,
@@ -55,11 +56,12 @@ def _ctx(user):
 
 
 class TestDAVisit(IntegrationTestCase):
+	USERS = (DA1, DA3, SUP, EXEC, COMMS)
+	DA_IDS = ("DA-000001", "DA-000003")
+
 	def setUp(self):
 		frappe.set_user(ADMIN)
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
+		cleanup_test_rows(users=self.USERS, da_ids=self.DA_IDS)
 		self.geo = live_geo()
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
@@ -120,10 +122,7 @@ class TestDAVisit(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user(ADMIN)
-		frappe.db.delete("DA Visit")
-		frappe.db.delete("DA Task")
-		frappe.db.delete("DA RBAC Assignment")
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		cleanup_test_rows(users=self.USERS, da_ids=self.DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	# -- plan ---------------------------------------------------------------------
@@ -209,9 +208,7 @@ class TestDAVisit(IntegrationTestCase):
 	# -- lifecycle ----------------------------------------------------------------
 
 	def test_start_then_submit_creates_follow_up_task_and_visit(self):
-		out = visits.start_visit(
-			self.v1["name"], gps={"lat": 9.1236, "lng": 37.0521, "accuracy_m": 12}, ctx=_ctx(DA1)
-		)
+		out = visits.start_visit(self.v1["name"], gps={"lat": 9.1236, "lng": 37.0521, "accuracy_m": 12})
 		self.assertEqual(out["physical_status"], "In progress")
 		doc = frappe.get_doc("DA Visit", self.v1["name"])
 		self.assertEqual(doc.gps_lat, 9.1236)
@@ -227,7 +224,6 @@ class TestDAVisit(IntegrationTestCase):
 				"note": "Check spray result",
 				"date": add_days(today(), 14),
 			},
-			ctx=_ctx(DA1),
 		)
 		self.assertEqual(out["physical_status"], "Physical Visit Complete")
 		self.assertEqual(out["ui_status"], "Completed")
@@ -251,16 +247,15 @@ class TestDAVisit(IntegrationTestCase):
 			self.v1["name"],
 			observed="ok",
 			next_action={"type": "Task", "note": "Bring seed sample", "date": add_days(today(), 3)},
-			ctx=_ctx(DA1),
 		)
 		self.assertTrue(out["follow_up_task"])
 		self.assertFalse(out["follow_up_visit"])
 		self.assertEqual(frappe.db.count("DA Visit", {"da_id": "DA-000001"}), 1)
 
 	def test_closed_visit_cannot_change(self):
-		visits.submit_outcome(self.v1["name"], observed="done", ctx=_ctx(DA1))
+		visits.submit_outcome(self.v1["name"], observed="done")
 		with self.assertRaises(frappe.ValidationError):
-			visits.submit_outcome(self.v1["name"], observed="again", ctx=_ctx(DA1))
+			visits.submit_outcome(self.v1["name"], observed="again")
 		doc = frappe.get_doc("DA Visit", self.v1["name"])
 		doc.physical_status = "Planned"
 		with self.assertRaises(frappe.ValidationError):
@@ -268,13 +263,13 @@ class TestDAVisit(IntegrationTestCase):
 
 	def test_reschedule_supersedes_and_links(self):
 		new = visits.reschedule_visit(
-			self.v1["name"], scheduled_at=self.tomorrow, reason="Farmer unavailable", ctx=_ctx(DA1)
+			self.v1["name"], scheduled_at=self.tomorrow, reason="Farmer unavailable"
 		)
 		old = frappe.get_doc("DA Visit", self.v1["name"])
 		self.assertEqual((old.physical_status, old.reschedule_reason), ("Rescheduled", "Farmer unavailable"))
 		self.assertEqual((new["physical_status"], new["rescheduled_from"]), ("Planned", self.v1["name"]))
 		with self.assertRaises(frappe.ValidationError):
-			visits.start_visit(self.v1["name"], ctx=_ctx(DA1))
+			visits.start_visit(self.v1["name"])
 
 	def test_derived_statuses(self):
 		past = visits.plan_visit(
@@ -288,7 +283,7 @@ class TestDAVisit(IntegrationTestCase):
 		doc = frappe.get_doc("DA Visit", past["name"])
 		doc.farmer_confirmation = "Confirmed"
 		doc.save()
-		self.assertEqual(visits.get_visit(past["name"], ctx=_ctx(DA1))["ui_status"], "Confirmed")
+		self.assertEqual(visits.get_visit(past["name"])["ui_status"], "Confirmed")
 
 	# -- scope --------------------------------------------------------------------
 
@@ -306,13 +301,16 @@ class TestDAVisit(IntegrationTestCase):
 			frappe.get_list("DA Visit", fields=["da_id"])
 
 	def test_single_document_scope_and_executive_read_only(self):
+		frappe.set_user(DA1)
 		with self.assertRaises(frappe.PermissionError):
-			visits.get_visit(self.v3["name"], ctx=_ctx(DA1))
-		visits.get_visit(self.v1["name"], ctx=_ctx(EXEC))
+			visits.get_visit(self.v3["name"])
+		frappe.set_user(EXEC)
+		visits.get_visit(self.v1["name"])
 		with self.assertRaises(frappe.PermissionError):
-			visits.start_visit(self.v1["name"], ctx=_ctx(EXEC))
+			visits.start_visit(self.v1["name"])
+		frappe.set_user(SUP)
 		with self.assertRaises(frappe.PermissionError):
-			visits.start_visit(self.v3["name"], ctx=_ctx(SUP))
+			visits.start_visit(self.v3["name"])
 
 	# -- dashboard ------------------------------------------------------------------
 
@@ -325,7 +323,8 @@ class TestDAVisit(IntegrationTestCase):
 				user=DA1,
 				ctx=_ctx(DA1),
 			)
-		visits.submit_outcome(self.v1["name"], observed="ok", ctx=_ctx(DA1))
+		_ctx(DA1)
+		visits.submit_outcome(self.v1["name"], observed="ok")
 		counts = visits.dashboard_counts("DA-000001", add_days(today(), -30), today())
 		self.assertEqual(
 			counts, {"planned": 4, "completed": 1, "missed": 0, "rescheduled": 0, "in_progress": 0}
@@ -340,32 +339,32 @@ class TestDAVisit(IntegrationTestCase):
 
 	def test_list_filters(self):
 		frappe.set_user(DA1)
-		rows, total = visits.list_visits(_ctx(DA1), date=today())
+		rows, total = visits.list_visits(date=today())
 		self.assertEqual(total, 1)
 		self.assertEqual(rows[0]["name"], self.v1["name"])
-		rows, total = visits.list_visits(_ctx(DA1), status="Completed")
+		rows, total = visits.list_visits(status="Completed")
 		self.assertEqual(total, 0)
 
 	def test_list_area_filters_use_permission_hooks(self):
 		# Out-of-scope geography filters no longer throw; get_list + hooks return empty.
 		frappe.set_user(SUP)
 		try:
-			rows, total = visits.list_visits(_ctx(SUP), woreda=self.geo["woreda"])
+			rows, total = visits.list_visits(woreda=self.geo["woreda"])
 			self.assertEqual(total, 1)
 			self.assertEqual(rows[0]["name"], self.v1["name"])
-			rows, total = visits.list_visits(_ctx(SUP), kebele=self.geo["kebele"])
+			rows, total = visits.list_visits(kebele=self.geo["kebele"])
 			self.assertEqual(total, 1)
-			_rows, total = visits.list_visits(_ctx(SUP), woreda=self.geo["foreign_woreda"])
+			_rows, total = visits.list_visits(woreda=self.geo["foreign_woreda"])
 			self.assertEqual(total, 0)
 		finally:
 			frappe.set_user(ADMIN)
 
 		frappe.set_user(DA1)
 		try:
-			rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["kebele"])
+			rows, total = visits.list_visits(kebele=self.geo["kebele"])
 			self.assertEqual(total, 1)
 			# Equality filter on a kebele this visit does not carry (sibling may equal primary).
-			_rows, total = visits.list_visits(_ctx(DA1), kebele=self.geo["foreign_kebele"])
+			_rows, total = visits.list_visits(kebele=self.geo["foreign_kebele"])
 			self.assertEqual(total, 0)
 		finally:
 			frappe.set_user(ADMIN)

@@ -9,7 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
-from da_services.tests.fixtures import set_da_registry_id
+from da_services.tests.fixtures import cleanup_test_rows, set_da_registry_id
 from da_services.utils.permissions import ScopeContext
 
 
@@ -24,8 +24,11 @@ class TestScheduleBlocking(IntegrationTestCase):
 		self.user_crop = "da-crop@test.com"
 		self.user_livestock = "da-livestock@test.com"
 
-		# Clean up
-		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
+		cleanup_test_rows(
+			users=(self.user_crop, self.user_livestock),
+			da_ids=(self.da_crop, self.da_livestock),
+			farmer_ids=(self.farmer_id,),
+		)
 
 		for email, da_id in (
 			(self.user_crop, self.da_crop),
@@ -59,7 +62,11 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 	def tearDown(self):
 		"""Clean up test data."""
-		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
+		cleanup_test_rows(
+			users=(self.user_crop, self.user_livestock),
+			da_ids=(self.da_crop, self.da_livestock),
+			farmer_ids=(self.farmer_id,),
+		)
 
 	def test_no_conflict_first_visit(self):
 		"""Test first visit has no conflict."""
