@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-visits",
     "name": "OAN DA Visits",
-    "description": "Plan / list / reschedule / cancel / start / submit farm visits with a farmer.\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. Login — set `user` to the DA's Frappe User (email), usually the same as `usr` when a DA self-plans\n2. (Optional) GET farmer profile — confirms farmer exists in DA Farmer Reference / registry cache\n3. (Optional, Manual kebele mode only) Create farmer link — Supervisor\n4. Plan a visit (requires `user`) → stores visit_id\n5. Get visit / List visits\n6. Start visit → Submit outcome → (optional) Attachments\n7. Activity report\n\n## Auth\nVisits are DA Services native DocTypes. Use Bearer {{access_token}} from Login. No staff CSRF pair is required for these routes (unlike Crop / Livestock / Grievance registry intake).\n\n## Scope\nEndpoint roles: `require_roles`. Row visibility: DA Visit permission hooks + User Permissions (`get_list` / `check_permission`). List query args only narrow the permitted set (date, status, farmer_id, da_id, region, zone, woreda, kebele).\n\n## Farmer registry before link / schedule\n- **Manual farmer link** (`POST /farmer-links`): farmer must already exist in **DA Farmer Reference** (synced from Farmer Registry), `registration_state=APPROVED`, same Kebele as the DA's Effective Manual assignment. It does **not** call the live Farmer Registry API at link time.\n- **Plan visit** (`POST /visits`): requires `farmer_id`, `user` (User Link for the assigned DA), and `scheduled_at` (or date+time). Does **not** verify the farmer against Farmer Registry or require an active DA Farmer Link. Does **not** fall back to session user when `user` is omitted. Specialization conflict on open visits for the same farmer is checked.\n\nDatetimes are site-local (Africa/Addis_Ababa in prod), ISO without offset.",
+    "description": "Plan / list / reschedule / cancel / start / submit farm visits with a farmer.\n\nBase path: /api/v1/da-services\n\n## Run order (happy path)\n1. SSO Login — `POST /api/v1/da-services/sso/login` with `username`, `password`, `key`. Set `user` to the DA's Frappe User (email), usually the same as `usr` when a DA self-plans\n2. (Optional) GET farmer profile — confirms farmer exists in DA Farmer Reference / registry cache\n3. (Optional, Manual kebele mode only) Create farmer link — Supervisor\n4. Plan a visit (requires `user`) → stores visit_id\n4b. (Optional) Plan visits batch — body `{ user, visits: [1..5] }` same route\n5. Get visit / List visits\n6. Start visit → Submit outcome → (optional) Attachments\n7. Activity report\n\n## Auth\nSign in with SSO Login only (`POST /api/v1/da-services/sso/login`). Visits are DA Services native DocTypes — send `Authorization: Bearer {{access_token}}`. No staff CSRF pair is required for these routes (unlike Crop / Livestock / Grievance registry intake); `csrf_token` is stored from SSO for other collections that need it.\n\n## Scope\nAccess and row visibility: DA Visit DocType permissions + permission hooks + User Permissions (`get_list` / `check_permission` / create). No hardcoded `require_roles` on visit handlers. List query args only narrow the permitted set (date, status, farmer_id, da_id, region, zone, woreda, kebele).\n\n## Farmer registry before link / schedule\n- **Manual farmer link** (`POST /farmer-links`): farmer must already exist in **DA Farmer Reference** (synced from Farmer Registry), `registration_state=APPROVED`, same Kebele as the DA's Effective Manual assignment. It does **not** call the live Farmer Registry API at link time.\n- **Plan visit** (`POST /visits`): requires `farmer_id`, `user` (User Link for the assigned DA), and `scheduled_at` (or date+time). Does **not** verify the farmer against Farmer Registry or require an active DA Farmer Link. Does **not** fall back to session user when `user` is omitted. Specialization conflict on open visits for the same farmer is checked.\n\nDatetimes are site-local (Africa/Addis_Ababa in prod), ISO without offset.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -29,11 +29,15 @@
       "value": ""
     },
     {
+      "key": "sso_key",
+      "value": ""
+    },
+    {
       "key": "access_token",
       "value": ""
     },
     {
-      "key": "refresh_token",
+      "key": "csrf_token",
       "value": ""
     },
     {
@@ -78,7 +82,7 @@
       "name": "0. Auth",
       "item": [
         {
-          "name": "Login",
+          "name": "SSO Login",
           "request": {
             "auth": {
               "type": "noauth"
@@ -96,15 +100,15 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+              "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
                 }
               }
             },
-            "url": "{{base_url}}/api/v1/auth/login",
-            "description": "Public login. Stores access_token and refresh_token. If `user` is empty, copies `usr` into `user` for plan bodies (DA self-plan). Override `user` when a Supervisor plans for another DA."
+            "url": "{{base_url}}/api/v1/da-services/sso/login",
+            "description": "Required login. POST /api/v1/da-services/sso/login with username, password, key (IAM login key, e.g. agent). Stores access_token and csrf_token. If `user` is empty, copies `usr` into `user` for plan bodies (DA self-plan). Override `user` when a Supervisor plans for another DA. On 401, re-run SSO Login."
           },
           "event": [
             {
@@ -112,69 +116,27 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"SSO Login returns 200\", function () { pm.response.to.have.status(200); });",
                   "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"SSO Login returns access_token\", function () {",
+                  "    pm.expect(data.access_token, \"data.access_token\").to.be.a(\"string\").and.not.empty;",
+                  "});",
                   "function save(key, value) {",
                   "    if (!value) return;",
                   "    pm.collectionVariables.set(key, value);",
                   "    if (pm.environment.name) pm.environment.set(key, value);",
                   "}",
                   "save(\"access_token\", data.access_token);",
-                  "save(\"refresh_token\", data.refresh_token);",
-                  "const usr = pm.environment.get(\"usr\") || pm.collectionVariables.get(\"usr\");",
-                  "const existingUser = pm.environment.get(\"user\") || pm.collectionVariables.get(\"user\");",
-                  "if (usr && !existingUser) {",
-                  "  save(\"user\", usr);",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "response": []
-        },
-        {
-          "name": "Refresh token",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": "{{base_url}}/api/v1/auth/refresh",
-            "description": "Refresh access_token using refresh_token."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const data = (pm.response.json() || {}).data || {};",
-                  "if (data.access_token) {",
-                  "  pm.collectionVariables.set(\"access_token\", data.access_token);",
-                  "  if (pm.environment.name) pm.environment.set(\"access_token\", data.access_token);",
-                  "}",
-                  "if (data.refresh_token) {",
-                  "  pm.collectionVariables.set(\"refresh_token\", data.refresh_token);",
-                  "  if (pm.environment.name) pm.environment.set(\"refresh_token\", data.refresh_token);",
+                  "save(\"csrf_token\", data.csrf_token);",
+                  "// Plan bodies need the Frappe User Link from whoami (often *@iam.internal), not the Keycloak username.",
+                  "const who = data.user || {};",
+                  "const frappeUser = who.user || who.email || who.name;",
+                  "if (frappeUser) {",
+                  "  save(\"user\", frappeUser);",
+                  "} else {",
+                  "  const usr = pm.environment.get(\"usr\") || pm.collectionVariables.get(\"usr\");",
+                  "  const existingUser = pm.environment.get(\"user\") || pm.collectionVariables.get(\"user\");",
+                  "  if (usr && !existingUser) save(\"user\", usr);",
                   "}"
                 ]
               }
@@ -379,10 +341,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if (!pm.variables.get(\"client_op_id\")) {",
-                  "  const id = \"visit-\" + Date.now();",
-                  "  pm.collectionVariables.set(\"client_op_id\", id);",
-                  "  if (pm.environment.name) pm.environment.set(\"client_op_id\", id);",
+                  "const stamp = Date.now();",
+                  "const lifeFarmer = \"FRM-POSTMAN-LIFE-\" + stamp;",
+                  "pm.collectionVariables.set(\"client_op_id\", \"visit-\" + stamp);",
+                  "pm.collectionVariables.set(\"farmer_id\", lifeFarmer);",
+                  "if (pm.environment.name) {",
+                  "  pm.environment.set(\"client_op_id\", \"visit-\" + stamp);",
+                  "  pm.environment.set(\"farmer_id\", lifeFarmer);",
                   "}"
                 ]
               }
@@ -431,7 +396,7 @@
               }
             },
             "url": "{{base_url}}/api/v1/da-services/visits",
-            "description": "POST /visits — plan a visit (201).\n\n### Body fields\n| Field | Required | Notes |\n| --- | --- | --- |\n| farmer_id | yes | FR-… or registry id; **not** verified against Farmer Registry today |\n| user | yes | Frappe User name (email) for the assigned DA; da_id is fetched from User.da_registry_id. No session-user fallback |\n| scheduled_at | yes* | Site-local datetime; *or* use date + time |\n| date, time | alt | Form style; time defaults to 09:00 |\n| visit_type | no | Crop Survey / Livestock Survey / Services / Advisory / Follow-up (default Crop Survey) |\n| purpose | no | |\n| duration_min | no | default 45 |\n| priority | no | Low / Medium / High (default Medium) |\n| priority_reason | no | |\n| plot_ref | no | |\n| location | no | { lat, lng } |\n| notify_farmer_sms | no | recorded; SMS gateway not yet wired |\n| advisory_qa | no | Advisory visits only: [{ question, answer }] |\n| da_id | Supervisor | when Supervisor plans for a DA; DA self-plans omit or own id |\n| client_op_id | no | idempotency — same key returns existing visit |\n\nRoles: DA, Supervisor, Admin.\n\nSet `user` in the environment (often same as `usr` for DA self-plan). Omitting `user` → validation error.\n\nStores visit_id from response `data.name`."
+            "description": "POST /visits — plan a visit (201).\n\n### Body fields\n| Field | Required | Notes |\n| --- | --- | --- |\n| farmer_id | yes | FR-… or registry id; **not** verified against Farmer Registry today |\n| user | yes | Frappe User name (email) for the assigned DA; da_id is fetched from User.da_registry_id. No session-user fallback |\n| scheduled_at | yes* | Site-local datetime; *or* use date + time |\n| date, time | alt | Form style; time defaults to 09:00 |\n| visit_type | no | Crop Survey / Livestock Survey / Services / Advisory / Follow-up (default Crop Survey) |\n| purpose | no | |\n| duration_min | no | default 45 |\n| priority | no | Low / Medium / High (default Medium) |\n| priority_reason | no | |\n| plot_ref | no | |\n| location | no | { lat, lng } |\n| notify_farmer_sms | no | recorded; SMS gateway not yet wired |\n| advisory_qa | no | Advisory visits only: [{ question, answer }] |\n| da_id | Supervisor | when Supervisor plans for a DA; DA self-plans omit or own id |\n| client_op_id | no | idempotency — same key returns existing visit |\n\nCreate allowed by DA Visit DocType permissions (DA / Supervisor / Admin).\n\nSet `user` in the environment (often same as `usr` for DA self-plan). Omitting `user` → validation error.\n\nStores visit_id from response `data.name`."
           },
           "response": []
         },
@@ -443,9 +408,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "const id = \"visit-date-\" + Date.now();",
-                  "pm.collectionVariables.set(\"client_op_id\", id);",
-                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);"
+                  "const stamp = Date.now();",
+                  "pm.collectionVariables.set(\"client_op_id\", \"visit-date-\" + stamp);",
+                  "pm.collectionVariables.set(\"adv_farmer_id\", \"FRM-POSTMAN-ADV-\" + stamp);",
+                  "if (pm.environment.name) {",
+                  "  pm.environment.set(\"client_op_id\", \"visit-date-\" + stamp);",
+                  "  pm.environment.set(\"adv_farmer_id\", \"FRM-POSTMAN-ADV-\" + stamp);",
+                  "}"
                 ]
               }
             },
@@ -454,12 +423,9 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "const data = (pm.response.json() || {}).data || {};",
-                  "const visitId = data.name || data.id;",
-                  "if (visitId) {",
-                  "  pm.collectionVariables.set(\"visit_id\", visitId);",
-                  "  if (pm.environment.name) pm.environment.set(\"visit_id\", visitId);",
-                  "}"
+                  "pm.test(\"Plan date+time returns 201 or 200\", function () {",
+                  "  pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});"
                 ]
               }
             }
@@ -478,7 +444,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"user\": \"{{user}}\",\n  \"date\": \"{{visit_date}}\",\n  \"time\": \"{{visit_time}}\",\n  \"visit_type\": \"Advisory\",\n  \"purpose\": \"Advisory Q&A on fertilizer timing\",\n  \"duration_min\": 30,\n  \"priority\": \"High\",\n  \"priority_reason\": \"Overdue advisory\",\n  \"notify_farmer_sms\": true,\n  \"advisory_qa\": [\n    {\n      \"question\": \"When should top-dressing be applied?\",\n      \"answer\": \"At tillering, if moisture is adequate.\"\n    }\n  ],\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"farmer_id\": \"{{adv_farmer_id}}\",\n  \"user\": \"{{user}}\",\n  \"date\": \"{{visit_date}}\",\n  \"time\": \"10:00\",\n  \"visit_type\": \"Advisory\",\n  \"purpose\": \"Advisory Q&A on fertilizer timing\",\n  \"duration_min\": 30,\n  \"priority\": \"High\",\n  \"priority_reason\": \"Overdue advisory\",\n  \"notify_farmer_sms\": true,\n  \"advisory_qa\": [\n    {\n      \"question\": \"When should top-dressing be applied?\",\n      \"answer\": \"At tillering, if moisture is adequate.\"\n    }\n  ],\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -486,7 +452,65 @@
               }
             },
             "url": "{{base_url}}/api/v1/da-services/visits",
-            "description": "Same as Plan a visit, using separate date + time instead of scheduled_at. `user` is still required. Includes Advisory advisory_qa sample."
+            "description": "Same as Plan a visit, using separate date + time instead of scheduled_at. Uses a distinct farmer_id so it does not conflict with the lifecycle visit. Does not overwrite visit_id."
+          },
+          "response": []
+        },
+        {
+          "name": "Plan visits batch (up to 5)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const stamp = Date.now();",
+                  "pm.collectionVariables.set(\"client_op_id\", \"batch-\" + stamp);",
+                  "pm.collectionVariables.set(\"batch_farmer_id\", \"FRM-POSTMAN-BATCH-\" + stamp);",
+                  "if (pm.environment.name) {",
+                  "  pm.environment.set(\"client_op_id\", \"batch-\" + stamp);",
+                  "  pm.environment.set(\"batch_farmer_id\", \"FRM-POSTMAN-BATCH-\" + stamp);",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Batch plan creates at least one visit\", function () {",
+                  "  pm.expect([200, 201]).to.include(pm.response.code);",
+                  "  const data = (pm.response.json() || {}).data || {};",
+                  "  pm.expect(data.created || []).to.be.an(\"array\").that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user\": \"{{user}}\",\n  \"visits\": [\n    {\n      \"farmer_id\": \"{{batch_farmer_id}}\",\n      \"date\": \"{{visit_date}}\",\n      \"time\": \"11:00\",\n      \"visit_type\": \"Crop Survey\",\n      \"purpose\": \"Batch plan item\",\n      \"duration_min\": 45,\n      \"priority\": \"Medium\",\n      \"client_op_id\": \"{{client_op_id}}-a\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits",
+            "description": "Batch plan on the same POST /visits route (`visits: [...]`, length 1-5, unique farmer_id). Envelope `user` (required User Link) applies when an item omits `user`. Add more objects in `visits` for multi-farmer runs. Response: `{ created[], failed[], summary }`. Partial success: HTTP 201 if any created; 400 if none. No session-user fallback. Supervisors may also send envelope `da_id`."
           },
           "response": []
         },
@@ -580,7 +604,7 @@
                 }
               ]
             },
-            "description": "GET /visits — visits the caller may see via permission hooks + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRoles: DA, Supervisor, Executive, Admin."
+            "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
           },
           "response": []
         },
@@ -627,7 +651,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"scheduled_at\": \"2026-11-12 10:30:00\",\n  \"reason\": \"Farmer unavailable\"\n}",
+              "raw": "{\n  \"scheduled_at\": \"{{visit_date}} 15:30:00\",\n  \"reason\": \"Farmer unavailable\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -654,9 +678,214 @@
             }
           ],
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Start, outcome, evidence",
+      "description": "Order: Plan → (optional Reschedule) → Start → (optional Attachments) → Submit. Uses visit_id from Plan/Reschedule. Do not Cancel that visit first.",
+      "item": [
+        {
+          "name": "Start visit (check-in)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Start returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"arrived_at\": \"{{visit_date}} 09:05:00\",\n  \"gps\": {\n    \"lat\": 9.0321,\n    \"lng\": 38.7470,\n    \"accuracy_m\": 12.5\n  },\n  \"farmer_present\": true,\n  \"client_op_id\": \"start-{{visit_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/start",
+            "description": "Check-in. Sets physical_status = In progress.\n\nBody:\n- arrived_at (optional)\n- gps { lat, lng, accuracy_m } (optional)\n- farmer_present (default true)\n- client_op_id (optional; replay-safe if already In progress)"
+          },
+          "response": []
         },
         {
+          "name": "Upload attachment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Attachment upload returns 200 or 201\", function () {",
+                  "  pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "postman/Visits/fixtures/plot.png",
+                  "description": "Image/document file (required). Path relative to repo root for CLI; in the Desktop app pick any local image."
+                },
+
+                {
+                  "key": "kind",
+                  "value": "Crop",
+                  "type": "text",
+                  "description": "Crop / Land / Animal / Document"
+                },
+                {
+                  "key": "lat",
+                  "value": "9.0321",
+                  "type": "text"
+                },
+                {
+                  "key": "lng",
+                  "value": "38.7470",
+                  "type": "text"
+                },
+                {
+                  "key": "captured_at",
+                  "value": "{{visit_date}} 09:10:00",
+                  "type": "text"
+                },
+                {
+                  "key": "content_hash",
+                  "value": "",
+                  "type": "text",
+                  "description": "Optional client hash for dedupe"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/attachments",
+            "description": "multipart/form-data. Rate limit: 60/min per user. CLI uses fixtures/plot.png; in Postman Desktop pick a local file if needed."
+          },
+          "response": []
+        },
+        {
+          "name": "Submit visit outcome",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Submit returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"farmer_response\": \"Agreed to top-dress next week if rain holds\",\n  \"observed\": \"Stand looks even; mild leaf spotting on plot edge.\",\n  \"advice_given\": \"Monitor spotting; apply recommended fungicide if it spreads.\",\n  \"inputs_actions\": \"Logged pending fertilizer voucher\",\n  \"next_action\": {\n    \"type\": \"Follow-up visit\",\n    \"note\": \"Re-check leaf spotting\",\n    \"date\": \"2026-11-24\"\n  },\n  \"client_op_id\": \"outcome-{{visit_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/submit",
+            "description": "Submit outcome → physical_status = Physical Visit Complete.\n\nnext_action.type: None | Follow-up visit | Task.\nFollow-up visit creates a Planned DA Visit; Task creates a DA Task.\n\nDependency: visit must be started (In progress) per doctype rules."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4b. Cancel (optional)",
+      "description": "Plans a disposable visit and cancels it. Does not touch visit_id used by Start/Submit.",
+      "item": [
+        {
           "name": "Cancel visit",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.environment.get(\"access_token\") || pm.collectionVariables.get(\"access_token\");",
+                  "const base = pm.environment.get(\"base_url\") || pm.collectionVariables.get(\"base_url\");",
+                  "const user = pm.environment.get(\"user\") || pm.collectionVariables.get(\"user\");",
+                  "const day = pm.environment.get(\"visit_date\") || pm.collectionVariables.get(\"visit_date\");",
+                  "const body = {",
+                  "  user,",
+                  "  farmer_id: \"FRM-POSTMAN-CANCEL-\" + Date.now(),",
+                  "  date: day,",
+                  "  time: \"16:00\",",
+                  "  purpose: \"Disposable cancel sample\",",
+                  "  client_op_id: \"cancel-src-\" + Date.now()",
+                  "};",
+                  "pm.sendRequest({",
+                  "  url: base + \"/api/v1/da-services/visits\",",
+                  "  method: \"POST\",",
+                  "  header: {",
+                  "    \"Content-Type\": \"application/json\",",
+                  "    Accept: \"application/json\",",
+                  "    Authorization: \"Bearer \" + token",
+                  "  },",
+                  "  body: { mode: \"raw\", raw: JSON.stringify(body) }",
+                  "}, function (err, res) {",
+                  "  if (err) { throw err; }",
+                  "  const data = (res.json() || {}).data || {};",
+                  "  const id = data.name || data.id;",
+                  "  if (!id) { throw new Error(\"Cancel prerequest could not plan a disposable visit\"); }",
+                  "  pm.collectionVariables.set(\"cancel_visit_id\", id);",
+                  "  if (pm.environment.name) pm.environment.set(\"cancel_visit_id\", id);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Cancel returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -678,123 +907,8 @@
                 }
               }
             },
-            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/cancel",
-            "description": "Body: { reason }. Dependency: visit_id. Do not run on the same visit you still need for start/submit."
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "4. Start, outcome, evidence",
-      "description": "Order: Plan → Start → (optional Attachments) → Submit. Use a Planned visit_id that was not cancelled.",
-      "item": [
-        {
-          "name": "Start visit (check-in)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"arrived_at\": \"2026-11-10 09:05:00\",\n  \"gps\": {\n    \"lat\": 9.0321,\n    \"lng\": 38.7470,\n    \"accuracy_m\": 12.5\n  },\n  \"farmer_present\": true,\n  \"client_op_id\": \"start-{{visit_id}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/start",
-            "description": "Check-in. Sets physical_status = In progress.\n\nBody:\n- arrived_at (optional)\n- gps { lat, lng, accuracy_m } (optional)\n- farmer_present (default true)\n- client_op_id (optional; replay-safe if already In progress)"
-          },
-          "response": []
-        },
-        {
-          "name": "Upload attachment",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "file",
-                  "type": "file",
-                  "src": [],
-                  "description": "Image/document file (required)"
-                },
-                {
-                  "key": "kind",
-                  "value": "Crop",
-                  "type": "text",
-                  "description": "Crop / Land / Animal / Document"
-                },
-                {
-                  "key": "lat",
-                  "value": "9.0321",
-                  "type": "text"
-                },
-                {
-                  "key": "lng",
-                  "value": "38.7470",
-                  "type": "text"
-                },
-                {
-                  "key": "captured_at",
-                  "value": "2026-11-10 09:10:00",
-                  "type": "text"
-                },
-                {
-                  "key": "content_hash",
-                  "value": "",
-                  "type": "text",
-                  "description": "Optional client hash for dedupe"
-                }
-              ]
-            },
-            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/attachments",
-            "description": "multipart/form-data. Rate limit: 60/min per user. Select a local file for `file` before sending."
-          },
-          "response": []
-        },
-        {
-          "name": "Submit visit outcome",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"farmer_response\": \"Agreed to top-dress next week if rain holds\",\n  \"observed\": \"Stand looks even; mild leaf spotting on plot edge.\",\n  \"advice_given\": \"Monitor spotting; apply recommended fungicide if it spreads.\",\n  \"inputs_actions\": \"Logged pending fertilizer voucher\",\n  \"next_action\": {\n    \"type\": \"Follow-up visit\",\n    \"note\": \"Re-check leaf spotting\",\n    \"date\": \"2026-11-24\"\n  },\n  \"advisory_qa\": [\n    {\n      \"question\": \"Any pest pressure this week?\",\n      \"answer\": \"None reported by farmer.\"\n    }\n  ],\n  \"client_op_id\": \"outcome-{{visit_id}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}/submit",
-            "description": "Submit outcome → physical_status = Physical Visit Complete.\n\nnext_action.type: None | Follow-up visit | Task.\nFollow-up visit creates a Planned DA Visit; Task creates a DA Task.\n\nDependency: visit must be started (In progress) per doctype rules."
+            "url": "{{base_url}}/api/v1/da-services/visits/{{cancel_visit_id}}/cancel",
+            "description": "Body: { reason }. Prerequest plans FRM-POSTMAN-CANCEL-001 so Start/Submit visit_id stays intact."
           },
           "response": []
         }

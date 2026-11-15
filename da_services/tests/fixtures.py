@@ -256,3 +256,40 @@ def cleanup_test_data():
 	for doctype in doctypes_to_clean:
 		frappe.db.delete(doctype, {"da_id": ["like", "%TEST%"]})
 		frappe.db.delete(doctype, {"farmer_id": ["like", "%TEST%"]})
+
+
+def cleanup_test_rows(
+	*,
+	users: list[str] | tuple[str, ...] = (),
+	da_ids: list[str] | tuple[str, ...] = (),
+	farmer_ids: list[str] | tuple[str, ...] = (),
+) -> None:
+	"""Delete only rows owned by the given test users / DA-IDs / farmers. Never wipe a whole DocType.
+
+	Use in setUp/tearDown instead of ``frappe.db.delete("DA Visit")`` with no filters.
+	"""
+	users = tuple(u for u in users if u)
+	da_ids = tuple(d for d in da_ids if d)
+	farmer_ids = tuple(f for f in farmer_ids if f)
+	if not users and not da_ids and not farmer_ids:
+		return
+
+	if da_ids:
+		frappe.db.delete("DA Visit", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Task", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Farmer Link", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Profile Change Request", {"da_id": ["in", da_ids]})
+		# Prefer user-scoped kebele deletes below so shared demo DA-IDs are not wiped.
+		if not users:
+			frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", da_ids]})
+	if farmer_ids:
+		frappe.db.delete("DA Visit", {"farmer_id": ["in", farmer_ids]})
+		frappe.db.delete("DA Farmer Link", {"farmer_id": ["in", farmer_ids]})
+		frappe.db.delete("DA Farmer Reference", {"farmer_id": ["in", farmer_ids]})
+	if users:
+		frappe.db.delete("DA Visit", {"user": ["in", users]})
+		frappe.db.delete("DA Visit", {"assigned_by": ["in", users]})
+		frappe.db.delete("DA Notification", {"user": ["in", users]})
+		frappe.db.delete("DA RBAC Assignment", {"user": ["in", users]})
+		frappe.db.delete("DA Profile Change Request", {"requested_by": ["in", users]})
+		frappe.db.delete("DA Kebele Assignment", {"user": ["in", users]})

@@ -15,13 +15,13 @@ from da_services.api.v1 import visits as api
 from da_services.services import constants as C
 from da_services.services import visits as svc
 from da_services.tests.fixtures import (
+	cleanup_test_rows,
 	ensure_kebele_assignment,
 	kebele_chain,
 	live_geo,
 	set_da_registry_id,
 	stamp_visit_geo,
 )
-from da_services.utils.permissions import get_scope_context
 
 DA1 = "vapi-da1@da.local"
 DA3 = "vapi-da3@da.local"
@@ -83,10 +83,12 @@ def _grant(user, role, **kw):
 
 
 class TestVisitAPI(IntegrationTestCase):
+	USERS = (DA1, DA3, SUP, EXEC, COMMS)
+	DA_IDS = ("DA-000001", "DA-000003")
+
 	def setUp(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
+		cleanup_test_rows(users=self.USERS, da_ids=self.DA_IDS)
 		self.geo = live_geo()
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])
@@ -130,9 +132,7 @@ class TestVisitAPI(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		for dt in ("DA Notification", "DA Visit", "DA Task", "DA RBAC Assignment"):
-			frappe.db.delete(dt)
-		frappe.db.delete("DA Kebele Assignment", {"da_id": "DA-000001"})
+		cleanup_test_rows(users=self.USERS, da_ids=self.DA_IDS)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _plan(self, **kw):
@@ -189,6 +189,137 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(a["name"], b["name"])
 		self.assertEqual(frappe.db.count("DA Visit"), 1)
 
+	def test_plan_visits_list_of_one(self):
+		frappe.set_user(DA1)
+		day = add_days(today(), 1)
+		out = api.plan(
+			user=DA1,
+			visits=[
+				{
+					"farmer_id": "FRM-000201",
+					"date": day,
+					"time": "09:00",
+					"purpose": "Single via list",
+					"client_op_id": "op-batch-one",
+				}
+			],
+		)
+		self.assertEqual(out["status"], "success", out)
+		data = out["data"]
+		self.assertEqual(data["summary"], {"total": 1, "created": 1, "failed": 0})
+		self.assertEqual(len(data["created"]), 1)
+		self.assertEqual(data["failed"], [])
+		self.assertEqual(data["created"][0]["farmer_id"], "FRM-000201")
+		self.assertEqual(data["created"][0]["physical_status"], "Planned")
+
+	def test_plan_visits_list_of_three(self):
+		frappe.set_user(DA1)
+		day = add_days(today(), 2)
+		out = api.plan(
+			user=DA1,
+			visits=[
+				{"farmer_id": "FRM-000301", "date": day, "time": "09:00", "client_op_id": "op-b3-1"},
+				{"farmer_id": "FRM-000302", "date": day, "time": "10:00", "client_op_id": "op-b3-2"},
+				{"farmer_id": "FRM-000303", "date": day, "time": "11:00", "client_op_id": "op-b3-3"},
+			],
+		)
+		self.assertEqual(out["status"], "success", out)
+		data = out["data"]
+		self.assertEqual(data["summary"]["created"], 3)
+		self.assertEqual(data["summary"]["failed"], 0)
+		self.assertEqual(frappe.db.count("DA Visit"), 3)
+
+	def test_plan_visits_rejects_more_than_five(self):
+		frappe.set_user(DA1)
+		day = add_days(today(), 1)
+		visits = [{"farmer_id": f"FRM-00{i}", "date": day, "time": "09:00"} for i in range(100, 106)]
+		out = api.plan(user=DA1, visits=visits)
+		self.assertEqual(out["status"], "error")
+		self.assertEqual(frappe.response.get("http_status_code"), 400)
+		self.assertEqual(frappe.db.count("DA Visit"), 0)
+
+	def test_plan_visits_rejects_duplicate_farmer_id(self):
+		frappe.set_user(DA1)
+		day = add_days(today(), 1)
+		out = api.plan(
+			user=DA1,
+			visits=[
+				{"farmer_id": "FRM-000401", "date": day, "time": "09:00"},
+				{"farmer_id": "FRM-000401", "date": day, "time": "10:00"},
+			],
+		)
+		self.assertEqual(out["status"], "error")
+		self.assertEqual(frappe.response.get("http_status_code"), 400)
+		self.assertEqual(frappe.db.count("DA Visit"), 0)
+
+	def test_plan_visits_partial_conflict_echoes_request(self):
+		frappe.set_user(DA1)
+		day = add_days(today(), 3)
+		first = self._plan(
+			farmer_id="FRM-000501",
+			date=day,
+			time="09:00",
+			visit_type="Crop Survey",
+			client_op_id="op-conflict-seed",
+		)
+		self.assertEqual(first["status"], "success", first)
+
+		failing_item = {
+			"farmer_id": "FRM-000501",
+			"date": day,
+			"time": "14:00",
+			"visit_type": "Crop Survey",
+			"purpose": "Should conflict",
+			"client_op_id": "op-conflict-fail",
+		}
+		ok_item = {
+			"farmer_id": "FRM-000502",
+			"date": day,
+			"time": "15:00",
+			"visit_type": "Crop Survey",
+			"purpose": "Should create",
+			"client_op_id": "op-conflict-ok",
+		}
+		out = api.plan(user=DA1, visits=[failing_item, ok_item])
+		self.assertEqual(out["status"], "success", out)
+		data = out["data"]
+		self.assertEqual(data["summary"]["created"], 1)
+		self.assertEqual(data["summary"]["failed"], 1)
+		self.assertEqual(data["created"][0]["farmer_id"], "FRM-000502")
+		failed = data["failed"][0]
+		self.assertEqual(failed["status"], "failed")
+		self.assertEqual(failed["code"], "conflict")
+		self.assertIn("already has an active", failed["error"])
+		self.assertEqual(failed["request"], failing_item)
+		self.assertEqual(frappe.db.count("DA Visit"), 2)
+
+	def test_plan_visits_list_idempotent_on_client_op_id(self):
+		frappe.set_user(DA1)
+		day = add_days(today(), 4)
+		item = {
+			"farmer_id": "FRM-000601",
+			"date": day,
+			"time": "09:00",
+			"client_op_id": "op-batch-idem",
+		}
+		a = api.plan(user=DA1, visits=[item])
+		b = api.plan(user=DA1, visits=[{**item, "purpose": "changed"}])
+		self.assertEqual(a["status"], "success", a)
+		self.assertEqual(b["status"], "success", b)
+		self.assertEqual(a["data"]["created"][0]["name"], b["data"]["created"][0]["name"])
+		self.assertEqual(frappe.db.count("DA Visit"), 1)
+
+	def test_plan_visits_all_failed_returns_400(self):
+		frappe.set_user(DA1)
+		out = api.plan(user=DA1, visits=[{"farmer_id": "FRM-000701", "purpose": "missing schedule"}])
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(frappe.response.get("http_status_code"), 400)
+		data = out["data"]
+		self.assertEqual(data["summary"]["created"], 0)
+		self.assertEqual(data["summary"]["failed"], 1)
+		self.assertEqual(data["failed"][0]["code"], "validation")
+		self.assertEqual(data["failed"][0]["request"]["farmer_id"], "FRM-000701")
+
 	def test_supervisor_plans_for_a_da_in_woreda_only(self):
 		frappe.set_user(SUP)
 		out = self._plan(da_id="DA-000001")
@@ -202,6 +333,7 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(out["status"], "error")
 
 	def test_executive_and_comms_cannot_plan(self):
+		# DocType permissions (not require_roles): Executive is read-only; Comms has none.
 		frappe.set_user(EXEC)
 		self.assertEqual(self._plan(da_id="DA-000001")["status"], "error")
 		frappe.set_user(COMMS)
@@ -343,29 +475,21 @@ class TestVisitAPI(IntegrationTestCase):
 	def test_attachment_dedup_and_hash_check(self):
 		frappe.set_user(DA1)
 		v = self._plan(date=today(), time="08:00")["data"]
-		ctx = get_scope_context(DA1)
 		content = _png("red")
 		digest = hashlib.sha256(content).hexdigest()
 		row = svc.add_attachment(
-			v["name"],
-			content=content,
-			filename="plot.png",
-			kind="Crop",
-			gps={"lat": 9.1, "lng": 37.5},
-			ctx=ctx,
+			v["name"], content=content, filename="plot.png", kind="Crop", gps={"lat": 9.1, "lng": 37.5}
 		)
 		self.assertEqual((row["kind"], row["content_hash"], row["gps"]["lat"]), ("Crop", digest, 9.1))
 		self.assertTrue(row["file"].startswith("/private/files/"))
-		again = svc.add_attachment(v["name"], content=content, filename="plot-retry.png", ctx=ctx)
+		again = svc.add_attachment(v["name"], content=content, filename="plot-retry.png")
 		self.assertEqual(again["name"], row["name"])  # same bytes: same row
 		self.assertEqual(len(frappe.get_doc("DA Visit", v["name"]).attachments), 1)
 		with self.assertRaises(frappe.ValidationError):
-			svc.add_attachment(
-				v["name"], content=b"other", filename="x.jpg", content_hash="deadbeef", ctx=ctx
-			)
+			svc.add_attachment(v["name"], content=b"other", filename="x.jpg", content_hash="deadbeef")
 		# evidence may still be added after the outcome is in
 		api.submit(v["name"], observed="done")
-		svc.add_attachment(v["name"], content=_png("green"), filename="after.png", kind="Land", ctx=ctx)
+		svc.add_attachment(v["name"], content=_png("green"), filename="after.png", kind="Land")
 		self.assertEqual(len(api.get_visit(v["name"])["data"]["attachments"]), 2)
 
 	def test_attachment_upload_over_multipart(self):
@@ -395,24 +519,21 @@ class TestVisitAPI(IntegrationTestCase):
 	def test_evidence_is_validated_before_storage(self):
 		frappe.set_user(DA1)
 		v = self._plan(date=today(), time="08:00")["data"]
-		ctx = get_scope_context(DA1)
 		with self.assertRaises(frappe.ValidationError):  # renamed binary is not an image
-			svc.add_attachment(v["name"], content=b"MZ\x90\x00not-an-image", filename="photo.png", ctx=ctx)
+			svc.add_attachment(v["name"], content=b"MZ\x90\x00not-an-image", filename="photo.png")
 		with self.assertRaises(frappe.ValidationError):  # extension not accepted
-			svc.add_attachment(v["name"], content=_png("red"), filename="script.exe", ctx=ctx)
+			svc.add_attachment(v["name"], content=_png("red"), filename="script.exe")
 		with self.assertRaises(frappe.ValidationError):  # not a PDF inside
-			svc.add_attachment(v["name"], content=b"hello", filename="doc.pdf", ctx=ctx)
+			svc.add_attachment(v["name"], content=b"hello", filename="doc.pdf")
 		frappe.conf.da_evidence_max_mb = 1
 		try:
 			with self.assertRaises(frappe.ValidationError):  # over the size limit
-				svc.add_attachment(
-					v["name"], content=b"\x00" * (1024 * 1024 + 1), filename="big.pdf", ctx=ctx
-				)
+				svc.add_attachment(v["name"], content=b"\x00" * (1024 * 1024 + 1), filename="big.pdf")
 		finally:
 			frappe.conf.da_evidence_max_mb = None
 		with self.assertRaises(frappe.ValidationError):  # PDF header but no PDF inside
-			svc.add_attachment(v["name"], content=b"%PDF-1.4 minimal", filename="cert.pdf", ctx=ctx)
-		row = svc.add_attachment(v["name"], content=_pdf(), filename="cert.pdf", kind="Document", ctx=ctx)
+			svc.add_attachment(v["name"], content=b"%PDF-1.4 minimal", filename="cert.pdf")
+		row = svc.add_attachment(v["name"], content=_pdf(), filename="cert.pdf", kind="Document")
 		self.assertEqual(row["kind"], "Document")
 
 	def test_rate_limit_is_per_user_and_per_endpoint(self):

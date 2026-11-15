@@ -9,8 +9,7 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
-from da_services.tests.fixtures import set_da_registry_id
-from da_services.utils.permissions import ScopeContext
+from da_services.tests.fixtures import cleanup_test_rows, set_da_registry_id
 
 
 class TestScheduleBlocking(IntegrationTestCase):
@@ -24,13 +23,13 @@ class TestScheduleBlocking(IntegrationTestCase):
 		self.user_crop = "da-crop@test.com"
 		self.user_livestock = "da-livestock@test.com"
 
-		# Clean up
-		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
+		cleanup_test_rows(
+			users=(self.user_crop, self.user_livestock),
+			da_ids=(self.da_crop, self.da_livestock),
+			farmer_ids=(self.farmer_id),
+		)
 
-		for email, da_id in (
-			(self.user_crop, self.da_crop),
-			(self.user_livestock, self.da_livestock),
-		):
+		for email, da_id in ((self.user_crop, self.da_crop), (self.user_livestock, self.da_livestock)):
 			if not frappe.db.exists("User", email):
 				frappe.get_doc(
 					{
@@ -42,24 +41,13 @@ class TestScheduleBlocking(IntegrationTestCase):
 				).insert(ignore_permissions=True)
 			set_da_registry_id(email, da_id)
 
-		# Create DA context
-		self.ctx_crop = ScopeContext(
-			user=self.user_crop,
-			roles={"Development Agent"},
-			da_ids={self.da_crop},
-			unrestricted=False,
-		)
-
-		self.ctx_livestock = ScopeContext(
-			user=self.user_livestock,
-			roles={"Development Agent"},
-			da_ids={self.da_livestock},
-			unrestricted=False,
-		)
-
 	def tearDown(self):
 		"""Clean up test data."""
-		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
+		cleanup_test_rows(
+			users=(self.user_crop, self.user_livestock),
+			da_ids=(self.da_crop, self.da_livestock),
+			farmer_ids=(self.farmer_id),
+		)
 
 	def test_no_conflict_first_visit(self):
 		"""Test first visit has no conflict."""
@@ -69,7 +57,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		self.assertIsNotNone(result)
@@ -84,7 +71,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		# Try to create second Crop visit (should fail)
@@ -95,7 +81,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				visit_type="Crop Survey",
 				user=self.user_crop,
 				da_id=self.da_crop,
-				ctx=self.ctx_crop,
 			)
 
 		self.assertIn("Crop Production", str(cm.exception))
@@ -109,7 +94,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		# Create Livestock visit (should succeed)
@@ -119,7 +103,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Livestock Survey",
 			user=self.user_livestock,
 			da_id=self.da_livestock,
-			ctx=self.ctx_livestock,
 		)
 
 		self.assertIsNotNone(result)
@@ -158,7 +141,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		self.assertIsNotNone(result)
@@ -173,7 +155,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		self.assertIsNotNone(result)
@@ -188,7 +169,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		self.assertIsNotNone(result)
@@ -216,7 +196,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				visit_type="Crop Survey",
 				user=self.user_crop,
 				da_id=self.da_crop,
-				ctx=self.ctx_crop,
 			)
 
 		self.assertIn("Crop Production", str(cm.exception))
@@ -231,7 +210,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		self.assertIsNotNone(result)
@@ -261,7 +239,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				visit_type="Crop Survey",
 				user=self.user_crop,
 				da_id=self.da_crop,
-				ctx=self.ctx_crop,
 			)
 
 		self.assertIn("Crop Production", str(cm.exception))
@@ -274,7 +251,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				visit_type="Livestock Survey",
 				user=self.user_livestock,
 				da_id=self.da_livestock,
-				ctx=self.ctx_livestock,
 			)
 
 		self.assertIn("Livestock", str(cm.exception))
@@ -291,7 +267,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			user=self.user_crop,
 			da_id=self.da_crop,
 			client_op_id=client_op_id,
-			ctx=self.ctx_crop,
 		)
 
 		# Retry with same client_op_id (should return existing, not error)
@@ -302,7 +277,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			user=self.user_crop,
 			da_id=self.da_crop,
 			client_op_id=client_op_id,
-			ctx=self.ctx_crop,
 		)
 
 		self.assertEqual(result1["name"], result2["name"])
@@ -316,7 +290,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Crop Survey",
 			user=self.user_crop,
 			da_id=self.da_crop,
-			ctx=self.ctx_crop,
 		)
 
 		# DA-2 tries to create Crop visit (should fail)
@@ -326,12 +299,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				{"doctype": "User", "email": other_user, "first_name": "other", "send_welcome_email": 0}
 			).insert(ignore_permissions=True)
 		set_da_registry_id(other_user, "DA-OTHER-CROP")
-		ctx_other = ScopeContext(
-			user=other_user,
-			roles={"Development Agent"},
-			da_ids={"DA-OTHER-CROP"},
-			unrestricted=False,
-		)
 
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
@@ -340,7 +307,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				visit_type="Crop Survey",
 				user=other_user,
 				da_id="DA-OTHER-CROP",
-				ctx=ctx_other,
 			)
 
 		self.assertIn("Crop Production", str(cm.exception))
@@ -354,7 +320,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 			visit_type="Livestock Survey",
 			user=self.user_livestock,
 			da_id=self.da_livestock,
-			ctx=self.ctx_livestock,
 		)
 
 		# Try conflicting visit
@@ -365,7 +330,6 @@ class TestScheduleBlocking(IntegrationTestCase):
 				visit_type="Livestock Survey",
 				user=self.user_livestock,
 				da_id=self.da_livestock,
-				ctx=self.ctx_livestock,
 			)
 
 		error_msg = str(cm.exception)

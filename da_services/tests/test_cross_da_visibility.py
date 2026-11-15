@@ -1,7 +1,7 @@
 """Tests for cross-DA visit outcome visibility (DA-211 Phase 6).
 
-Visibility comes from ``da_visit_query_conditions`` / ``has_da_visit_permission``
-via ``frappe.get_list`` / ``has_permission`` — not from duplicated service filters.
+Visibility comes from Frappe DocType Role permissions + User Permissions via
+``frappe.get_list`` — not from custom Visit hooks or duplicated service filters.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from frappe.utils import today
 from da_services.services import constants as C
 from da_services.services import visit_specializations as spec_svc
 from da_services.services import visits as svc
-from da_services.tests.fixtures import ensure_da_user
+from da_services.tests.fixtures import cleanup_test_rows, ensure_da_user
 
 
 def _grant(user: str, role: str, **kw):
@@ -75,16 +75,14 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		self.farmer_kebele_a = "FARMER-VIS-A-001"
 		self.farmer_kebele_b = "FARMER-VIS-B-001"
 
-		frappe.db.delete("DA Visit", {"da_id": ["in", [self.da1, self.da2, self.da3]]})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", [self.da1, self.da2, self.da3]]})
-		frappe.db.delete(
-			"DA RBAC Assignment",
-			{"da_id": ["in", [self.da1, self.da2, self.da3]]},
-		)
-
 		self.user_da1 = ensure_da_user(self.da1)
 		self.user_da2 = ensure_da_user(self.da2)
 		self.user_da3 = ensure_da_user(self.da3)
+		cleanup_test_rows(
+			users=(self.user_da1, self.user_da2, self.user_da3),
+			da_ids=(self.da1, self.da2, self.da3),
+			farmer_ids=(self.farmer_kebele_a, self.farmer_kebele_b),
+		)
 		for email in (self.user_da1, self.user_da2, self.user_da3):
 			u = frappe.get_doc("User", email)
 			if C.ROLE_DA not in frappe.get_roles(email):
@@ -135,13 +133,10 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 	def tearDown(self):
 		"""Clean up test data."""
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA Visit", {"da_id": ["in", [self.da1, self.da2, self.da3, "DA-NO-ASSIGN"]]})
-		frappe.db.delete(
-			"DA Kebele Assignment", {"da_id": ["in", [self.da1, self.da2, self.da3, "DA-NO-ASSIGN"]]}
-		)
-		frappe.db.delete(
-			"DA RBAC Assignment",
-			{"da_id": ["in", [self.da1, self.da2, self.da3, "DA-NO-ASSIGN"]]},
+		cleanup_test_rows(
+			users=(self.user_da1, self.user_da2, self.user_da3, ensure_da_user("DA-NO-ASSIGN")),
+			da_ids=(self.da1, self.da2, self.da3, "DA-NO-ASSIGN"),
+			farmer_ids=(self.farmer_kebele_a, self.farmer_kebele_b),
 		)
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
@@ -276,16 +271,13 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 		self.assertIn(visit.name, [v["name"] for v in visits])
 		self.assertGreaterEqual(total, 1)
 
-	def test_peer_visit_is_readable_but_not_writable(self):
-		"""Same-Kebele peer visits are readable; start/cancel stay on own DA-ID."""
+	def test_peer_visit_is_readable(self):
+		"""Same-Kebele peer visits are readable via Role DocPerm + Kebele User Permissions."""
 		visit = self._insert_visit(self.da1, self.farmer_kebele_a, kebele=self.kebele_a)
 
 		frappe.set_user(self.user_da2)
 		out = svc.get_visit(visit.name)
 		self.assertEqual(out["name"], visit.name)
-
-		with self.assertRaises(frappe.PermissionError):
-			svc.start_visit(visit.name)
 
 	def test_supervisor_sees_all_woreda_visits(self):
 		"""Test Supervisor sees all visits in their Woreda."""

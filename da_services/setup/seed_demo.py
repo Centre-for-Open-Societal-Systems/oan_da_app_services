@@ -106,7 +106,6 @@ def _visits(ctx) -> None:
 			da_id=DA_ID,
 			user=da_user,
 			client_op_id=op,
-			ctx=ctx,
 		)
 		if complete and out["physical_status"] in ("Planned", "Confirmed"):
 			visits.submit_outcome(
@@ -114,7 +113,6 @@ def _visits(ctx) -> None:
 				observed="Seeded demo visit: crop stand normal, no pest pressure.",
 				advice_given="Continue current practice; next check in two weeks.",
 				farmer_response="Agreed",
-				ctx=ctx,
 			)
 
 

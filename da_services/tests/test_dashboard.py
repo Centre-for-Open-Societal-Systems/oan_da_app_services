@@ -72,15 +72,10 @@ class TestDashboard(IntegrationTestCase):
 			("d-v3", f"{t} 23:30:00", False),  # late enough to stay "Upcoming" during a test run
 		):
 			v = visits.plan_visit(
-				farmer_id="FRM-1",
-				scheduled_at=when,
-				da_id="DA-000001",
-				user=DA1,
-				client_op_id=op,
-				ctx=admin,
+				farmer_id="FRM-1", scheduled_at=when, da_id="DA-000001", user=DA1, client_op_id=op
 			)
 			if complete:
-				visits.submit_outcome(v["name"], observed="ok", ctx=admin)
+				visits.submit_outcome(v["name"], observed="ok")
 		# tasks: 2 open due today (1 urgent), 1 open later, 1 done in range
 		tasks.create_task(
 			title="Report", da_id="DA-000001", due_at=f"{t} 13:00:00", priority="Urgent", ctx=admin
@@ -145,8 +140,7 @@ class TestDashboard(IntegrationTestCase):
 		# The open visit is at 23:30 today; pin "now" to the morning so the
 		# planner status is "Upcoming" no matter when the suite runs.
 		with patch(
-			"da_services.services.visits.now_datetime",
-			return_value=get_datetime(f"{today()} 08:00:00"),
+			"da_services.services.visits.now_datetime", return_value=get_datetime(f"{today()} 08:00:00")
 		):
 			out = dashboard.today(_ctx(DA1))
 		self.assertEqual(out["date"], today())

@@ -9,7 +9,11 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
 from da_services.services import visit_specializations as spec_svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
+from da_services.tests.fixtures import (
+	cleanup_test_rows,
+	create_administrative_areas,
+	ensure_da_user,
+)
 from da_services.utils.permissions import ScopeContext
 
 
@@ -27,10 +31,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 		self.woreda = "ET04-W01"
 		self.user = ensure_da_user(self.da_id)
 
-		# Clean up
-		frappe.db.delete("DA Visit", {"da_id": self.da_id})
-		frappe.db.delete("DA Farmer Reference", {"farmer_id": self.farmer_id})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": self.da_id})
+		cleanup_test_rows(users=(self.user,), da_ids=(self.da_id,), farmer_ids=(self.farmer_id,))
 
 		# Create DA Kebele Assignment
 		frappe.get_doc(
@@ -68,9 +69,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 
 	def tearDown(self):
 		"""Clean up test data."""
-		frappe.db.delete("DA Visit", {"da_id": self.da_id})
-		frappe.db.delete("DA Farmer Reference", {"farmer_id": self.farmer_id})
-		frappe.db.delete("DA Kebele Assignment", {"da_id": self.da_id})
+		cleanup_test_rows(users=(self.user,), da_ids=(self.da_id,), farmer_ids=(self.farmer_id,))
 
 	def test_no_active_visits_empty_flags(self):
 		"""Test farmer with no active visits has empty assignment flags."""
@@ -233,8 +232,7 @@ class TestAssignmentFlags(IntegrationTestCase):
 			if farmer["farmer_id"] in farmer_ids:
 				self.assertIn("Crop Production", farmer["assigned_specializations"])
 
-		# Clean up
-		frappe.db.delete("DA Farmer Reference", {"farmer_id": ["in", farmer_ids]})
+		cleanup_test_rows(farmer_ids=farmer_ids)
 
 	def test_deduplication_same_specialization_multiple_visits(self):
 		"""Test same specialization from multiple visits is deduplicated."""

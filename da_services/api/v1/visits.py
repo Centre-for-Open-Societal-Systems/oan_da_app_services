@@ -15,20 +15,25 @@ POST /api/v1/da-services/visits/<visit_id>/submit      {purpose, farmer_response
 POST /api/v1/da-services/visits/<visit_id>/attachments multipart: file + kind, lat, lng, captured_at, content_hash
 GET  /api/v1/da-services/reports/activity?week=2026-W42[&da_id=]
 
-The plan body accepts either
+The plan body accepts either a single visit object, or a list under `visits`
+(1-5 items) for batch plan on the same route. Each item accepts either
 `scheduled_at` or the form's separate `date` + `time`. `user` is the DA User Link
-(required from the frontend). `notify_farmer_sms` is recorded on the visit; the SMS
-itself needs the gateway (not yet available) and is sent by a later job, never from this
-request. `location` comes from the client (the farmer's parcel, once the Farmer Registry
-API exists) and is stored as given.
+(required from the frontend on each item, or once on the envelope). `notify_farmer_sms`
+is recorded on the visit; the SMS itself needs the gateway (not yet available) and is
+sent by a later job, never from this request. `location` comes from the client (the
+farmer's parcel, once the Farmer Registry API exists) and is stored as given.
+
+List mode returns `{ created[], failed[], summary }` with partial success: failures
+echo the exact item payload plus the error so the DA can correct and resubmit.
 
 Datetimes: every `*_at` value is site-local time (System Settings time zone, Africa/Addis_Ababa
 in production) serialised as ISO 8601 without an offset, the Frappe convention; `date` and
 `time` in the plan form are read the same way. Clients must not apply a UTC offset.
 
-Endpoint access is gated with require_roles. Row visibility comes from DA Visit
-permission hooks and User Permissions via frappe.get_list / check_permission;
-services apply request filters and product rules only.
+Access and row visibility come from DA Visit DocType permissions, User Permissions,
+via Frappe DocType Role permissions + User Permissions (``frappe.get_list`` /
+DocType ``insert``). Handlers do not use ``require_roles``, ``ScopeContext``,
+custom Visit permission hooks, or service-side permission helpers.
 """
 
 from __future__ import annotations
@@ -42,7 +47,6 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
 from da_services.services import visits as svc
-from da_services.utils.permissions import require_roles
 from da_services.utils.ratelimit import rate_limited
 
 PLAN_FIELDS = (
@@ -65,10 +69,21 @@ PLAN_FIELDS = (
 )
 
 
-def _body(kwargs: dict, *names: str) -> dict:
-	"""Request fields by name: the JSON body when there is one, else the call's kwargs."""
+def _request_payload(kwargs: dict | None = None) -> dict:
+	"""JSON/form body from form_dict (Frappe already parsed it); kwargs for unit tests."""
+	data = dict(frappe.form_dict or {})
+	if data:
+		return data
 	request = getattr(frappe.local, "request", None)
-	data = (request.get_json(silent=True) if request is not None else None) or {}
+	data = dict((request.get_json(silent=True) if request is not None else None) or {})
+	if data:
+		return data
+	return dict(kwargs or {})
+
+
+def _body(kwargs: dict, *names: str) -> dict:
+	"""Request fields by name from the parsed body, else the call's kwargs."""
+	data = _request_payload(kwargs)
 	out = {n: data.get(n, kwargs.get(n)) for n in names}
 	for key in ("location", "advisory_qa", "gps", "next_action"):
 		if isinstance(out.get(key), str):
@@ -128,7 +143,24 @@ def _timeline(visit: dict, meta: dict) -> list[dict]:
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def plan(**kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
+	payload = _request_payload(kwargs)
+	visits = payload.get("visits")
+
+	if visits is not None:
+		if not isinstance(visits, list):
+			frappe.throw(_("visits must be a list."), frappe.ValidationError)
+		out = svc.plan_visits_batch(
+			visits=visits,
+			user=(payload.get("user") or "").strip() or None,
+			da_id=payload.get("da_id"),
+		)
+		if not out["created"]:
+			frappe.response["http_status_code"] = 400
+			return success_response(data=out, message="No visits planned")
+		if out["failed"]:
+			return success_response(data=out, message="Visits planned with errors")
+		return success_response(data=out, message="Visits planned")
+
 	b = _body(kwargs, *PLAN_FIELDS)
 	out = svc.plan_visit(
 		farmer_id=(b.get("farmer_id") or "").strip(),
@@ -145,7 +177,6 @@ def plan(**kwargs):
 		user=(b.get("user") or "").strip(),
 		da_id=b.get("da_id"),
 		client_op_id=b.get("client_op_id") or None,
-		ctx=ctx,
 	)
 	return success_response(data=out, message="Visit planned")
 
@@ -154,7 +185,6 @@ def plan(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def list_visits(**kwargs):
-	ctx = require_roles(*svc.READ_ROLES)
 	q = _body(
 		kwargs,
 		"date",
@@ -173,7 +203,6 @@ def list_visits(**kwargs):
 	limit = int(q.get("limit") or 50)
 	start = int(q.get("start") or 0)
 	rows, total = svc.list_visits(
-		ctx,
 		date=q.get("date"),
 		from_date=q.get("from"),
 		to_date=q.get("to"),
@@ -194,8 +223,7 @@ def list_visits(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_visit(visit_id: str):
-	ctx = require_roles(*svc.READ_ROLES)
-	out = svc.get_visit(visit_id, ctx)
+	out = svc.get_visit(visit_id)
 	out["timeline"] = _timeline(
 		out,
 		{
@@ -213,12 +241,11 @@ def get_visit(visit_id: str):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def reschedule(visit_id: str, **kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
 	b = _body(kwargs, "scheduled_at", "date", "time", "reason")
 	when = _scheduled_at(b)
 	if not when:
 		frappe.throw(_("scheduled_at (or date + time) is required."), frappe.ValidationError)
-	out = svc.reschedule_visit(visit_id, scheduled_at=when, reason=b.get("reason"), ctx=ctx)
+	out = svc.reschedule_visit(visit_id, scheduled_at=when, reason=b.get("reason"))
 	return success_response(data=out, message="Visit rescheduled")
 
 
@@ -226,9 +253,8 @@ def reschedule(visit_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def cancel(visit_id: str, **kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
 	b = _body(kwargs, "reason")
-	out = svc.cancel_visit(visit_id, reason=b.get("reason"), ctx=ctx)
+	out = svc.cancel_visit(visit_id, reason=b.get("reason"))
 	return success_response(data=out, message="Visit cancelled")
 
 
@@ -239,7 +265,6 @@ def cancel(visit_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def start(visit_id: str, **kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
 	b = _body(kwargs, "arrived_at", "gps", "farmer_present", "client_op_id")
 	present = True if b.get("farmer_present") is None else _truthy(b.get("farmer_present"))
 	out = svc.start_visit(
@@ -248,7 +273,6 @@ def start(visit_id: str, **kwargs):
 		gps=b.get("gps") or None,
 		farmer_present=present,
 		client_op_id=b.get("client_op_id") or None,
-		ctx=ctx,
 	)
 	return success_response(data=out, message="Visit started")
 
@@ -257,7 +281,6 @@ def start(visit_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def submit(visit_id: str, **kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
 	b = _body(
 		kwargs,
 		"purpose",
@@ -279,7 +302,6 @@ def submit(visit_id: str, **kwargs):
 		next_action=b.get("next_action") or None,
 		advisory_qa=b.get("advisory_qa"),
 		client_op_id=b.get("client_op_id") or None,
-		ctx=ctx,
 	)
 	return success_response(data=out, message="Visit outcome submitted")
 
@@ -289,7 +311,6 @@ def submit(visit_id: str, **kwargs):
 @rate_limited(limit=60, seconds=60)  # per user; a DA uploads a handful per visit
 @handle_api_errors
 def add_attachment(visit_id: str, **kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
 	request = getattr(frappe.local, "request", None)
 	upload = request.files.get("file") if request is not None and request.files else None
 	if upload is None:
@@ -307,7 +328,6 @@ def add_attachment(visit_id: str, **kwargs):
 		gps=gps,
 		captured_at=f.get("captured_at"),
 		content_hash=f.get("content_hash"),
-		ctx=ctx,
 	)
 	return success_response(data=out, message="Evidence stored")
 
@@ -317,6 +337,5 @@ def add_attachment(visit_id: str, **kwargs):
 @rate_limited(limit=120, seconds=60)
 @handle_api_errors
 def activity_report(**kwargs):
-	ctx = require_roles(*svc.READ_ROLES)
 	q = _body(kwargs, "week", "da_id")
-	return success_response(data=svc.activity_report(ctx, week=q.get("week"), da_id=q.get("da_id")))
+	return success_response(data=svc.activity_report(week=q.get("week"), da_id=q.get("da_id")))
