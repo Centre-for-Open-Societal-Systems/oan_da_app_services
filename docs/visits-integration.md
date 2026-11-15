@@ -9,11 +9,11 @@ and the weekly activity report. Screen map: [api-da-screens.md](api-da-screens.m
    `key`. Send `Authorization: Bearer <access_token>` on every visits call.
    Visits do not require `X-CSRF-Token` (native DocTypes, not staff registry).
 2. `oan_auth_service` verifies the Bearer token and sets the session user.
-3. API handlers gate endpoints with `require_roles` (DA / Supervisor / Admin write;
-   + Executive for read).
-4. **Row visibility** is Frappe User Permissions + DA Visit DocType hooks
-   (`da_visit_query_conditions` / `has_da_visit_permission`) via `frappe.get_list` /
-   `check_permission`. Services do **not** re-check Woreda/Kebele/role geography.
+3. **Access and row visibility** are Frappe DocType permissions + User Permissions
+   + DA Visit hooks (`da_visit_query_conditions` / `has_da_visit_permission`) via
+   `frappe.get_list` / DocType `insert`. Handlers and the visits service do **not**
+   use `require_roles`, `ScopeContext`, or service-side permission/DA resolve helpers.
+   Services do **not** re-check Woreda/Kebele/role geography.
 
 Optional list filters (`date` / `from`+`to`, `status`, `farmer_id`, `da_id`, `region`,
 `zone`, `woreda`, `kebele`) only narrow the already-permitted set.
@@ -32,7 +32,8 @@ Required from the frontend:
 
 Optional: `visit_type`, `purpose`, `duration_min`, `priority`, `priority_reason`,
 `location {lat,lng}`, `notify_farmer_sms`, `advisory_qa[]`, `client_op_id`, `da_id`
-(Supervisor naming the DA when planning for someone else; `assigned_by` recorded).
+(legacy/envelope only — row `da_id` always comes from `user.da_registry_id`).
+When the session user differs from plan `user`, `assigned_by` is the session user.
 
 Response: one serialized visit (`physical_status: Planned`). Idempotent on
 `client_op_id`.

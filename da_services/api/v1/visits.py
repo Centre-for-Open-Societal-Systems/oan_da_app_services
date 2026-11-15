@@ -30,9 +30,9 @@ Datetimes: every `*_at` value is site-local time (System Settings time zone, Afr
 in production) serialised as ISO 8601 without an offset, the Frappe convention; `date` and
 `time` in the plan form are read the same way. Clients must not apply a UTC offset.
 
-Endpoint access is gated with require_roles. Row visibility comes from DA Visit
-permission hooks and User Permissions via frappe.get_list / check_permission;
-services apply request filters and product rules only.
+Access and row visibility come from DA Visit DocType permissions, User Permissions,
+and permission hooks via frappe.get_list / DocType insert. Handlers do not use
+``require_roles``, ``ScopeContext``, or service-side permission helpers.
 """
 
 from __future__ import annotations
@@ -46,7 +46,6 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
 from da_services.services import visits as svc
-from da_services.utils.permissions import require_roles
 from da_services.utils.ratelimit import rate_limited
 
 PLAN_FIELDS = (
@@ -143,7 +142,6 @@ def _timeline(visit: dict, meta: dict) -> list[dict]:
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def plan(**kwargs):
-	ctx = require_roles(*svc.WRITE_ROLES)
 	payload = _request_payload(kwargs)
 	visits = payload.get("visits")
 
@@ -154,7 +152,6 @@ def plan(**kwargs):
 			visits=visits,
 			user=(payload.get("user") or "").strip() or None,
 			da_id=payload.get("da_id"),
-			ctx=ctx,
 		)
 		if not out["created"]:
 			frappe.response["http_status_code"] = 400
@@ -179,7 +176,6 @@ def plan(**kwargs):
 		user=(b.get("user") or "").strip(),
 		da_id=b.get("da_id"),
 		client_op_id=b.get("client_op_id") or None,
-		ctx=ctx,
 	)
 	return success_response(data=out, message="Visit planned")
 
@@ -188,7 +184,6 @@ def plan(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def list_visits(**kwargs):
-	require_roles(*svc.READ_ROLES)
 	q = _body(
 		kwargs,
 		"date",
@@ -227,7 +222,6 @@ def list_visits(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_visit(visit_id: str):
-	require_roles(*svc.READ_ROLES)
 	out = svc.get_visit(visit_id)
 	out["timeline"] = _timeline(
 		out,
@@ -246,7 +240,6 @@ def get_visit(visit_id: str):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def reschedule(visit_id: str, **kwargs):
-	require_roles(*svc.WRITE_ROLES)
 	b = _body(kwargs, "scheduled_at", "date", "time", "reason")
 	when = _scheduled_at(b)
 	if not when:
@@ -259,7 +252,6 @@ def reschedule(visit_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def cancel(visit_id: str, **kwargs):
-	require_roles(*svc.WRITE_ROLES)
 	b = _body(kwargs, "reason")
 	out = svc.cancel_visit(visit_id, reason=b.get("reason"))
 	return success_response(data=out, message="Visit cancelled")
@@ -272,7 +264,6 @@ def cancel(visit_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def start(visit_id: str, **kwargs):
-	require_roles(*svc.WRITE_ROLES)
 	b = _body(kwargs, "arrived_at", "gps", "farmer_present", "client_op_id")
 	present = True if b.get("farmer_present") is None else _truthy(b.get("farmer_present"))
 	out = svc.start_visit(
@@ -289,7 +280,6 @@ def start(visit_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def submit(visit_id: str, **kwargs):
-	require_roles(*svc.WRITE_ROLES)
 	b = _body(
 		kwargs,
 		"purpose",
@@ -320,7 +310,6 @@ def submit(visit_id: str, **kwargs):
 @rate_limited(limit=60, seconds=60)  # per user; a DA uploads a handful per visit
 @handle_api_errors
 def add_attachment(visit_id: str, **kwargs):
-	require_roles(*svc.WRITE_ROLES)
 	request = getattr(frappe.local, "request", None)
 	upload = request.files.get("file") if request is not None and request.files else None
 	if upload is None:
@@ -347,6 +336,5 @@ def add_attachment(visit_id: str, **kwargs):
 @rate_limited(limit=120, seconds=60)
 @handle_api_errors
 def activity_report(**kwargs):
-	ctx = require_roles(*svc.READ_ROLES)
 	q = _body(kwargs, "week", "da_id")
-	return success_response(data=svc.activity_report(ctx, week=q.get("week"), da_id=q.get("da_id")))
+	return success_response(data=svc.activity_report(week=q.get("week"), da_id=q.get("da_id")))

@@ -76,9 +76,7 @@ class TestDashboard(IntegrationTestCase):
 				scheduled_at=when,
 				da_id="DA-000001",
 				user=DA1,
-				client_op_id=op,
-				ctx=admin,
-			)
+				client_op_id=op)
 			if complete:
 				visits.submit_outcome(v["name"], observed="ok")
 		# tasks: 2 open due today (1 urgent), 1 open later, 1 done in range
@@ -146,14 +144,12 @@ class TestDashboard(IntegrationTestCase):
 		# planner status is "Upcoming" no matter when the suite runs.
 		with patch(
 			"da_services.services.visits.now_datetime",
-			return_value=get_datetime(f"{today()} 08:00:00"),
-		):
+			return_value=get_datetime(f"{today()} 08:00:00")):
 			out = dashboard.today(_ctx(DA1))
 		self.assertEqual(out["date"], today())
 		self.assertEqual(
 			[(i["kind"], i["time"]) for i in out["items"]],
-			[("task", "08:30"), ("task", "13:00"), ("visit", "23:30")],
-		)
+			[("task", "08:30"), ("task", "13:00"), ("visit", "23:30")])
 		visit = out["items"][2]
 		self.assertEqual((visit["status"], visit["href"]), ("Upcoming", f"/visits/{visit['id']}"))
 		task = out["items"][1]

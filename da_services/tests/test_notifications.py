@@ -167,14 +167,14 @@ class TestDANotification(IntegrationTestCase):
 	# -- wired event: visit outcome -> follow-up task -> notification ---------------------
 
 	def test_visit_follow_up_notifies_the_da(self):
-		ctx = get_scope_context(DA1)
-		v = visits.plan_visit(farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", user=DA1, ctx=ctx)
+		frappe.set_user(DA1)
+		v = visits.plan_visit(farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", user=DA1)
 		visits.submit_outcome(
 			v["name"],
 			observed="ok",
 			next_action={"type": "Task", "note": "Bring seed", "date": add_days(today(), 3)},
 		)
-		rows, _meta = svc.list_notifications(ctx, unread=True)
+		rows, _meta = svc.list_notifications(get_scope_context(DA1), unread=True)
 		row = next((r for r in rows if r["event"] == "task_created"), None)
 		self.assertIsNotNone(row, [r["title"] for r in rows])
 		self.assertEqual(row["kind"], "Task")

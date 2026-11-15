@@ -14,7 +14,6 @@ from da_services.tests.fixtures import (
 	set_da_registry_id,
 	stamp_visit_geo,
 )
-from da_services.utils.permissions import get_scope_context
 
 DA1 = "visit-da1@da.local"  # DA-000001, ET04 / ET04-W01
 DA3 = "visit-da3@da.local"  # DA-000003, ET03
@@ -49,12 +48,6 @@ def _grant(user, role, **kw):
 	return doc
 
 
-def _ctx(user):
-	"""Act as ``user`` for the rest of the call (Frappe session owns permissions)."""
-	frappe.set_user(user)
-	return get_scope_context(user)
-
-
 class TestDAVisit(IntegrationTestCase):
 	USERS = (DA1, DA3, SUP, EXEC, COMMS)
 	DA_IDS = ("DA-000001", "DA-000003")
@@ -84,29 +77,24 @@ class TestDAVisit(IntegrationTestCase):
 			region_scope=self.geo["foreign_region"],
 			woreda_scope=self.geo["foreign_woreda"],
 		)
-		_grant(
-			SUP,
-			C.ROLE_SUPERVISOR,
-			region_scope=self.geo["region"],
-			woreda_scope=self.geo["woreda"],
-		)
+		_grant(SUP, C.ROLE_SUPERVISOR, region_scope=self.geo["region"], woreda_scope=self.geo["woreda"])
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope=self.geo["region"])
 		_grant(COMMS, C.ROLE_COMMS)
 		ensure_kebele_assignment("DA-000001", self.geo["kebele"])
 		self.tomorrow = f"{add_days(today(), 1)} 09:00:00"
+		frappe.set_user(DA1)
 		self.v1 = visits.plan_visit(
 			farmer_id="FR-88466",
 			scheduled_at=f"{today()} 08:30:00",
 			purpose="Crop inspection",
 			user=DA1,
-			ctx=_ctx(DA1),
 		)
+		frappe.set_user(ADMIN)
 		self.v3 = visits.plan_visit(
 			farmer_id="FR-77001",
 			scheduled_at=self.tomorrow,
 			user=DA3,
 			da_id="DA-000003",
-			ctx=_ctx(ADMIN),
 		)
 		stamp_visit_geo(self.v1["name"], self.geo)
 		stamp_visit_geo(
@@ -131,8 +119,7 @@ class TestDAVisit(IntegrationTestCase):
 		doc = frappe.get_doc("DA Visit", self.v1["name"])
 		self.assertTrue(doc.name.startswith("DA-VIS-"))
 		self.assertEqual(
-			(doc.region, doc.woreda, doc.kebele),
-			(self.geo["region"], self.geo["woreda"], self.geo["kebele"]),
+			(doc.region, doc.woreda, doc.kebele), (self.geo["region"], self.geo["woreda"], self.geo["kebele"])
 		)
 		self.assertEqual(doc.physical_status, "Planned")
 		self.assertEqual(doc.source, "Planned")
@@ -140,54 +127,26 @@ class TestDAVisit(IntegrationTestCase):
 		self.assertEqual(self.v1["ui_status"], "Planned")
 
 	def test_da_plans_only_for_own_da_id(self):
-		out = visits.plan_visit(
-			farmer_id="FR-1",
-			scheduled_at=self.tomorrow,
-			user=DA1,
-			da_id="DA-000003",
-			ctx=_ctx(DA1),
-		)
+		out = visits.plan_visit(farmer_id="FR-1", scheduled_at=self.tomorrow, user=DA1, da_id="DA-000003")
 		self.assertEqual(out["da_id"], "DA-000001")
 
 	def test_supervisor_plans_for_own_woreda_and_is_recorded(self):
 		da2_user = ensure_da_user("DA-000002")
+		frappe.set_user(SUP)
 		out = visits.plan_visit(
-			farmer_id="FR-2",
-			scheduled_at=self.tomorrow,
-			user=da2_user,
-			da_id="DA-000002",
-			ctx=_ctx(SUP),
+			farmer_id="FR-2", scheduled_at=self.tomorrow, user=da2_user, da_id="DA-000002"
 		)
 		self.assertEqual(out["assigned_by"], SUP)
-		# Geography re-validation is not done in the service; officers may name a da_id.
-		# Row visibility for lists/detail still comes from DA Visit permission hooks.
-		out = visits.plan_visit(
-			farmer_id="FR-3",
-			scheduled_at=self.tomorrow,
-			user=DA3,
-			da_id="DA-000003",
-			ctx=_ctx(SUP),
-		)
+		# Row da_id comes from User.da_registry_id (fetch_from); visibility from DocType hooks.
+		out = visits.plan_visit(farmer_id="FR-3", scheduled_at=self.tomorrow, user=DA3, da_id="DA-000003")
 		self.assertEqual(out["da_id"], "DA-000003")
 		self.assertEqual(out["assigned_by"], SUP)
 
 	def test_plan_requires_schedule_and_is_idempotent(self):
 		with self.assertRaises(frappe.ValidationError):
-			visits.plan_visit(farmer_id="FR-1", scheduled_at=None, user=DA1, ctx=_ctx(DA1))
-		a = visits.plan_visit(
-			farmer_id="FR-1",
-			scheduled_at=self.tomorrow,
-			user=DA1,
-			client_op_id="op-v1",
-			ctx=_ctx(DA1),
-		)
-		b = visits.plan_visit(
-			farmer_id="FR-1",
-			scheduled_at=self.tomorrow,
-			user=DA1,
-			client_op_id="op-v1",
-			ctx=_ctx(DA1),
-		)
+			visits.plan_visit(farmer_id="FR-1", scheduled_at=None, user=DA1)
+		a = visits.plan_visit(farmer_id="FR-1", scheduled_at=self.tomorrow, user=DA1, client_op_id="op-v1")
+		b = visits.plan_visit(farmer_id="FR-1", scheduled_at=self.tomorrow, user=DA1, client_op_id="op-v1")
 		self.assertEqual(a["name"], b["name"])
 
 	def test_advisory_qa_only_on_advisory_visits(self):
@@ -197,7 +156,6 @@ class TestDAVisit(IntegrationTestCase):
 			visit_type="Advisory",
 			advisory_qa=[{"question": "Rust on teff?", "answer": "Spray within 3 days"}],
 			user=DA1,
-			ctx=_ctx(DA1),
 		)
 		self.assertEqual(len(out["advisory_qa"]), 1)
 		doc = frappe.get_doc("DA Visit", self.v1["name"])
@@ -273,10 +231,7 @@ class TestDAVisit(IntegrationTestCase):
 
 	def test_derived_statuses(self):
 		past = visits.plan_visit(
-			farmer_id="FR-9",
-			scheduled_at=add_to_date(now_datetime(), hours=-3),
-			user=DA1,
-			ctx=_ctx(DA1),
+			farmer_id="FR-9", scheduled_at=add_to_date(now_datetime(), hours=-3), user=DA1
 		)
 		stamp_visit_geo(past["name"], self.geo)
 		self.assertEqual(past["planner_status"], "overdue")
@@ -318,12 +273,9 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.set_user(ADMIN)
 		for i in range(3):
 			visits.plan_visit(
-				farmer_id=f"FR-{i}",
-				scheduled_at=f"{add_days(today(), -i - 1)} 10:00:00",
-				user=DA1,
-				ctx=_ctx(DA1),
+				farmer_id=f"FR-{i}", scheduled_at=f"{add_days(today(), -i - 1)} 10:00:00", user=DA1
 			)
-		_ctx(DA1)
+		frappe.set_user(DA1)
 		visits.submit_outcome(self.v1["name"], observed="ok")
 		counts = visits.dashboard_counts("DA-000001", add_days(today(), -30), today())
 		self.assertEqual(

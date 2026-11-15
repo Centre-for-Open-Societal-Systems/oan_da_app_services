@@ -85,7 +85,7 @@ class TestZoneScope(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		ensure_doctype_schema("DA Profile Change Request")
-		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=("farmer-z-1",))
 		for code, level, parent in AREAS:
 			ensure_administrative_area(code, level, parent, code)
 		ensure_geo_masters()  # RBAC scopes link to DA Region / Zone / Woreda
@@ -102,13 +102,14 @@ class TestZoneScope(IntegrationTestCase):
 		_grant(REGION_EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
 		set_da_registry_id(DA1, "DA-000001")
 
+		frappe.set_user(DA1)
 		self.v1 = visits.plan_visit(
 			farmer_id="FR-88466",
 			scheduled_at=f"{today()} 08:30:00",
 			purpose="Crop inspection",
 			user=DA1,
-			ctx=_ctx(DA1),
 		)
+		frappe.set_user("Administrator")
 		# Plan no longer fills geo from registry; stamp posting codes for scope assertions.
 		frappe.db.set_value(
 			"DA Visit",
@@ -130,7 +131,7 @@ class TestZoneScope(IntegrationTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		cleanup_test_rows(users=USERS, da_ids=DA_IDS)
+		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=("farmer-z-1",))
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _visible(self, doctype, user) -> set[str]:

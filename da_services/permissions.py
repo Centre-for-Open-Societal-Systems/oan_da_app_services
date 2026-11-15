@@ -158,11 +158,21 @@ def has_da_notification_permission(doc, ptype: str = "read", user: str | None = 
 
 
 def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
-	"""Single-document mirror of da_visit_query_conditions. Writes stay own-DA only."""
+	"""Single-document mirror of da_visit_query_conditions. Writes stay own-DA only.
+
+	``create`` runs before geo is stamped, so it keys off ``da_id`` / plan ``user``
+	(and Supervisor Role DocPerm) instead of region/woreda/zone.
+	"""
 	user = user or frappe.session.user
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return True
+	if ptype == "create":
+		if ctx.has_any_role(C.ROLE_DA):
+			target = doc.get("da_id") or frappe.db.get_value("User", doc.get("user"), "da_registry_id")
+			return bool(target) and ctx.owns_da(target)
+		# Supervisor Role DocPerm already grants create; geo is stamped after insert.
+		return ctx.has_any_role(C.ROLE_SUPERVISOR)
 	if ctx.has_any_role(C.ROLE_DA):
 		if ctx.owns_da(doc.da_id):
 			return True

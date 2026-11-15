@@ -333,6 +333,7 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(out["status"], "error")
 
 	def test_executive_and_comms_cannot_plan(self):
+		# DocType permissions (not require_roles): Executive is read-only; Comms has none.
 		frappe.set_user(EXEC)
 		self.assertEqual(self._plan(da_id="DA-000001")["status"], "error")
 		frappe.set_user(COMMS)
