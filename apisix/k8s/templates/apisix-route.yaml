@@ -773,6 +773,8 @@ spec:
       - /v1/da-services/get_master_data
       - /v1/da-services/grievances
       - /v1/da-services/grievances/:ticket_id
+      - /v1/da-services/grievances/:ticket_id/attachments
+      - /v1/da-services/grievances/:ticket_id/attachments/:attachment_id/view
       - /v1/da-services/grievances/:ticket_id/timeline
       - /v1/da-services/grievances/options
       - /v1/da-services/grievances/summary
@@ -924,6 +926,7 @@ spec:
       - /v1/da-services/farmers/registrations/documents
       - /v1/da-services/farmers/updates/:event_id/retry
       - /v1/da-services/grievances
+      - /v1/da-services/grievances/:ticket_id/attachments
       - /v1/da-services/grievances/sync/retry
       - /v1/da-services/leave-requests
       - /v1/da-services/leave-requests/:request_id/cancel
