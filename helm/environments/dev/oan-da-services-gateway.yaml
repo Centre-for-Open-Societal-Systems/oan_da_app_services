@@ -1,0 +1,27 @@
+# Values for the oan-da-services-gateway chart (apisix/k8s) on the oan_dev k3s node, namespace `da-app`.
+# Installed by ci/deploy-gateway.sh after the app deploy. APISIX and its Ingress Controller run in
+# namespace api6-gateway on the same node; this chart only holds ApisixRoute/ApisixUpstream objects.
+#
+# Set at install, not here:
+# - redis.host: the Redis Service of the APISIX release (ci/deploy-gateway.sh looks it up)
+
+ingressClassName: apisix
+
+# The public host. *.development.oanstaging.com is served by APISIX with the dev wildcard certificate
+# (oan-helm, dev edge), so this chart has no ApisixTls.
+hosts:
+  - da-services.development.oanstaging.com
+
+# Frappe site name, sent as Host because Frappe selects the site from it. Must equal
+# frappe.jobs.createSite.siteName in oan-da-services.yaml.
+siteName: da-services.development.oanstaging.com
+
+# The Frappe gunicorn Service of release `da-services` in this namespace.
+web:
+  serviceName: da-services-frappe-gunicorn
+  port: 8000
+
+# The DA UI calls the API from its server and from the browser.
+corsOriginRegexes:
+  - https://da-app\.development\.oanstaging\.com
+  - https?://localhost(:[0-9]+)?

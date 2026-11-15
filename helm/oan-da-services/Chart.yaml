@@ -1,0 +1,27 @@
+apiVersion: v2
+name: oan-da-services
+description: OAN DA services Frappe app with oan_auth_service for OpenAgriNet (OAN);
+  deploys the OAN frappe chart with the DA defaults.
+type: application
+version: 0.1.0
+appVersion: version-16
+keywords:
+- oan
+- openagrinet
+- frappe
+- da
+home: https://github.com/Centre-for-Open-Societal-Systems/oan_da_app_services
+sources:
+- https://github.com/Centre-for-Open-Societal-Systems/oan_da_app_services
+- https://github.com/Centre-for-Open-Societal-Systems/oan_auth_service
+- https://github.com/Centre-for-Open-Societal-Systems/oan-helm
+maintainers:
+- name: OpenAgriNet (OAN)
+  url: https://github.com/Centre-for-Open-Societal-Systems/oan-helm
+dependencies:
+- name: frappe-service
+  alias: frappe
+  version: 8.0.91-oan.1
+annotations:
+  oan.org/owner: OpenAgriNet (OAN)
+  oan.org/application-source: https://github.com/Centre-for-Open-Societal-Systems/oan_da_app_services
