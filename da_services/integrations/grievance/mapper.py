@@ -8,7 +8,14 @@ from __future__ import annotations
 
 import re
 
-from .schemas import GrievanceDetail, GrievanceResult, GrievanceSubmission, GrievanceSummary, TimelineEntry
+from .schemas import (
+	SCAN_CLEAN,
+	GrievanceDetail,
+	GrievanceResult,
+	GrievanceSubmission,
+	GrievanceSummary,
+	TimelineEntry,
+)
 
 SUBMISSION_CHANNEL = "Development Agent Assisted"
 ASSISTED_ROLE = "Grievance Assisted Submitter"
@@ -357,3 +364,31 @@ def to_grievance_result(payload: dict) -> GrievanceResult:
 		retryable=bool(payload.get("retryable", False)),
 		raw=payload,
 	)
+
+
+def to_attachment(payload: dict) -> dict:
+	"""One evidence row, from either the upload result or the attachment list.
+
+	The upload names the row ``attachment`` and the list names it ``name``; both become
+	``attachment_id``. ``viewable`` is true only once the virus scan passed: the
+	Grievance Service refuses to serve a Pending or Infected file. Who uploaded it is an
+	internal user or submitter id and is not passed on.
+	"""
+	scan_status = payload.get("scan_status") or None
+	size = payload.get("size_bytes")
+	return {
+		"attachment_id": payload.get("attachment") or payload.get("name") or payload.get("attachment_id"),
+		"file_name": payload.get("file_name"),
+		"mime_type": payload.get("mime_type"),
+		"size_bytes": int(size) if isinstance(size, int | float) or str(size or "").isdigit() else None,
+		"document_type": payload.get("document_type") or None,
+		"scan_status": scan_status,
+		"scanned_at": _text(payload.get("scanned_at")),
+		"uploaded_at": _text(payload.get("creation") or payload.get("uploaded_at")),
+		"timeline_entry": payload.get("timeline_entry") or None,
+		"viewable": scan_status == SCAN_CLEAN,
+	}
+
+
+def _text(value) -> str | None:
+	return str(value) if value not in (None, "") else None

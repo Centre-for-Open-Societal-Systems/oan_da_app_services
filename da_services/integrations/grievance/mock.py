@@ -8,14 +8,23 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from .client import GrievanceClient, GrievanceNotFound
-from .mapper import location_text, to_grievance_detail, to_grievance_summary
+from .client import GrievanceClient, GrievanceNotFound, GrievanceRejected
+from .mapper import location_text, to_attachment, to_grievance_detail, to_grievance_summary
 from .schemas import (
+	EVIDENCE_MAX_BYTES,
+	EVIDENCE_MAX_FILES,
+	EVIDENCE_TYPE_LABEL,
+	EVIDENCE_TYPES,
+	SCAN_CLEAN,
+	SCAN_PENDING,
+	AttachmentContent,
+	EvidenceFile,
 	GrievanceAction,
 	GrievanceDetail,
 	GrievanceResult,
 	GrievanceSubmission,
 	GrievanceSummary,
+	evidence_extension,
 )
 
 _COUNTER = 100
@@ -208,6 +217,9 @@ class MockGrievanceClient(GrievanceClient):
 	def __init__(self, records: dict[str, dict] | None = None):
 		self._records = {k: dict(v) for k, v in (records or FIXTURE_GRIEVANCES).items()}
 		self._by_uuid: dict[str, str] = {}
+		# ticket -> evidence rows, each with its bytes under "content"
+		self._attachments: dict[str, list[dict]] = {}
+		self._attachment_counter = 0
 
 	@classmethod
 	def shared(cls) -> MockGrievanceClient:
@@ -413,3 +425,72 @@ class MockGrievanceClient(GrievanceClient):
 				}
 			)
 		return {"cards": cards}
+
+	# ------------------------------------------------------------------ evidence
+
+	def upload_attachments(
+		self, ticket_id: str, files: list[EvidenceFile], *, document_type: str | None = None
+	) -> list[dict]:
+		"""Same refusals as the service: unknown ticket, type, size, and ten a case.
+
+		The type is taken from the file name here. The live service reads the leading
+		bytes instead, so a renamed file passes this mock and is refused there.
+		"""
+		if ticket_id not in self._records:
+			raise GrievanceNotFound(ticket_id)
+		stored = self._attachments.setdefault(ticket_id, [])
+		if len(stored) + len(files) > EVIDENCE_MAX_FILES:
+			raise GrievanceRejected(f"A grievance may carry at most {EVIDENCE_MAX_FILES} attachments.")
+		for upload in files:
+			if not upload.content:
+				raise GrievanceRejected(f"The uploaded file {upload.file_name} is empty.")
+			if len(upload.content) > EVIDENCE_MAX_BYTES:
+				raise GrievanceRejected(f"{upload.file_name} is larger than 10 MB.")
+			if evidence_extension(upload.file_name) not in EVIDENCE_TYPES:
+				raise GrievanceRejected(
+					f"{upload.file_name} is not a file type we recognise. Allowed: {EVIDENCE_TYPE_LABEL}."
+				)
+		created = []
+		for upload in files:
+			self._attachment_counter += 1
+			row = {
+				"name": f"GAT-{self._attachment_counter:05d}",
+				"file_name": upload.file_name,
+				"mime_type": EVIDENCE_TYPES[evidence_extension(upload.file_name)],
+				"size_bytes": len(upload.content),
+				"document_type": document_type,
+				"timeline_entry": None,
+				"scan_status": SCAN_PENDING,
+				"scanned_at": None,
+				"creation": datetime.now(UTC).isoformat(),
+				"content": upload.content,
+			}
+			stored.append(row)
+			created.append(to_attachment(row))
+		return created
+
+	def list_attachments(self, ticket_id: str) -> list[dict]:
+		"""A file comes back Pending from the upload and Clean from the first list after it,
+		which stands in for the virus scan finishing."""
+		if ticket_id not in self._records:
+			raise GrievanceNotFound(ticket_id)
+		rows = self._attachments.get(ticket_id, [])
+		for row in rows:
+			if row["scan_status"] == SCAN_PENDING:
+				row["scan_status"] = SCAN_CLEAN
+				row["scanned_at"] = datetime.now(UTC).isoformat()
+		return [to_attachment(row) for row in rows]
+
+	def get_attachment_content(self, attachment_id: str) -> AttachmentContent:
+		for rows in self._attachments.values():
+			for row in rows:
+				if row["name"] != attachment_id:
+					continue
+				if row["scan_status"] != SCAN_CLEAN:
+					raise GrievanceRejected(
+						f"{row['file_name']} is not available: its scan status is {row['scan_status']}."
+					)
+				return AttachmentContent(
+					content=row["content"], file_name=row["file_name"], mime_type=row["mime_type"]
+				)
+		raise GrievanceNotFound(attachment_id)

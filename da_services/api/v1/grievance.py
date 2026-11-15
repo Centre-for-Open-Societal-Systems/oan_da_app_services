@@ -3,6 +3,15 @@
 Writes that fail against the upstream service are queued in DA Integration Event and
 retried automatically. Reads are pass-through; if the upstream is down the caller gets
 a 503 error.
+
+Evidence (documents attached to a filed grievance):
+
+POST /api/v1/da-services/grievances/<ticket_id>/attachments                       upload
+GET  /api/v1/da-services/grievances/<ticket_id>/attachments                       list
+GET  /api/v1/da-services/grievances/<ticket_id>/attachments/<attachment_id>/view  open / download
+
+An evidence upload is never queued: the files are not stored in DA Services, so when
+the Grievance Service is down the caller gets a 503 and sends them again.
 """
 
 from __future__ import annotations
@@ -13,6 +22,7 @@ import frappe
 from frappe import _
 from oan_auth_service.api.router import prefixed
 from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
+from werkzeug.wrappers import Response
 
 from da_services.integrations.grievance.client import (
 	GrievanceNotFound,
@@ -22,7 +32,17 @@ from da_services.integrations.grievance.client import (
 	get_client,
 )
 from da_services.integrations.grievance.queue import enqueue_event, retry_failed
-from da_services.integrations.grievance.schemas import GrievanceSubmission
+from da_services.integrations.grievance.schemas import (
+	EVIDENCE_MAX_BYTES,
+	EVIDENCE_MAX_FILES,
+	EVIDENCE_TYPE_LABEL,
+	EVIDENCE_TYPES,
+	SCAN_CLEAN,
+	SCAN_INFECTED,
+	EvidenceFile,
+	GrievanceSubmission,
+	evidence_extension,
+)
 from da_services.services import constants as C
 from da_services.utils.permissions import require_roles
 
@@ -356,3 +376,201 @@ def _resolve_complainant_role(ctx) -> str:
 		if ctx.has_any_role(role):
 			return role
 	return "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Evidence
+# ---------------------------------------------------------------------------
+
+
+def _evidence_problem(file_name: str, size: int) -> str | None:
+	"""Why this file would be refused, or None. The Grievance Service checks again, by content."""
+	if size == 0:
+		return str(_("The file is empty."))
+	if size > EVIDENCE_MAX_BYTES:
+		return str(_("The file is larger than 10 MB."))
+	if evidence_extension(file_name) not in EVIDENCE_TYPES:
+		return str(_("This file type is not accepted. Allowed: {0}.").format(EVIDENCE_TYPE_LABEL))
+	return None
+
+
+def _evidence_refused(message: str, details: dict | None = None) -> dict:
+	frappe.response["http_status_code"] = 400
+	return error_response(message, "VALIDATION_ERROR", details=details)
+
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments",
+	methods=("POST",),
+	summary="Upload evidence documents for a grievance",
+)
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def upload_attachments(ticket_id: str, **kwargs):
+	"""Attach evidence to a filed grievance.
+
+	multipart/form-data:
+	    files          one or more files (the key ``file`` is accepted too)
+	    document_type  optional label, for example "Receipt" or "Photo"
+
+	Limits (the Grievance Service's own): JPG, PNG, PDF or MP3, 10 MB a file, 10 files
+	a grievance in total. One request is all or nothing: if any file is refused, none
+	is stored. The whole request must also fit the site's upload limit (Frappe's
+	``max_file_size``, 25 MB unless raised), so send large files one request each.
+
+	Returns 201:
+	    {"data": {"ticket_id", "count", "attachments": [{"attachment_id", "file_name",
+	     "mime_type", "size_bytes", "document_type", "scan_status": "Pending", ...}]}}
+
+	Each file is virus-scanned after the upload. It can be opened only once its
+	scan_status is "Clean" (see the list route).
+	"""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	request = getattr(frappe.local, "request", None)
+	uploads = []
+	if request is not None and request.files:
+		uploads = [u for key in ("files", "file") for u in request.files.getlist(key) if u and u.filename]
+	if not uploads:
+		return _evidence_refused(
+			str(_("Attach at least one file (multipart/form-data, field 'files').")),
+			{"files": str(_("This field is required"))},
+		)
+	if len(uploads) > EVIDENCE_MAX_FILES:
+		return _evidence_refused(
+			str(_("A grievance can have at most {0} documents.").format(EVIDENCE_MAX_FILES)),
+			{"files": str(_("Too many files"))},
+		)
+
+	files: list[EvidenceFile] = []
+	problems: dict[str, str] = {}
+	for upload in uploads:
+		content = upload.read()
+		problem = _evidence_problem(upload.filename, len(content))
+		if problem:
+			problems[upload.filename] = problem
+		else:
+			files.append(EvidenceFile(upload.filename, content, upload.mimetype or upload.content_type))
+	if problems:
+		return _evidence_refused(str(_("Some files cannot be uploaded.")), problems)
+
+	document_type = (frappe.form_dict.get("document_type") or "").strip()[:140] or None
+
+	try:
+		rows = get_client().upload_attachments(ticket_id, files, document_type=document_type)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+	frappe.response["http_status_code"] = 201
+	return success_response(
+		data={"ticket_id": ticket_id, "count": len(rows), "attachments": rows},
+		message=str(_("{0} document(s) uploaded and queued for scanning").format(len(rows))),
+	)
+
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments",
+	methods=("GET",),
+	summary="List the evidence documents of a grievance",
+)
+@frappe.whitelist()
+@handle_api_errors
+def list_attachments(ticket_id: str):
+	"""Evidence on a grievance, oldest first.
+
+	Each row carries scan_status (Pending, Clean or Infected) and ``viewable``, true only
+	when it is Clean. Pending and Infected files are listed, not hidden.
+	meta: {"count", "max": 10, "remaining"} for the "you can add N more" line.
+	"""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	try:
+		rows = get_client().list_attachments(ticket_id)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+	return success_response(
+		data=rows,
+		meta={
+			"count": len(rows),
+			"max": EVIDENCE_MAX_FILES,
+			"remaining": max(0, EVIDENCE_MAX_FILES - len(rows)),
+		},
+	)
+
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments/<attachment_id>/view",
+	methods=("GET",),
+	summary="Open or download one evidence document",
+)
+@frappe.whitelist()
+@handle_api_errors
+def view_attachment(ticket_id: str, attachment_id: str, download=None):
+	"""The file itself, not JSON. Inline by default; ``?download=1`` for Save As.
+
+	The attachment must belong to this ticket (404 otherwise), so an id cannot be used
+	to read another case's evidence. A file whose scan is not Clean is refused with 409
+	ATTACHMENT_NOT_READY (still scanning) or ATTACHMENT_BLOCKED (failed the scan).
+	"""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	try:
+		client = get_client()
+		row = next(
+			(r for r in client.list_attachments(ticket_id) if r["attachment_id"] == attachment_id), None
+		)
+		if row is None:
+			frappe.throw(
+				_("Document {0} not found on grievance {1}.").format(attachment_id, ticket_id),
+				frappe.DoesNotExistError,
+			)
+		if row["scan_status"] != SCAN_CLEAN:
+			frappe.response["http_status_code"] = 409
+			if row["scan_status"] == SCAN_INFECTED:
+				return error_response(
+					str(_("This document failed the virus scan and cannot be opened.")), "ATTACHMENT_BLOCKED"
+				)
+			return error_response(
+				str(_("This document is still being scanned. Try again shortly.")), "ATTACHMENT_NOT_READY"
+			)
+		file = client.get_attachment_content(attachment_id)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+	response = Response(
+		file.content, status=200, mimetype=file.mime_type or row["mime_type"] or "application/octet-stream"
+	)
+	as_download = str(download or frappe.form_dict.get("download") or "").lower() in ("1", "true", "yes")
+	response.headers.add(
+		"Content-Disposition",
+		"attachment" if as_download else "inline",
+		filename=file.file_name or row["file_name"] or attachment_id,
+	)
+	response.headers["Content-Length"] = str(len(file.content))
+	response.headers["Cache-Control"] = "private, no-store"
+	response.headers["X-Content-Type-Options"] = "nosniff"
+	# Tells handle_api_errors to hand the Response back as it is, not inside the JSON envelope.
+	frappe.response["type"] = "download"
+	return response
