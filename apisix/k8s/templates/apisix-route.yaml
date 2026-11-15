@@ -63,7 +63,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -122,7 +121,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -177,7 +175,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -235,7 +232,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -290,7 +286,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -352,7 +347,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: false
-        group: oan-da-services:auth-credentials:public
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -410,7 +404,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-public-read:public
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -466,7 +459,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -523,7 +515,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -579,7 +570,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -635,7 +625,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:public
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -690,7 +679,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-public:public
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -745,7 +733,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-public:public
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -857,7 +844,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-read:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -914,7 +900,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-write:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}
@@ -1000,7 +985,6 @@ spec:
         redis_host: {{ required "redis.host is required" .Values.redis.host | quote }}
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-write:bearer
     backends:
     - serviceName: {{ required "web.serviceName is required" .Values.web.serviceName | quote }}
       servicePort: {{ .Values.web.port }}

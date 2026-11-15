@@ -46,7 +46,13 @@ API_UPSTREAM = {
 TIERS = {
 	"da-public": {"limit_by": "ip", "minute": 60, "hour": 1000, "policy": "redis"},
 	"da-read": {"limit_by": "ip", "minute": 300, "hour": 10000, "policy": "redis"},
-	"da-write": {"limit_by": "ip", "minute": 120, "hour": 4000, "policy": "redis", "note": "Agent writes: visits, surveys, imports."},
+	"da-write": {
+		"limit_by": "ip",
+		"minute": 120,
+		"hour": 4000,
+		"policy": "redis",
+		"note": "Agent writes: visits, surveys, imports.",
+	},
 }
 
 
@@ -55,9 +61,10 @@ def declared_routes() -> list[dict]:
 	import importlib
 	import pkgutil
 
-	import da_services.api.router  # noqa: F401
-	import da_services.api.v1 as v1
 	from oan_auth_service.api.router import declared_routes as declared
+
+	import da_services.api.router
+	import da_services.api.v1 as v1
 
 	# Importing the endpoint modules is what declares the routes.
 	for mod in pkgutil.iter_modules(v1.__path__):

@@ -62,7 +62,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
   - name: oan-da-services-auth-admin-bearer-get
     description: Admin user and role management. Low volume. Keyed per IP while GATEWAY_JWT is off; per
       token once the gateway verifies tokens.
@@ -93,7 +92,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
   - name: oan-da-services-auth-admin-bearer-patch
     description: Admin user and role management. Low volume. Keyed per IP while GATEWAY_JWT is off; per
       token once the gateway verifies tokens.
@@ -120,7 +118,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
   - name: oan-da-services-auth-admin-bearer-post
     description: Admin user and role management. Low volume. Keyed per IP while GATEWAY_JWT is off; per
       token once the gateway verifies tokens.
@@ -150,7 +147,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
   - name: oan-da-services-auth-admin-bearer-put
     description: Admin user and role management. Low volume. Keyed per IP while GATEWAY_JWT is off; per
       token once the gateway verifies tokens.
@@ -177,7 +173,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-admin:bearer
   - name: oan-da-services-auth-credentials-public-post
     description: Credential-sensitive endpoints (login, register, reset). Per-IP limit against stuffing,
       loose enough for users sharing one address behind NAT; per-account limits are enforced by the app.
@@ -212,7 +207,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: false
-        group: oan-da-services:auth-credentials:public
   - name: oan-da-services-auth-public-read-public-get
     description: Public discovery and health check endpoints.
     labels:
@@ -241,7 +235,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-public-read:public
   - name: oan-da-services-auth-session-bearer-delete
     description: Logged-in user calls (e.g. /me), token refresh and logout. Cheap and frequent; a throttled
       logout would leave the refresh token alive.
@@ -269,7 +262,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:bearer
   - name: oan-da-services-auth-session-bearer-get
     description: Logged-in user calls (e.g. /me), token refresh and logout. Cheap and frequent; a throttled
       logout would leave the refresh token alive.
@@ -298,7 +290,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:bearer
   - name: oan-da-services-auth-session-bearer-patch
     description: Logged-in user calls (e.g. /me), token refresh and logout. Cheap and frequent; a throttled
       logout would leave the refresh token alive.
@@ -326,7 +317,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:bearer
   - name: oan-da-services-auth-session-public-post
     description: Logged-in user calls (e.g. /me), token refresh and logout. Cheap and frequent; a throttled
       logout would leave the refresh token alive.
@@ -354,7 +344,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:auth-session:public
   - name: oan-da-services-da-public-public-get
     description: da-public
     labels:
@@ -380,7 +369,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-public:public
   - name: oan-da-services-da-public-public-post
     description: da-public
     labels:
@@ -406,7 +394,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-public:public
   - name: oan-da-services-da-read-bearer-get
     description: da-read
     labels:
@@ -489,7 +476,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-read:bearer
   - name: oan-da-services-da-write-bearer-patch
     description: 'Agent writes: visits, surveys, imports.'
     labels:
@@ -517,7 +503,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-write:bearer
   - name: oan-da-services-da-write-bearer-post
     description: 'Agent writes: visits, surveys, imports.'
     labels:
@@ -574,7 +559,6 @@ services:
         redis_host: redis
         redis_port: 6379
         allow_degradation: true
-        group: oan-da-services:da-write:bearer
   - name: oan-da-services-cors-preflight
     labels:
       app: oan-da-services
