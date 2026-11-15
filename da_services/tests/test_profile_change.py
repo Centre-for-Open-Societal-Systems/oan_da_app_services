@@ -18,7 +18,7 @@ from da_services.integrations.da_registry.schemas import IntegrationResult
 from da_services.services import constants as C
 from da_services.services import profile as svc
 from da_services.services import profile_fields
-from da_services.tests.fixtures import ensure_doctype_schema
+from da_services.tests.fixtures import ensure_doctype_schema, ensure_geo_masters, set_da_registry_id
 from da_services.utils.permissions import get_scope_context
 
 DA1 = "pcr-da1@da.local"  # DA-000001, ET04 / ET04-Z01 / ET04-W01, Kebele ET04-W01-K03
@@ -112,6 +112,11 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			woreda_scope="ET04-W01",
 		)
 		_grant(DA3, C.ROLE_DA, da_id="DA-000004", region_scope="ET03", woreda_scope="ET03-W02")
+		# A DA grant takes its DA-ID from the User, and a scope names DA Region / Zone /
+		# Woreda masters: the transfer creates a grant the normal way and needs both.
+		ensure_geo_masters()
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA3, "DA-000004")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		self.sup_other_grant = _grant(
 			SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02"
@@ -952,6 +957,22 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual(len(self._notified(SUP_OTHER, "profile_change_transfer")), 1)
 		frappe.db.commit()  # nosemgrep
 		self._error(api.sync_local(r["name"]), 400)  # nothing left to repeat
+
+	def test_a_transfer_of_a_da_whose_user_has_no_da_id_is_flagged(self):
+		new = {"region": "ET03", "zone": "ET03-Z02", "woreda": "ET03-W02", "kebele": "ET03-W02-K01"}
+		r = self._submit(changes=new, reason="Transfer to Ankober")["data"]
+		frappe.db.set_value("User", DA1, "da_registry_id", None, update_modified=False)
+		d = self._approve_both(r["name"])["data"]
+		self.assertEqual((d["status"], d["local_sync_state"]), ("Applied", "Failed"))
+		self.assertIn("User.da_registry_id", d["local_sync_error"])
+		live = frappe.get_all(
+			"DA RBAC Assignment", filters={"user": DA1, "role": C.ROLE_DA, "active": 1}, pluck="woreda_scope"
+		)
+		self.assertEqual(live, ["ET04-W01"])  # the old grant stays until the move can be made
+		set_da_registry_id(DA1, "DA-000001")
+		frappe.db.commit()  # nosemgrep
+		frappe.set_user(ADMIN2)
+		self.assertEqual(api.sync_local(r["name"])["data"]["local_sync_state"], "Done")
 
 	def test_ethiopian_year(self):
 		from datetime import date

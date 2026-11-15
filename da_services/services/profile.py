@@ -1198,7 +1198,12 @@ def _follow_transfer(doc) -> bool:
 def _move_da_grant(doc, new: dict) -> None:
 	"""End the DA's grant (kept as history) and start one with the new Region / Zone /
 	Woreda codes today, so the new Woreda's Supervisor sees the DA from now on.
-	Safe to repeat: a grant already on the new codes is left alone."""
+	Safe to repeat: a grant already on the new codes is left alone.
+
+	A grant takes its DA-ID from the User's ``da_registry_id`` and its scope must name
+	DA Region / Zone / Woreda master rows: when either is missing the move fails, the
+	request is flagged and the Administrator repeats it once the data is in place.
+	"""
 	for name in frappe.get_all(
 		"DA RBAC Assignment", filters={"role": C.ROLE_DA, "da_id": doc.da_id, "active": 1}, pluck="name"
 	):
@@ -1209,6 +1214,14 @@ def _move_da_grant(doc, new: dict) -> None:
 			new["woreda"],
 		):
 			continue
+		if frappe.db.get_value("User", old.user, "da_registry_id") != doc.da_id:
+			frappe.throw(
+				_(
+					"User {0} is not bound to DA-ID {1} (User.da_registry_id), so their new assignment "
+					"cannot be created. Set it, then repeat the local update."
+				).format(old.user, doc.da_id),
+				frappe.ValidationError,
+			)
 		moved = frappe.copy_doc(old)
 		moved.update(
 			{
