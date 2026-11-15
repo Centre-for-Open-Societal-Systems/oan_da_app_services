@@ -355,7 +355,7 @@
           ]
         },
         "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/attachments",
-        "description": "Attach evidence to the grievance in ticket_id. multipart/form-data: choose the file(s) for `files` before sending. Limits: JPG, PNG, PDF or MP3, 10 MB a file, 10 files a grievance. Returns 201 with data.attachments; each new file is scan_status Pending until the virus scan finishes. A refused file gives 400 VALIDATION_ERROR with details naming it. Stores the first attachment_id."
+        "description": "Attach evidence to the grievance in ticket_id. multipart/form-data: choose the file(s) for `files` before sending. The Grievance Service owns the rules (JPG, PNG, PDF or MP3, 10 MB a file, 10 files a grievance) and its refusal comes back as 400 with its message. Returns 201 with data as the list of new rows; each is scan_status Pending until the virus scan finishes. Stores the first attachment_id."
       },
       "event": [
         {
@@ -364,8 +364,7 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"Upload returns 201\", function () { pm.response.to.have.status(201); });",
-              "const data = (pm.response.json() || {}).data || {};",
-              "const first = (data.attachments || [])[0];",
+              "const first = ((pm.response.json() || {}).data || [])[0];",
               "if (first && first.attachment_id) pm.collectionVariables.set(\"attachment_id\", first.attachment_id);"
             ]
           }
@@ -383,7 +382,7 @@
           }
         ],
         "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/attachments",
-        "description": "Every document on the grievance, oldest first, with scan_status (Pending, Clean, Infected) and viewable. meta has count, max and remaining. Stores the first attachment_id."
+        "description": "Every document on the grievance, oldest first, with scan_status (Pending, Clean, Infected). Stores the first attachment_id."
       },
       "event": [
         {
@@ -405,7 +404,7 @@
         "method": "GET",
         "header": [],
         "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/attachments/{{attachment_id}}/view",
-        "description": "Returns the file itself, not JSON. Add ?download=1 for a Save As. 409 ATTACHMENT_NOT_READY while the scan is Pending, 409 ATTACHMENT_BLOCKED when it is Infected, 404 when the attachment is not on this ticket."
+        "description": "Returns the file itself, not JSON. Add ?download=1 for a Save As. 404 when the attachment is not on this ticket. The Grievance Service refuses a file whose scan is not Clean: 400 with its message."
       },
       "event": [
         {

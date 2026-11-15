@@ -12,9 +12,7 @@ Select the backend per site in ``site_config.json``. See ``docs/grievance-da-htt
 
 from __future__ import annotations
 
-import re
 from abc import ABC, abstractmethod
-from urllib.parse import quote, unquote
 
 import requests
 
@@ -35,7 +33,6 @@ from .mapper import (
 	unwrap_data,
 )
 from .schemas import (
-	AttachmentContent,
 	EvidenceFile,
 	GrievanceAction,
 	GrievanceDetail,
@@ -126,8 +123,9 @@ class GrievanceClient(ABC):
 	) -> list[dict]:
 		"""Attach evidence to a filed grievance. Returns the new rows (mapper.to_attachment).
 
-		All or nothing: one refused file refuses the whole call. Raises GrievanceNotFound
-		for an unknown ticket and GrievanceRejected for a refused file or a full case.
+		The service owns the rules (file type, 10 MB a file, 10 files a case) and applies
+		them to the whole call: one refused file refuses them all. Raises GrievanceNotFound
+		for an unknown ticket and GrievanceRejected for a refusal.
 		"""
 
 	@abstractmethod
@@ -135,13 +133,12 @@ class GrievanceClient(ABC):
 		"""Evidence on a grievance, oldest first, each with its scan status."""
 
 	@abstractmethod
-	def get_attachment_content(self, attachment_id: str) -> AttachmentContent:
-		"""The bytes of one attachment. Refused by the service until its scan is Clean."""
+	def get_attachment_content(self, attachment_id: str) -> bytes:
+		"""The bytes of one attachment. The service refuses until its virus scan is Clean."""
 
 
 # An upload or a download moves up to 10 MB a file, so it gets longer than a JSON call.
 _TRANSFER_TIMEOUT_SECONDS = 120
-_FILENAME = re.compile(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", re.IGNORECASE)
 
 
 def _query_param(value) -> str | None:
@@ -371,39 +368,27 @@ class HttpGrievanceClient(GrievanceClient):
 		]
 		response = self._send(
 			"POST",
-			f"/v1/grievances/{quote(ticket_id, safe='')}/attachments",
+			f"/v1/grievances/{ticket_id}/attachments",
 			files=parts,
 			form={"document_type": document_type} if document_type else None,
 			timeout=max(self.timeout, _TRANSFER_TIMEOUT_SECONDS),
 		)
-		data = self._handle_response(response)
-		rows = data if isinstance(data, list) else []
-		return [to_attachment(row) for row in rows if isinstance(row, dict)]
+		return [to_attachment(row) for row in self._handle_response(response)]
 
 	def list_attachments(self, ticket_id: str) -> list[dict]:
-		data = self._request("GET", f"/v1/grievances/{quote(ticket_id, safe='')}/attachments")
-		rows = data if isinstance(data, list) else []
-		return [to_attachment(row) for row in rows if isinstance(row, dict)]
+		data = self._request("GET", f"/v1/grievances/{ticket_id}/attachments")
+		return [to_attachment(row) for row in data]
 
-	def get_attachment_content(self, attachment_id: str) -> AttachmentContent:
+	def get_attachment_content(self, attachment_id: str) -> bytes:
 		"""GET /v1/attachments/{id}/view. Success is the file itself, a failure the JSON envelope."""
 		response = self._send(
 			"GET",
-			f"/v1/attachments/{quote(attachment_id, safe='')}/view",
+			f"/v1/attachments/{attachment_id}/view",
 			timeout=max(self.timeout, _TRANSFER_TIMEOUT_SECONDS),
 		)
-		content_type = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-		if response.status_code >= 400 or content_type == "application/json":
-			# Raises for a 4xx / 5xx. A 200 JSON body is an error envelope or a wrapped
-			# answer, never the file: no JSON type is accepted as evidence.
-			self._handle_response(response)
-			raise GrievanceServiceError("Grievance Service did not return the attachment file")
-		name = _FILENAME.search(response.headers.get("Content-Disposition") or "")
-		return AttachmentContent(
-			content=response.content,
-			file_name=unquote(name.group(1)).strip() if name else None,
-			mime_type=content_type or None,
-		)
+		if response.status_code >= 400:
+			self._handle_response(response)  # raises: not found, refused, or unavailable
+		return response.content
 
 
 def get_client() -> GrievanceClient:

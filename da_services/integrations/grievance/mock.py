@@ -11,21 +11,25 @@ from datetime import UTC, datetime
 from .client import GrievanceClient, GrievanceNotFound, GrievanceRejected
 from .mapper import location_text, to_attachment, to_grievance_detail, to_grievance_summary
 from .schemas import (
-	EVIDENCE_MAX_BYTES,
-	EVIDENCE_MAX_FILES,
-	EVIDENCE_TYPE_LABEL,
-	EVIDENCE_TYPES,
-	SCAN_CLEAN,
-	SCAN_PENDING,
-	AttachmentContent,
 	EvidenceFile,
 	GrievanceAction,
 	GrievanceDetail,
 	GrievanceResult,
 	GrievanceSubmission,
 	GrievanceSummary,
-	evidence_extension,
 )
+
+# The Grievance Service's evidence rules (its grievance_attachment.py and attachment.py),
+# copied so the mock refuses what the service refuses.
+EVIDENCE_MAX_FILES = 10
+EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+EVIDENCE_TYPES = {
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png": "image/png",
+	".pdf": "application/pdf",
+	".mp3": "audio/mpeg",
+}
 
 _COUNTER = 100
 
@@ -431,7 +435,7 @@ class MockGrievanceClient(GrievanceClient):
 	def upload_attachments(
 		self, ticket_id: str, files: list[EvidenceFile], *, document_type: str | None = None
 	) -> list[dict]:
-		"""Same refusals as the service: unknown ticket, type, size, and ten a case.
+		"""The service's refusals: unknown ticket, file type, size, and ten files a case.
 
 		The type is taken from the file name here. The live service reads the leading
 		bytes instead, so a renamed file passes this mock and is refused there.
@@ -445,10 +449,10 @@ class MockGrievanceClient(GrievanceClient):
 			if not upload.content:
 				raise GrievanceRejected(f"The uploaded file {upload.file_name} is empty.")
 			if len(upload.content) > EVIDENCE_MAX_BYTES:
-				raise GrievanceRejected(f"{upload.file_name} is larger than 10 MB.")
-			if evidence_extension(upload.file_name) not in EVIDENCE_TYPES:
+				raise GrievanceRejected(f"File '{upload.file_name}' exceeds maximum size of 10 MB.")
+			if _extension(upload.file_name) not in EVIDENCE_TYPES:
 				raise GrievanceRejected(
-					f"{upload.file_name} is not a file type we recognise. Allowed: {EVIDENCE_TYPE_LABEL}."
+					f"{upload.file_name} is not a file type we recognise. Allowed: JPG, PNG, PDF and MP3."
 				)
 		created = []
 		for upload in files:
@@ -456,11 +460,11 @@ class MockGrievanceClient(GrievanceClient):
 			row = {
 				"name": f"GAT-{self._attachment_counter:05d}",
 				"file_name": upload.file_name,
-				"mime_type": EVIDENCE_TYPES[evidence_extension(upload.file_name)],
+				"mime_type": EVIDENCE_TYPES[_extension(upload.file_name)],
 				"size_bytes": len(upload.content),
 				"document_type": document_type,
 				"timeline_entry": None,
-				"scan_status": SCAN_PENDING,
+				"scan_status": "Pending",
 				"scanned_at": None,
 				"creation": datetime.now(UTC).isoformat(),
 				"content": upload.content,
@@ -476,21 +480,25 @@ class MockGrievanceClient(GrievanceClient):
 			raise GrievanceNotFound(ticket_id)
 		rows = self._attachments.get(ticket_id, [])
 		for row in rows:
-			if row["scan_status"] == SCAN_PENDING:
-				row["scan_status"] = SCAN_CLEAN
+			if row["scan_status"] == "Pending":
+				row["scan_status"] = "Clean"
 				row["scanned_at"] = datetime.now(UTC).isoformat()
 		return [to_attachment(row) for row in rows]
 
-	def get_attachment_content(self, attachment_id: str) -> AttachmentContent:
+	def get_attachment_content(self, attachment_id: str) -> bytes:
 		for rows in self._attachments.values():
 			for row in rows:
 				if row["name"] != attachment_id:
 					continue
-				if row["scan_status"] != SCAN_CLEAN:
+				if row["scan_status"] != "Clean":
 					raise GrievanceRejected(
 						f"{row['file_name']} is not available: its scan status is {row['scan_status']}."
 					)
-				return AttachmentContent(
-					content=row["content"], file_name=row["file_name"], mime_type=row["mime_type"]
-				)
+				return row["content"]
 		raise GrievanceNotFound(attachment_id)
+
+
+def _extension(file_name: str) -> str:
+	"""Lower-case extension with its dot (".pdf"), or "" when the name has none."""
+	name = file_name.lower()
+	return name[name.rfind(".") :] if "." in name else ""

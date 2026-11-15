@@ -48,13 +48,13 @@ Summary returns the upstream `data` object unchanged: `cards` of `status`, `labe
 
 Evidence is the documents attached to a grievance after it is filed. The files are sent on to the Grievance Service and are not stored in DA Services.
 
-Upload is `multipart/form-data`: one or more files under `files` (the key `file` is accepted too) and an optional `document_type` label. The limits are the Grievance Service's own: JPG, PNG, PDF or MP3, 10 MB a file, and 10 files a grievance in total. DA Services refuses a wrong extension, an empty file, a file over 10 MB, and more than 10 files in one request with `400 VALIDATION_ERROR`; `details` names each refused file and why. The Grievance Service then checks the type again from the file's content, so a renamed file is refused there. One request is all or nothing: if any file is refused, none is stored. The whole request must also fit the site's upload limit (Frappe's `max_file_size`, 25 MB unless raised), so the portal sends one file a request.
+Upload is `multipart/form-data`: one or more files under `files` (the key `file` is accepted too) and an optional `document_type` label. DA Services requires at least one file and checks nothing else. The Grievance Service owns the rules: JPG, PNG, PDF or MP3 (read from the file's content, so a renamed file is refused), 10 MB a file, and 10 files a grievance in total. Its refusal comes back as `400` with its message. One request is all or nothing: if any file is refused, none is stored. The whole request must also fit the site's upload limit (Frappe's `max_file_size`, 25 MB unless raised), so the portal sends one file a request.
 
-A successful upload returns `201` with `data.attachments`: `attachment_id`, `file_name`, `mime_type`, `size_bytes`, `document_type`, `scan_status`, `scanned_at`, `uploaded_at`, `timeline_entry`, and `viewable`. A new file is `scan_status: "Pending"` until the service's virus scan finishes, then `Clean` or `Infected`. `viewable` is true only for `Clean`.
+A successful upload returns `201` with `data` as the list of new rows: `attachment_id`, `file_name`, `mime_type`, `size_bytes`, `document_type`, `scan_status`, `scanned_at`, `uploaded_at`, and `timeline_entry`. The service names the row `attachment` on upload and `name` in the list; both are `attachment_id` here, and `creation` is `uploaded_at`. A new file is `scan_status: "Pending"` until the service's virus scan finishes, then `Clean` or `Infected`.
 
-The list returns every file, Pending and Infected ones too, oldest first. `meta` carries `count`, `max` (10), and `remaining`.
+The list returns every file, Pending and Infected ones too, oldest first.
 
-View returns the file itself, not JSON: inline by default, a download with `?download=1`. It first checks the attachment is on that ticket (`404` otherwise). A file that is not Clean is refused with `409`: `ATTACHMENT_NOT_READY` while it is Pending, `ATTACHMENT_BLOCKED` when it is Infected.
+View returns the file itself, not JSON: inline by default, a download with `?download=1`. The service reads an attachment by its id alone, so DA Services first checks the attachment is on the ticket in the path (`404` otherwise). The service refuses a file that is not Clean; that comes back as `400` with its message.
 
 An upload is never queued. When the Grievance Service is down the caller gets `503 SERVICE_UNAVAILABLE` and sends the files again. A grievance that is still queued (`sync_state: "pending"`) has no ticket yet, so evidence can be added only after it is synced.
 

@@ -129,49 +129,10 @@ class GrievanceResult:
 	raw: dict = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# Evidence (attachments on a filed grievance)
-# ---------------------------------------------------------------------------
-
-# The Grievance Service's own limits (grievance_attachment.py, attachment.py). It
-# enforces them again on its side and reads the type from the file's leading bytes;
-# these copies only let DA Services refuse an obviously bad upload before sending it.
-EVIDENCE_MAX_FILES = 10
-EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
-EVIDENCE_TYPES: dict[str, str] = {
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".png": "image/png",
-	".pdf": "application/pdf",
-	".mp3": "audio/mpeg",
-}
-EVIDENCE_TYPE_LABEL = "JPG, PNG, PDF and MP3"
-
-SCAN_PENDING = "Pending"
-SCAN_CLEAN = "Clean"
-SCAN_INFECTED = "Infected"
-
-
-def evidence_extension(file_name: str | None) -> str:
-	"""Lower-case extension with its dot (".pdf"), or "" when the name has none."""
-	name = (file_name or "").strip().lower()
-	dot = name.rfind(".")
-	return name[dot:] if dot > 0 else ""
-
-
 @dataclass(frozen=True)
 class EvidenceFile:
 	"""One document to attach to a grievance."""
 
 	file_name: str
 	content: bytes
-	mime_type: str | None = None
-
-
-@dataclass(frozen=True)
-class AttachmentContent:
-	"""The bytes of one attachment, as the Grievance Service streams them."""
-
-	content: bytes
-	file_name: str | None = None
 	mime_type: str | None = None
