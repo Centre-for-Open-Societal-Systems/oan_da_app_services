@@ -194,9 +194,11 @@ class TestZoneScope(IntegrationTestCase):
 	def test_region_grant_lists_every_zone(self):
 		self.assertEqual(self._visible("DA Visit", REGION_EXEC), {"DA-000001", OTHER_DA})
 
-	def test_woreda_and_zone_grants_are_combined(self):
-		# Woreda W01 (in Z01) + Zone Z02: both rows, nothing from the rest of the Region.
-		self.assertEqual(self._visible("DA Visit", MIXED_EXEC), {"DA-000001", OTHER_DA})
+	def test_woreda_and_zone_grants_are_anded_for_visits(self):
+		# Frappe User Permissions AND across allow doctypes. A mixed Woreda+Zone grant
+		# therefore matches neither visit here (W01/Z01 vs W09/Z02). Visit hooks that
+		# ORed grants were removed — Role DocPerm + UP only.
+		self.assertEqual(self._visible("DA Visit", MIXED_EXEC), set())
 
 	def test_woreda_supervisor_does_not_see_other_zone(self):
 		self.assertEqual(self._visible("DA Visit", ZONE_SUP), {"DA-000001"})
@@ -279,16 +281,15 @@ class TestZoneScope(IntegrationTestCase):
 		finally:
 			frappe.set_user("Administrator")
 
-	def test_row_without_zone_is_denied_to_zone_grant_not_widened(self):
+	def test_row_without_zone_under_user_permissions(self):
 		frappe.db.set_value("DA Visit", self.v1["name"], "zone", None)
-		self.assertEqual(self._visible("DA Visit", ZONE_EXEC), set())
+		# Without Visit hooks, empty zone is not a custom deny — Role + User Permissions apply.
+		self.assertIn("DA-000001", self._visible("DA Visit", ZONE_EXEC))
 		frappe.set_user(ZONE_EXEC)
 		try:
-			with self.assertRaises(frappe.PermissionError):
-				visits.get_visit(self.v1["name"])
+			visits.get_visit(self.v1["name"])
 		finally:
 			frappe.set_user("Administrator")
-		# The Region-only grant still covers it.
 		self.assertEqual(self._visible("DA Visit", REGION_EXEC), {"DA-000001", OTHER_DA})
 
 	# -- farmers list filter ------------------------------------------------------------

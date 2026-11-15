@@ -395,10 +395,9 @@
    "label": "Scope"
   },
   {
-   "description": "Posting codes copied from the DA's registry record on insert so officer lists filter without a registry call.",
+   "description": "Posting codes for officer lists; row visibility uses DocType Role permissions + User Permissions.",
    "fieldname": "region",
    "fieldtype": "Link",
-   "ignore_user_permissions": 1,
    "label": "Region",
    "options": "DA Region",
    "search_index": 1
@@ -406,7 +405,6 @@
   {
    "fieldname": "zone",
    "fieldtype": "Link",
-   "ignore_user_permissions": 1,
    "label": "Zone",
    "options": "DA Zone",
    "search_index": 1
@@ -414,7 +412,6 @@
   {
    "fieldname": "woreda",
    "fieldtype": "Link",
-   "ignore_user_permissions": 1,
    "label": "Woreda",
    "options": "DA Woreda",
    "search_index": 1
@@ -422,7 +419,6 @@
   {
    "fieldname": "kebele",
    "fieldtype": "Link",
-   "ignore_user_permissions": 1,
    "label": "Kebele",
    "options": "DA Kebele",
    "search_index": 1

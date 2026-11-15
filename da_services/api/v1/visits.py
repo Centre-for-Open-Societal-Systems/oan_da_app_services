@@ -31,8 +31,9 @@ in production) serialised as ISO 8601 without an offset, the Frappe convention; 
 `time` in the plan form are read the same way. Clients must not apply a UTC offset.
 
 Access and row visibility come from DA Visit DocType permissions, User Permissions,
-and permission hooks via frappe.get_list / DocType insert. Handlers do not use
-``require_roles``, ``ScopeContext``, or service-side permission helpers.
+via Frappe DocType Role permissions + User Permissions (``frappe.get_list`` /
+DocType ``insert``). Handlers do not use ``require_roles``, ``ScopeContext``,
+custom Visit permission hooks, or service-side permission helpers.
 """
 
 from __future__ import annotations

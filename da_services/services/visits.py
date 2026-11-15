@@ -1,9 +1,8 @@
 """DA Visit use-cases behind the dashboard, planner and outcome form (data-model 5.3).
 
-Visibility and create/write access are enforced by Frappe DocType permissions,
-User Permissions, and the DA Visit hooks (``da_visit_query_conditions`` /
-``has_da_visit_permission``). These services apply request filters and product
-rules only; they do not gate on hardcoded role lists or re-check Woreda/Kebele scope.
+Visibility and create/write access are Frappe DocType Role permissions + User
+Permissions only (no custom Visit permission hooks). These services apply request
+filters and product rules only.
 """
 
 from __future__ import annotations
@@ -196,7 +195,7 @@ def plan_visit(
 ) -> dict:
 	"""Plan one visit. ``user`` is required from the FE; ``da_id`` is ``fetch_from`` that User.
 
-	No role / scope / permission helpers here — Frappe DocType permissions and hooks own access.
+	No role / scope / permission helpers here — Frappe DocType Role permissions + User Permissions own access.
 	``da_id`` on the request is ignored for the row (fetch_from); it is only accepted for
 	backward-compatible callers and unused. Specialization uses ``User.da_registry_id``.
 	"""
@@ -352,7 +351,7 @@ def plan_visits_batch(
 
 
 def _load_visit(name: str):
-	"""Load a visit if Frappe list permissions expose it (hooks + User Permissions)."""
+	"""Load a visit if Frappe list permissions expose it (Role DocPerm + User Permissions)."""
 	visible = frappe.get_list("DA Visit", filters={"name": name}, limit=1)
 	if not visible:
 		if frappe.db.exists("DA Visit", name):
@@ -618,7 +617,7 @@ def list_visits(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Visits visible via permission hooks. Optional query args narrow the permitted set."""
+	"""Visits visible via Role DocPerm + User Permissions. Optional query args narrow that set."""
 	filters: dict = {}
 	if date:
 		d = getdate(date)

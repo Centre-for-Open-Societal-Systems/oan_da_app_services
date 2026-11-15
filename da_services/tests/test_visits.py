@@ -297,8 +297,8 @@ class TestDAVisit(IntegrationTestCase):
 		rows, total = visits.list_visits(status="Completed")
 		self.assertEqual(total, 0)
 
-	def test_list_area_filters_use_permission_hooks(self):
-		# Out-of-scope geography filters no longer throw; get_list + hooks return empty.
+	def test_list_area_filters_use_user_permissions(self):
+		# Out-of-scope geography filters no longer throw; get_list + User Permissions return empty.
 		frappe.set_user(SUP)
 		try:
 			rows, total = visits.list_visits(woreda=self.geo["woreda"])

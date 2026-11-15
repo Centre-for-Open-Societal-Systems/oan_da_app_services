@@ -9,11 +9,11 @@ and the weekly activity report. Screen map: [api-da-screens.md](api-da-screens.m
    `key`. Send `Authorization: Bearer <access_token>` on every visits call.
    Visits do not require `X-CSRF-Token` (native DocTypes, not staff registry).
 2. `oan_auth_service` verifies the Bearer token and sets the session user.
-3. **Access and row visibility** are Frappe DocType permissions + User Permissions
-   + DA Visit hooks (`da_visit_query_conditions` / `has_da_visit_permission`) via
-   `frappe.get_list` / DocType `insert`. Handlers and the visits service do **not**
-   use `require_roles`, `ScopeContext`, or service-side permission/DA resolve helpers.
-   Services do **not** re-check Woreda/Kebele/role geography.
+3. **Access and row visibility** are Frappe DocType Role permissions + User
+   Permissions via `frappe.get_list` / DocType `insert`. There are **no** custom
+   DA Visit `permission_query_conditions` / `has_permission` hooks. Handlers and
+   the visits service do **not** use `require_roles`, `ScopeContext`, or
+   service-side permission/DA resolve helpers.
 
 Optional list filters (`date` / `from`+`to`, `status`, `farmer_id`, `da_id`, `region`,
 `zone`, `woreda`, `kebele`) only narrow the already-permitted set.

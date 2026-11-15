@@ -604,7 +604,7 @@
                 }
               ]
             },
-            "description": "GET /visits — visits the caller may see via permission hooks + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRead allowed by DA Visit DocType permissions + hooks / User Permissions."
+            "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
           },
           "response": []
         },

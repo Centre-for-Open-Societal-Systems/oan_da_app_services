@@ -116,32 +116,6 @@ def has_da_leave_request_permission(doc, ptype: str = "read", user: str | None =
 	return has_da_scoped_permission(doc, ptype, user)
 
 
-def da_visit_query_conditions(user: str | None = None) -> str:
-	"""DA Visit list filter (DA-211 Phase 6).
-
-	A Development Agent sees their own DA-ID rows and visits in Kebeles they hold an
-	Effective assignment for. Officers stay on Region / Zone / Woreda grants.
-	"""
-	user = user or frappe.session.user
-	ctx = get_scope_context(user)
-	if ctx.unrestricted:
-		return ""
-	t = "`tabDA Visit`"
-	if ctx.has_any_role(C.ROLE_DA):
-		if not ctx.da_ids:
-			return DENY
-		own = f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
-		from da_services.services.farmers import _get_da_assigned_kebeles
-
-		kebeles = _get_da_assigned_kebeles(list(ctx.da_ids))
-		if not kebeles:
-			return own
-		return f"({own} or {t}.`kebele` in ({_sql_in(kebeles)}))"
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		return _officer_scope_clause(t, ctx)
-	return DENY
-
-
 def da_notification_query_conditions(user: str | None = None) -> str:
 	"""Everyone sees only their own notifications; administrators see all."""
 	user = user or frappe.session.user
@@ -155,39 +129,6 @@ def has_da_notification_permission(doc, ptype: str = "read", user: str | None = 
 	if _is_unrestricted(user):
 		return True
 	return doc.user == user and ptype in ("read", "write")
-
-
-def has_da_visit_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
-	"""Single-document mirror of da_visit_query_conditions. Writes stay own-DA only.
-
-	``create`` runs before geo is stamped, so it keys off ``da_id`` / plan ``user``
-	(and Supervisor Role DocPerm) instead of region/woreda/zone.
-	"""
-	user = user or frappe.session.user
-	ctx = get_scope_context(user)
-	if ctx.unrestricted:
-		return True
-	if ptype == "create":
-		if ctx.has_any_role(C.ROLE_DA):
-			target = doc.get("da_id") or frappe.db.get_value("User", doc.get("user"), "da_registry_id")
-			return bool(target) and ctx.owns_da(target)
-		# Supervisor Role DocPerm already grants create; geo is stamped after insert.
-		return ctx.has_any_role(C.ROLE_SUPERVISOR)
-	if ctx.has_any_role(C.ROLE_DA):
-		if ctx.owns_da(doc.da_id):
-			return True
-		if ptype != "read":
-			return False
-		if not doc.kebele or not ctx.da_ids:
-			return False
-		from da_services.services.farmers import _get_da_assigned_kebeles
-
-		return doc.kebele in _get_da_assigned_kebeles(list(ctx.da_ids))
-	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		return ctx.covers(doc.region, doc.woreda, doc.zone)
-	if ctx.has_any_role(C.ROLE_EXECUTIVE):
-		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
-	return False
 
 
 def rbac_assignment_query_conditions(user: str | None = None) -> str:
