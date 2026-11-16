@@ -21,7 +21,7 @@
   "col_window",
   "window_close",
   "sec_meta",
-  "languages_json",
+  "language",
   "sec_parameters",
   "parameters",
   "sec_scope",
@@ -119,9 +119,11 @@
    "label": "Languages"
   },
   {
-   "fieldname": "languages_json",
-   "fieldtype": "Long Text",
-   "label": "Languages JSON",
+   "description": "Language the survey runs in, e.g. English. Several languages are comma-separated.",
+   "fieldname": "language",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Language",
    "reqd": 1
   },
   {
@@ -179,7 +181,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-03 12:00:00.000000",
+ "modified": "2026-11-16 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Template",

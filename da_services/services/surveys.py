@@ -7,6 +7,7 @@ in Region. No separate Deployment DocType in v1 — create = publish.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 from datetime import timedelta
@@ -35,6 +36,7 @@ from da_services.utils.permissions import (
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
+ANSWER_DOCTYPE = "DA Survey Answer"
 AREA_DOCTYPE = "DA Administrative Area"
 # States a client may ask for. Declined is forced by the server when consent is
 # declined; Rejected and Conflict are server-only terminal states.
@@ -73,6 +75,18 @@ RATING_VALUES = frozenset({"1", "2", "3", "4", "5"})
 # XLSX export columns that already exist on DA Survey Response / DA Survey Template.
 # Kept as data so the proposed contract is reviewable in docs/surveys-integration.md.
 EXPORT_SHEET = "Survey Responses"
+# Second sheet: each written question beside the farmer's answer, one row per question per response.
+EXPORT_ANSWERS_SHEET = "Questions and Answers"
+EXPORT_ANSWER_COLUMNS = (
+	"Response ID",
+	"Farmer ID",
+	"Collector DA ID",
+	"Woreda",
+	"Kebele",
+	"Question No.",
+	"Question",
+	"Answer",
+)
 EXPORT_BASE_COLUMNS = (
 	"Response ID",
 	"Survey ID",
@@ -132,12 +146,6 @@ def _json_load(raw, default=None):
 		return default
 
 
-def _json_dump(value) -> str | None:
-	if value is None:
-		return None
-	return json.dumps(value, ensure_ascii=False)
-
-
 def format_survey_date(value) -> str:
 	"""Frontend display form: '08 Sep 2026'."""
 	d = getdate(value)
@@ -155,22 +163,19 @@ def derive_ui_status(status: str, window_close) -> str:
 	return "Open"
 
 
+def _languages_of(text) -> list[str]:
+	"""Survey languages from the template's `language` text ("English" or "English, Amharic")."""
+	return [part.strip() for part in str(text or "").split(",") if part.strip()]
+
+
+def _language_text(languages) -> str:
+	"""The template's `language` text: the language names, comma-separated."""
+	return ", ".join(languages)
+
+
 def _canonical_language(value: str | None) -> str | None:
 	key = (value or "").strip().lower()
 	return LANGUAGE_ALIASES.get(key)
-
-
-def _translations_of(raw) -> dict:
-	parsed = _json_load(raw, {})
-	if not isinstance(parsed, dict):
-		return {}
-	out = {}
-	for key, value in parsed.items():
-		language = _canonical_language(key)
-		text = str(value or "").strip()
-		if language and language != "English" and text:
-			out[language] = text
-	return out
 
 
 def _clean_translations(raw) -> dict:
@@ -205,6 +210,27 @@ def _options_of(raw) -> list[str]:
 	return []
 
 
+# A choice question keeps its choices in the parameter's option_1 .. option_4 columns, and
+# a translated prompt in one column per language.
+MAX_OPTIONS = 4
+OPTION_FIELDS = tuple(f"option_{i}" for i in range(1, MAX_OPTIONS + 1))
+TRANSLATION_FIELDS = {"Amharic": "prompt_amharic", "Afaan Oromoo": "prompt_afaan_oromoo"}
+
+
+def _row_options(row) -> list[str]:
+	"""A parameter row's choices, in order, from its option columns."""
+	return [str(row.get(f)).strip() for f in OPTION_FIELDS if str(row.get(f) or "").strip()]
+
+
+def _row_translations(row) -> dict:
+	"""A parameter row's translated prompts: {language: text}."""
+	return {
+		language: str(row.get(f)).strip()
+		for language, f in TRANSLATION_FIELDS.items()
+		if str(row.get(f) or "").strip()
+	}
+
+
 def serialize_parameter(row) -> dict:
 	out = {
 		"id": row.parameter_id,
@@ -213,14 +239,14 @@ def serialize_parameter(row) -> dict:
 		"type": row.response_type,
 		"required": bool(row.required),
 	}
-	options = _options_of(row.options_json)
+	options = _row_options(row)
 	if options:
 		out["options"] = options
 	if row.helper:
 		out["helper"] = row.helper
 	if row.prefill:
 		out["prefill"] = row.prefill
-	translations = _translations_of(getattr(row, "prompts_json", None))
+	translations = _row_translations(row)
 	if translations:
 		out["translations"] = translations
 	if row.condition_parameter_id and row.condition_equals is not None:
@@ -373,7 +399,7 @@ def serialize_survey(
 	counts = _response_counts(doc.name, collector_da_id=collector_da_id)
 	stored = doc.status
 	ui_status = derive_ui_status(stored, doc.window_close)
-	languages = _json_load(doc.languages_json, []) or []
+	languages = _languages_of(doc.language)
 	out = {
 		"id": doc.name,
 		"name": doc.title,
@@ -405,6 +431,63 @@ def serialize_survey(
 	return out
 
 
+def _answer_rows(parameters, answers: dict) -> list[dict]:
+	"""Rows for the response's `answers` child table: one per value, in question order.
+
+	A multi answer gives one row per selected option, and a rating also fills the
+	numeric `answer_rating` column so averages can be taken in SQL. Empty values are
+	not stored.
+	"""
+	rows: list[dict] = []
+	for p in sorted(parameters, key=lambda p: int(p.get("sort_order") or 0)):
+		if p.parameter_id not in answers:
+			continue
+		value = answers[p.parameter_id]
+		for item in value if isinstance(value, list) else [value]:
+			if item is None or str(item).strip() == "":
+				continue
+			text = str(item)
+			rows.append(
+				{
+					"parameter_id": p.parameter_id,
+					"question": p.prompt,
+					"response_type": p.response_type,
+					"answer_text": text,
+					"answer_rating": int(text)
+					if p.response_type == "rating" and text in RATING_VALUES
+					else None,
+				}
+			)
+	return rows
+
+
+def _answers_of(rows) -> dict:
+	"""Answer rows back to the API shape: {parameter_id: value}, a list for multi."""
+	out: dict = {}
+	for r in rows:
+		if r.response_type == "multi":
+			out.setdefault(r.parameter_id, []).append(r.answer_text)
+		else:
+			out[r.parameter_id] = r.answer_text
+	return out
+
+
+def _answers_by_response(names: list[str]) -> dict[str, dict]:
+	"""Answers of many responses in one query, keyed by response name."""
+	if not names:
+		return {}
+	grouped: dict[str, list] = {}
+	for r in frappe.get_all(
+		ANSWER_DOCTYPE,
+		filters={"parent": ("in", names), "parenttype": RESPONSE_DOCTYPE},
+		fields=["parent", "parameter_id", "response_type", "answer_text"],
+		order_by="parent asc, idx asc",
+		limit_page_length=0,
+	):
+		grouped.setdefault(r.parent, []).append(r)
+	return {name: _answers_of(grouped.get(name, [])) for name in names}
+
+
 def serialize_response(doc) -> dict:
 	return {
 		"id": doc.name,
@@ -413,7 +496,7 @@ def serialize_response(doc) -> dict:
 		"collector_da_id": doc.da_id,
 		"farmer_id": doc.farmer_id,
 		"consent": doc.consent or None,
-		"answers": _json_load(doc.answers_json, {}) or {},
+		"answers": _answers_of(doc.answers),
 		"sync_state": doc.sync_state,
 		"started_at": doc.started_at.isoformat() if doc.started_at else None,
 		"completed_at": doc.completed_at.isoformat() if doc.completed_at else None,
@@ -646,6 +729,8 @@ def _validate_template_input(
 		options = _options_of(q.get("options"))
 		if qtype in ("single", "multi") and len(options) < 2:
 			errors.append(_("Question {0} needs at least two choices.").format(i))
+		if len(options) > MAX_OPTIONS:
+			errors.append(_("Question {0} can have at most {1} choices.").format(i, MAX_OPTIONS))
 		clean_questions.append(
 			{
 				"prompt": prompt,
@@ -671,8 +756,8 @@ def _parameter_rows(questions: list[dict]) -> list[dict]:
 			"prompt": q["prompt"],
 			"response_type": q["type"],
 			"required": 1 if q["required"] else 0,
-			"options_json": _json_dump(q["options"]) if q["options"] else None,
-			"prompts_json": _json_dump(q["translations"]) if q["translations"] else None,
+			**dict(zip(OPTION_FIELDS, q["options"], strict=False)),
+			**{TRANSLATION_FIELDS[language]: text for language, text in q["translations"].items()},
 		}
 		if q["type"] == "rating":
 			row["helper"] = "1 = very dissatisfied · 5 = very satisfied"
@@ -731,15 +816,15 @@ def _template_payload_from_doc(doc) -> dict:
 		"survey_type": doc.survey_type,
 		"window_open": str(getdate(doc.window_open)),
 		"window_close": str(getdate(doc.window_close)),
-		"languages": sorted(_json_load(doc.languages_json, []) or []),
+		"languages": sorted(_languages_of(doc.language)),
 		"target_farmers": int(doc.target_farmers or 0),
 		"questions": [
 			{
 				"prompt": p.prompt,
 				"type": p.response_type,
-				"options": _options_of(p.options_json),
+				"options": _row_options(p),
 				"required": bool(p.required),
-				"translations": dict(sorted(_translations_of(p.prompts_json).items())),
+				"translations": dict(sorted(_row_translations(p).items())),
 			}
 			for p in doc.parameters
 			if p.response_type not in ("consent", "auto")
@@ -849,7 +934,7 @@ def create_template(
 			"status": "Open",
 			"window_open": start,
 			"window_close": end,
-			"languages_json": _json_dump(langs),
+			"language": _language_text(langs),
 			"target_farmers": target,
 			"est_minutes": _est_minutes(len(params)),
 			"created_by_user": ctx.user,
@@ -921,7 +1006,7 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 		unknown = [l for l in langs if l not in SURVEY_LANGUAGES]
 		if unknown:
 			frappe.throw(_("Unknown language: {0}.").format(", ".join(unknown)), frappe.ValidationError)
-		doc.languages_json = _json_dump(langs)
+		doc.language = _language_text(langs)
 
 	target = body.get("targetFarmers", body.get("target_farmers"))
 	if target is not None:
@@ -954,7 +1039,7 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 			survey_type=doc.survey_type,
 			open_date=doc.window_open,
 			close_date=doc.window_close,
-			languages=_json_load(doc.languages_json, []),
+			languages=_languages_of(doc.language),
 			target_farmers=doc.target_farmers,
 			questions=body["questions"],
 		)
@@ -971,7 +1056,7 @@ def patch_template(survey_id: str, body: dict, ctx: ScopeContext | None = None) 
 					"survey_type": doc.survey_type,
 					"window_open": doc.window_open,
 					"window_close": doc.window_close,
-					"languages_json": doc.languages_json,
+					"language": doc.language,
 					"target_farmers": doc.target_farmers,
 					"region": doc.region,
 					"zone": doc.zone,
@@ -1037,7 +1122,7 @@ def list_templates(
 			"status",
 			"window_open",
 			"window_close",
-			"languages_json",
+			"language",
 			"modified",
 		],
 		order_by="modified desc",
@@ -1056,7 +1141,7 @@ def list_templates(
 					row.survey_type or "",
 					row.template_version or "",
 					ui_status,
-					" ".join(_json_load(row.languages_json, []) or []),
+					" ".join(_languages_of(row.language)),
 				]
 			).lower()
 			if needle not in haystack:
@@ -1208,7 +1293,7 @@ def _validate_answers(parameters, answers: dict, consent: str | None, sync_state
 					_("Text answer cannot exceed {0} characters.").format(MAX_TEXT), frappe.ValidationError
 				)
 		elif p.response_type in CHOICE_TYPES:
-			options = _options_of(p.options_json)
+			options = _row_options(p)
 			if p.response_type == "multi":
 				if not isinstance(val, list):
 					frappe.throw(_("Multi answers must be a list."), frappe.ValidationError)
@@ -1345,6 +1430,9 @@ def submit_response(
 	answers["p2"] = ref.get("reg_id") or canonical_farmer_id
 	answers["p3"] = ref.get("kebele")
 	_validate_answers(doc_survey.parameters, answers, consent, state)
+	answer_rows = _answer_rows(doc_survey.parameters, answers)
+	# What a stored response reads back as, for the idempotent-replay comparison.
+	stored_answers = _answers_of([frappe._dict(r) for r in answer_rows])
 
 	# Idempotent replay is scoped to the same survey *and* collector. A client_op_id
 	# owned by another survey / DA is a conflict and never returns its row.
@@ -1353,7 +1441,7 @@ def submit_response(
 		existing = frappe.db.get_value(
 			RESPONSE_DOCTYPE,
 			{"client_op_id": client_op_id, "survey": survey_id, "da_id": collector},
-			["name", "farmer_id", "consent", "answers_json", "sync_state"],
+			["name", "farmer_id", "consent", "sync_state"],
 			as_dict=True,
 		)
 		if existing:
@@ -1361,7 +1449,7 @@ def submit_response(
 				existing.farmer_id == canonical_farmer_id
 				and (existing.consent or None) == consent
 				and (existing.sync_state or None) == state
-				and (_json_load(existing.answers_json, {}) or {}) == answers
+				and _answers_by_response([existing.name])[existing.name] == stored_answers
 			)
 			if not same_payload:
 				raise SurveyConflictError(_("client_op_id was already used with a different response."))
@@ -1396,7 +1484,7 @@ def submit_response(
 			"da_id": collector,
 			"farmer_id": canonical_farmer_id,
 			"consent": consent,
-			"answers_json": _json_dump(answers),
+			"answers": answer_rows,
 			"sync_state": state,
 			"started_at": started,
 			"completed_at": completed,
@@ -1419,7 +1507,7 @@ def submit_response(
 			existing = frappe.db.get_value(
 				RESPONSE_DOCTYPE,
 				{"client_op_id": client_op_id, "survey": survey_id, "da_id": collector},
-				["name", "farmer_id", "consent", "answers_json", "sync_state"],
+				["name", "farmer_id", "consent", "sync_state"],
 				as_dict=True,
 			)
 			if existing:
@@ -1427,7 +1515,7 @@ def submit_response(
 					existing.farmer_id == canonical_farmer_id
 					and (existing.consent or None) == consent
 					and (existing.sync_state or None) == state
-					and (_json_load(existing.answers_json, {}) or {}) == answers
+					and _answers_by_response([existing.name])[existing.name] == stored_answers
 				)
 				if same_payload:
 					return serialize_response(frappe.get_doc(RESPONSE_DOCTYPE, existing.name))
@@ -1515,8 +1603,10 @@ def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 	rows = frappe.get_all(
 		RESPONSE_DOCTYPE,
 		filters={"survey": survey_id},
-		fields=["farmer_id", "consent", "sync_state", "answers_json"],
+		fields=["name", "farmer_id", "consent", "sync_state"],
+		limit_page_length=0,
 	)
+	answers_of = _answers_by_response([r.name for r in rows])
 	by_status: dict[str, int] = {}
 	for r in rows:
 		by_status[r.sync_state] = by_status.get(r.sync_state, 0) + 1
@@ -1530,7 +1620,7 @@ def survey_results(survey_id: str, ctx: ScopeContext | None = None) -> dict:
 		for r in rows:
 			if r.sync_state not in ("Synced", "Queued") or r.consent == "declined":
 				continue
-			answers = _json_load(r.answers_json, {}) or {}
+			answers = answers_of.get(r.name, {})
 			if p.parameter_id not in answers:
 				continue
 			val = answers[p.parameter_id]
@@ -1618,6 +1708,32 @@ def build_export_rows(parameters: list[dict], responses: list[dict]) -> list[lis
 	return rows
 
 
+def build_export_answer_rows(parameters: list[dict], responses: list[dict]) -> list[list]:
+	"""Header + one row per written question per response: the question beside its answer.
+
+	Consent, Farmer ID and Kebele are standard on every survey and already columns of the
+	first sheet, so only the questions the Supervisor wrote are listed.
+	"""
+	questions = [p for p in parameters if p.get("type") not in ("consent", "auto")]
+	rows: list[list] = [list(EXPORT_ANSWER_COLUMNS)]
+	for response in responses:
+		answers = response.get("answers") or {}
+		for number, p in enumerate(questions, start=1):
+			rows.append(
+				[
+					response.get("name") or "",
+					response.get("farmer_reg_id") or response.get("farmer_id") or "",
+					response.get("da_id") or "",
+					response.get("woreda") or "",
+					response.get("kebele") or "",
+					number,
+					p.get("prompt") or "",
+					_cell_text(answers.get(p["id"])),
+				]
+			)
+	return rows
+
+
 def build_export_xlsx(
 	parameters: list[dict],
 	responses: list[dict],
@@ -1626,10 +1742,17 @@ def build_export_xlsx(
 ) -> bytes:
 	"""Build an XLSX workbook for the given parameters and response dicts."""
 	from frappe.utils.xlsxutils import make_xlsx
+	from openpyxl import load_workbook
 
 	data = build_export_rows(parameters, responses)
-	workbook = make_xlsx(data, sheet_name)
-	return workbook.getvalue()
+	# make_xlsx writes a single-sheet, write-only workbook, so the second sheet is added to the saved file.
+	workbook = load_workbook(make_xlsx(data, sheet_name))
+	answers_sheet = workbook.create_sheet(EXPORT_ANSWERS_SHEET)
+	for row in build_export_answer_rows(parameters, responses):
+		answers_sheet.append(row)
+	out = io.BytesIO()
+	workbook.save(out)
+	return out.getvalue()
 
 
 def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[str, bytes]:
@@ -1675,7 +1798,6 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 			"sync_state",
 			"started_at",
 			"completed_at",
-			"answers_json",
 			"region",
 			"zone",
 			"woreda",
@@ -1685,6 +1807,7 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 		limit_page_length=0,
 	)
 
+	answers_of = _answers_by_response([row.name for row in responses])
 	farmer_ids = sorted({row.farmer_id for row in responses if row.farmer_id})
 	reg_ids: dict[str, str | None] = {}
 	if farmer_ids:
@@ -1695,7 +1818,7 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 		):
 			reg_ids[ref.name] = ref.reg_id
 
-	parameters = [{"id": p.parameter_id, "prompt": p.prompt} for p in doc.parameters]
+	parameters = [{"id": p.parameter_id, "prompt": p.prompt, "type": p.response_type} for p in doc.parameters]
 	rows = [
 		{
 			"name": row.name,
@@ -1712,7 +1835,7 @@ def export_responses(survey_id: str, ctx: ScopeContext | None = None) -> tuple[s
 			"zone": row.zone,
 			"woreda": row.woreda,
 			"kebele": row.kebele,
-			"answers": _json_load(row.answers_json, {}) or {},
+			"answers": answers_of.get(row.name, {}),
 		}
 		for row in responses
 	]
