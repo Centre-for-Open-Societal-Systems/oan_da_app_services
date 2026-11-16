@@ -276,6 +276,7 @@ def cleanup_test_rows(
 
 	if da_ids:
 		frappe.db.delete("DA Visit", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Gathering", {"da_id": ["in", da_ids]})
 		frappe.db.delete("DA Task", {"da_id": ["in", da_ids]})
 		frappe.db.delete("DA Farmer Link", {"da_id": ["in", da_ids]})
 		frappe.db.delete("DA Profile Change Request", {"da_id": ["in", da_ids]})
@@ -289,6 +290,8 @@ def cleanup_test_rows(
 	if users:
 		frappe.db.delete("DA Visit", {"user": ["in", users]})
 		frappe.db.delete("DA Visit", {"assigned_by": ["in", users]})
+		frappe.db.delete("DA Gathering", {"user": ["in", users]})
+		frappe.db.delete("DA Gathering", {"assigned_by": ["in", users]})
 		frappe.db.delete("DA Notification", {"user": ["in", users]})
 		frappe.db.delete("DA RBAC Assignment", {"user": ["in", users]})
 		frappe.db.delete("DA Profile Change Request", {"requested_by": ["in", users]})

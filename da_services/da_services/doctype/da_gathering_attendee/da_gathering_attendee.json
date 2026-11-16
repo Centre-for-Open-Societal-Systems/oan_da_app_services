@@ -1,0 +1,60 @@
+{
+ "actions": [],
+ "creation": "2026-11-15 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "farmer_id",
+  "farmer_name",
+  "phone",
+  "sms_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "farmer_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Farmer ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Snapshot from the FE at plan time (required).",
+   "fieldname": "farmer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Farmer Name",
+   "reqd": 1
+  },
+  {
+   "description": "Snapshot from the FE at plan time (required for SMS).",
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Phone",
+   "reqd": 1
+  },
+  {
+   "default": "Pending",
+   "fieldname": "sms_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "SMS Status",
+   "options": "Pending\nQueued\nSent\nFailed\nSkipped"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-17 01:10:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Gathering Attendee",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}
