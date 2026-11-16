@@ -31,6 +31,9 @@ Officer actions (resolve, reopen, close, reassign) are not exposed on the DA rou
 | `GET /api/v1/da-services/grievances` | `GET /v1/grievances` |
 | `GET /api/v1/da-services/grievances/summary` | `GET /v1/grievances/summary` |
 | `GET /api/v1/da-services/grievances/options` | `GET /v1/submitters/options` (no bearer), then `GET /v1/grievances/options` |
+| `POST /api/v1/da-services/grievances/{ticket}/attachments` | `POST /v1/grievances/{ticket_number}/attachments` (multipart) |
+| `GET /api/v1/da-services/grievances/{ticket}/attachments` | `GET /v1/grievances/{ticket_number}/attachments` |
+| `GET /api/v1/da-services/grievances/{ticket}/attachments/{attachment_id}/view` | `GET /v1/grievances/{ticket_number}/attachments`, then `GET /v1/attachments/{attachment_id}/view` |
 | `POST /api/v1/da-services/grievances/sync/retry` | Retries a failed DA Integration Event. DA Services Admin only. |
 
 A successful submit returns `data.ticket_number` as both `ticket_id` and `ticket_number`. There is no `GET /v1/grievances/{ticket_number}`. The case is `GET /v1/grievances/{ticket_number}/timeline`: description, category, type, submitter, SLA, and timeline. Timeline rows map `created_on`, `entry_type`, `author_name`, and `body` to `timestamp`, `action`, `actor`, and `detail`. `sla_consumed_percent` is not on that SLA object.
@@ -40,6 +43,22 @@ List requests send `page`, `page_size`, and `sort_order=desc`. Rows are `data.gr
 Options call public `GET /v1/submitters/options` for categories, types, submitter types, and channels, then `GET /v1/grievances/options` for queue `statuses`, `departments`, and `submission_channels`. Category and type rows are `{value, label, code}`. A type is listed under a category only when that row names `service_category`. The DA route forwards `service_category`, `category`, `department`, `administrative_area`, `search_country`, `country`, and `include_phone_extensions`.
 
 Summary returns the upstream `data` object unchanged: `cards` of `status`, `label`, `order`, `is_open`, `is_terminal`, and `count`. An HTTP error, or a `200` body whose `status` is `error`, is not returned as a summary. The mock uses the same cards. A fixture status that is not a card counts under In Progress.
+
+### Evidence
+
+Evidence is the documents attached to a grievance after it is filed. The files are sent on to the Grievance Service and are not stored in DA Services.
+
+Upload is `multipart/form-data`: one or more files under `files` (the key `file` is accepted too) and an optional `document_type` label. DA Services requires at least one file and checks nothing else. The Grievance Service owns the rules: JPG, PNG, PDF or MP3 (read from the file's content, so a renamed file is refused), 10 MB a file, and 10 files a grievance in total. Its refusal comes back as `400` with its message. One request is all or nothing: if any file is refused, none is stored. The whole request must also fit the site's upload limit (Frappe's `max_file_size`, 25 MB unless raised), so the portal sends one file a request.
+
+A successful upload returns `201` with `data` as the list of new rows: `attachment_id`, `file_name`, `mime_type`, `size_bytes`, `document_type`, `scan_status`, `scanned_at`, `uploaded_at`, and `timeline_entry`. The service names the row `attachment` on upload and `name` in the list; both are `attachment_id` here, and `creation` is `uploaded_at`. A new file is `scan_status: "Pending"` until the service's virus scan finishes, then `Clean` or `Infected`.
+
+The list returns every file, Pending and Infected ones too, oldest first.
+
+View returns the file itself, not JSON: inline by default, a download with `?download=1`. The service reads an attachment by its id alone, so DA Services first checks the attachment is on the ticket in the path (`404` otherwise). The service refuses a file that is not Clean; that comes back as `400` with its message.
+
+An upload is never queued. When the Grievance Service is down the caller gets `503 SERVICE_UNAVAILABLE` and sends the files again. A grievance that is still queued (`sync_state: "pending"`) has no ticket yet, so evidence can be added only after it is synced.
+
+The calls use the same configured Development Agent token as the other grievance routes, so the service credits the upload to that account. Like `GET /grievances/{ticket}`, these routes check the caller's DA Services role and do not check the ticket against the caller's own scope.
 
 ### Submit body
 

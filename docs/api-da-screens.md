@@ -292,6 +292,9 @@ description (≥10), attachments[]`; offline → "QUEUED — case ID assigned on
 | List + stats + facets | `GET /grievances?raised_by&category&status&priority&q` → records + `stats` | Grievance Service via adapter; DA Grievance Link for raised_by / farmer link |
 | Detail + thread + SLA | `GET /grievances/{ticket_id}` | Grievance Service |
 | Raise | `POST /grievances {raised_for: Self/Farmer, farmer_id, category, subject, description, attachments[], client_op_id}` → `{link_id, external_case_id | null, api_sync_state}` | ours: DA Grievance Link → Grievance Service |
+| Upload evidence (list row, Visits header) | `POST /grievances/{ticket_id}/attachments` multipart `files`, `document_type` → `[{attachment_id, file_name, mime_type, size_bytes, document_type, scan_status, scanned_at, uploaded_at}]` | Grievance Service |
+| Evidence list in the detail | `GET /grievances/{ticket_id}/attachments` → the same rows; `scan_status` Pending / Clean / Infected | Grievance Service |
+| Open / download evidence | `GET /grievances/{ticket_id}/attachments/{attachment_id}/view[?download=1]` → the file | Grievance Service; ours: the attachment must be on that ticket |
 | Service status banner | `GET /grievances/sync-status` | ours |
 | Retry failed push | `POST /grievances/sync/retry` | ours |
 

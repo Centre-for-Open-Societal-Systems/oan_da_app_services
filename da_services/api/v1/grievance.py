@@ -3,6 +3,15 @@
 Writes that fail against the upstream service are queued in DA Integration Event and
 retried automatically. Reads are pass-through; if the upstream is down the caller gets
 a 503 error.
+
+Evidence (documents attached to a filed grievance):
+
+POST /api/v1/da-services/grievances/<ticket_id>/attachments                       upload
+GET  /api/v1/da-services/grievances/<ticket_id>/attachments                       list
+GET  /api/v1/da-services/grievances/<ticket_id>/attachments/<attachment_id>/view  open / download
+
+An evidence upload is never queued: the files are not stored in DA Services, so when
+the Grievance Service is down the caller gets a 503 and sends them again.
 """
 
 from __future__ import annotations
@@ -11,8 +20,10 @@ import uuid
 
 import frappe
 from frappe import _
+from frappe.utils import cint
 from oan_auth_service.api.router import prefixed
 from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
+from werkzeug.wrappers import Response
 
 from da_services.integrations.grievance.client import (
 	GrievanceNotFound,
@@ -22,8 +33,9 @@ from da_services.integrations.grievance.client import (
 	get_client,
 )
 from da_services.integrations.grievance.queue import enqueue_event, retry_failed
-from da_services.integrations.grievance.schemas import GrievanceSubmission
+from da_services.integrations.grievance.schemas import EvidenceFile, GrievanceSubmission
 from da_services.services import constants as C
+from da_services.services import grievance_evidence
 from da_services.utils.permissions import require_roles
 
 grievance_route = prefixed("/api/v1/da-services")
@@ -356,3 +368,116 @@ def _resolve_complainant_role(ctx) -> str:
 		if ctx.has_any_role(role):
 			return role
 	return "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Evidence
+# ---------------------------------------------------------------------------
+
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments",
+	methods=("POST",),
+	summary="Upload evidence documents for a grievance",
+)
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def upload_attachments(ticket_id: str):
+	"""Attach evidence to a filed grievance.
+
+	multipart/form-data:
+	    files          one or more files (the key ``file`` is accepted too)
+	    document_type  optional label, for example "Receipt" or "Photo"
+
+	The Grievance Service owns the rules and its refusal comes back as a 400 with its
+	message: JPG, PNG, PDF or MP3, 10 MB a file, 10 files a grievance in total. One
+	request is all or nothing. Each stored file is scan_status "Pending" until the
+	service's virus scan finishes.
+
+	Returns 201: {"data": [{"attachment_id", "file_name", "mime_type", "size_bytes",
+	"document_type", "scan_status", "scanned_at", "uploaded_at", "timeline_entry"}]}
+	"""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	uploads = [u for key in ("files", "file") for u in frappe.request.files.getlist(key)]
+	if not uploads:
+		frappe.throw(_("files is required (multipart/form-data)."), frappe.ValidationError)
+	files = [EvidenceFile(u.filename, u.read(), u.mimetype) for u in uploads]
+
+	try:
+		rows = get_client().upload_attachments(
+			ticket_id, files, document_type=frappe.form_dict.get("document_type") or None
+		)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+	frappe.response["http_status_code"] = 201
+	return success_response(data=rows)
+
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments",
+	methods=("GET",),
+	summary="List the evidence documents of a grievance",
+)
+@frappe.whitelist()
+@handle_api_errors
+def list_attachments(ticket_id: str):
+	"""Evidence on a grievance, oldest first, each with its scan_status (Pending, Clean, Infected)."""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	try:
+		return success_response(data=get_client().list_attachments(ticket_id))
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments/<attachment_id>/view",
+	methods=("GET",),
+	summary="Open or download one evidence document",
+)
+@frappe.whitelist()
+@handle_api_errors
+def view_attachment(ticket_id: str, attachment_id: str):
+	"""The file itself, not JSON. Inline by default; ``?download=1`` for Save As.
+
+	404 when the attachment is not on this ticket. The Grievance Service refuses a file
+	whose virus scan is not Clean; that comes back as a 400 with its message.
+	"""
+	require_roles(*C.GRIEVANCE_ROLES)
+
+	try:
+		row, content = grievance_evidence.read_attachment(ticket_id, attachment_id)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+	response = Response(content, mimetype=row["mime_type"])
+	disposition = "attachment" if cint(frappe.form_dict.get("download")) else "inline"
+	response.headers.add("Content-Disposition", disposition, filename=row["file_name"])
+	response.headers["Cache-Control"] = "private, no-store"
+	response.headers["X-Content-Type-Options"] = "nosniff"
+	# Tells handle_api_errors to hand the Response back as it is, not inside the JSON envelope.
+	frappe.response["type"] = "download"
+	return response
