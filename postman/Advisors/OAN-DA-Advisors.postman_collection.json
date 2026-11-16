@@ -1,0 +1,1252 @@
+{
+  "info": {
+    "_postman_id": "oan-da-advisors",
+    "name": "OAN DA Advisors",
+    "description": "Advisor directory: Ministry of Agriculture subject-matter experts DAs reference for specialist advice.\n\nBase path: /api/v1/da-services\n\n## Endpoints\n- POST /advisors: add an advisor (Administrator only)\n- GET /advisors: list, with q / expertise / region / woreda / status / limit / start\n- GET /advisors/{id}: one advisor\n\n## Who sees what\n- Administrator: adds advisors and sees the whole directory.\n- Supervisor, Executive: read the whole directory.\n- Development Agent: reads only the advisors of their own Woreda(s). An advisor of another Woreda is 404.\n\n## Run order\n1. Set admin_usr / admin_pwd, da_usr / da_pwd and sup_usr / sup_pwd in the environment.\n2. Run folder 0 (the three logins store access_token, da_access_token, sup_access_token).\n3. Run folders 1 to 5 in order. 'Add advisor' stores advisor_id; 'Add advisor in another Woreda' stores other_advisor_id.\n\n## Test data\n- region_name / woreda_name: the Region and Woreda of the DA in da_usr, as master-data names (the Add Advisor form saves names).\n- other_region_name / other_woreda_name: a Woreda the DA is not assigned to.\n\nRequests use the Admin token (access_token) unless the request sets its own.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "admin_usr",
+      "value": ""
+    },
+    {
+      "key": "admin_pwd",
+      "value": ""
+    },
+    {
+      "key": "da_usr",
+      "value": ""
+    },
+    {
+      "key": "da_pwd",
+      "value": ""
+    },
+    {
+      "key": "sup_usr",
+      "value": ""
+    },
+    {
+      "key": "sup_pwd",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "da_access_token",
+      "value": ""
+    },
+    {
+      "key": "sup_access_token",
+      "value": ""
+    },
+    {
+      "key": "region_name",
+      "value": "Oromia"
+    },
+    {
+      "key": "woreda_name",
+      "value": "Bako Tibe"
+    },
+    {
+      "key": "other_region_name",
+      "value": "Amhara"
+    },
+    {
+      "key": "other_woreda_name",
+      "value": "Ankober"
+    },
+    {
+      "key": "advisor_id",
+      "value": ""
+    },
+    {
+      "key": "other_advisor_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "Login (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const row = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", row.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Public login. Stores access_token, used by every request that does not set its own token.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{admin_usr}}\",\n  \"pwd\": \"{{admin_pwd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/auth/login"
+          },
+          "response": []
+        },
+        {
+          "name": "Login (DA)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const row = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"da_access_token\", row.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Stores da_access_token for the Woreda-scope checks.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{da_usr}}\",\n  \"pwd\": \"{{da_pwd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/auth/login"
+          },
+          "response": []
+        },
+        {
+          "name": "Login (Supervisor)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const row = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"sup_access_token\", row.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Stores sup_access_token for the read-only checks.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{sup_usr}}\",\n  \"pwd\": \"{{sup_pwd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/auth/login"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Add advisor (Admin)",
+      "item": [
+        {
+          "name": "Add advisor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Add advisor returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const row = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Returns every advisor field\", function () { pm.expect(row).to.have.all.keys([\"id\", \"name\", \"expertise\", \"unit\", \"region\", \"woreda\", \"phone\", \"email\", \"status\", \"availability\", \"updated_at\"]); });",
+                  "pm.test(\"Id is ADV-nnnn\", function () { pm.expect(row.id).to.match(/^ADV-\\d+$/); });",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"advisor_id\", row.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors. Required: name (3+ characters), expertise, unit, region, woreda, phone (Ethiopian mobile), email. Optional: status (default Active), availability.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Add advisor in another Woreda",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Add advisor returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const row = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Blank availability is filled from the status\", function () { pm.expect(row.availability).to.eql(\"Not taking requests\"); });",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"other_advisor_id\", row.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "A second advisor, outside the DA's Woreda, for the scope checks. Availability is left blank: the server fills it from the status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Meseret Haile\",\n  \"expertise\": \"Irrigation\",\n  \"unit\": \"Small-scale Irrigation Directorate\",\n  \"region\": \"{{other_region_name}}\",\n  \"woreda\": \"{{other_woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"meseret.h@moa.gov.et\",\n  \"status\": \"On leave\",\n  \"availability\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. List advisors",
+      "item": [
+        {
+          "name": "List advisors",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List advisors returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"data is an array\", function () { pm.expect(body.data).to.be.an(\"array\"); });",
+                  "pm.test(\"meta has total, limit, start\", function () { pm.expect(body.meta).to.include.keys([\"total\", \"limit\", \"start\"]); });",
+                  "pm.test(\"Admin sees both added advisors\", function () { const ids = body.data.map(a => a.id); pm.expect(ids).to.include(pm.collectionVariables.get(\"advisor_id\")); pm.expect(ids).to.include(pm.collectionVariables.get(\"other_advisor_id\")); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "GET /advisors. Newest change first. Enable a query parameter to filter. meta.total is the count before paging.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?limit=50&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Hanna",
+                  "disabled": true,
+                  "description": "Searches name, id, expertise, unit, region, Woreda and email."
+                },
+                {
+                  "key": "expertise",
+                  "value": "Agronomy",
+                  "disabled": true
+                },
+                {
+                  "key": "region",
+                  "value": "{{region_name}}",
+                  "disabled": true
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{woreda_name}}",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "Active",
+                  "disabled": true,
+                  "description": "Active | On leave | Inactive"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "1-500, default 50"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search by advisor id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Search returns 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Finds exactly that advisor\", function () { const d = (pm.response.json() || {}).data || []; pm.expect(d.length).to.eql(1); pm.expect(d[0].id).to.eql(pm.collectionVariables.get(\"advisor_id\")); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "q also matches the advisor id.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?q={{advisor_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "{{advisor_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Filter by status and Woreda",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Filter returns 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Every row matches the filter\", function () { ((pm.response.json() || {}).data || []).forEach(a => { pm.expect(a.status).to.eql(\"On leave\"); pm.expect(a.woreda).to.eql(pm.collectionVariables.get(\"other_woreda_name\")); }); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "Filters are exact matches and combine with AND.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?status=On leave&woreda={{other_woreda_name}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "On leave"
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{other_woreda_name}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Advisor details",
+      "item": [
+        {
+          "name": "Get advisor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get advisor returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const row = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Is the advisor that was added\", function () { pm.expect(row.id).to.eql(pm.collectionVariables.get(\"advisor_id\")); pm.expect(row.name).to.eql(\"Dr. Hanna Girma\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "GET /advisors/{id}.",
+            "url": "{{base_url}}/api/v1/da-services/advisors/{{advisor_id}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get advisor (Supervisor reads any Woreda)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Supervisor get returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "A Supervisor reads the whole directory.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{sup_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors/{{other_advisor_id}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. DA sees only their Woreda",
+      "item": [
+        {
+          "name": "List advisors (DA)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA list returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const ids = ((pm.response.json() || {}).data || []).map(a => a.id);",
+                  "pm.test(\"Includes the advisor of the DA's Woreda\", function () { pm.expect(ids).to.include(pm.collectionVariables.get(\"advisor_id\")); });",
+                  "pm.test(\"Leaves out the advisor of another Woreda\", function () { pm.expect(ids).to.not.include(pm.collectionVariables.get(\"other_advisor_id\")); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "A Development Agent gets only the advisors of their own Woreda(s).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{da_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?limit=500",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List another Woreda (DA gets an empty list)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA list returns 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Empty list\", function () { const b = pm.response.json() || {}; pm.expect(b.data).to.eql([]); pm.expect(b.meta.total).to.eql(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "The woreda filter can narrow a DA's scope, never widen it.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{da_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?woreda={{other_woreda_name}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "woreda",
+                  "value": "{{other_woreda_name}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get own-Woreda advisor (DA)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA get returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "Allowed: the advisor is in the DA's Woreda.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{da_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors/{{advisor_id}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Get other-Woreda advisor (DA, 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA get outside Woreda returns 404\", function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "An advisor outside the DA's Woreda reads as not found.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{da_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors/{{other_advisor_id}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Negative cases",
+      "item": [
+        {
+          "name": "Add advisor as DA (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"DA add returns 403\", function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Only an Administrator adds advisors.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{da_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Add advisor as Supervisor (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Supervisor add returns 403\", function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Only an Administrator adds advisors.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{sup_access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "List without a token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Refused without a token\", function () { pm.expect(pm.response.code).to.be.oneOf([401, 403]); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "Every advisor endpoint needs a Bearer token.",
+            "auth": {
+              "type": "noauth"
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Missing name (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Missing name (400) returns 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Says why\", function () { pm.expect((pm.response.json() || {}).message).to.include(\"name\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors with an invalid body. Nothing is stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Name too short (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Name too short (400) returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors with an invalid body. Nothing is stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ab\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown expertise (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unknown expertise (400) returns 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Says why\", function () { pm.expect((pm.response.json() || {}).message).to.include(\"Expertise area\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors with an invalid body. Nothing is stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Astrology\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown status (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unknown status (400) returns 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Says why\", function () { pm.expect((pm.response.json() || {}).message).to.include(\"Status\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors with an invalid body. Nothing is stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Retired\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid phone (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid phone (400) returns 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Says why\", function () { pm.expect((pm.response.json() || {}).message).to.include(\"Ethiopian mobile\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors with an invalid body. Nothing is stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"0912345678\",\n  \"email\": \"hanna.g@moa.gov.et\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid email (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid email (400) returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "POST /advisors with an invalid body. Nothing is stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dr. Hanna Girma\",\n  \"expertise\": \"Agronomy\",\n  \"unit\": \"Crop Development Directorate\",\n  \"region\": \"{{region_name}}\",\n  \"woreda\": \"{{woreda_name}}\",\n  \"phone\": \"+251 91 623 0458\",\n  \"email\": \"someone@\",\n  \"status\": \"Active\",\n  \"availability\": \"Mon-Fri, 08:30-17:00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/v1/da-services/advisors"
+          },
+          "response": []
+        },
+        {
+          "name": "Limit above 500 (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"limit=501 returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "limit must be 1-500.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?limit=501",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "501"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown status filter (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unknown status filter returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "status must be Active, On leave or Inactive.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/advisors?status=Retired",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "advisors"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "Retired"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown advisor (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unknown advisor returns 404\", function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "description": "GET /advisors/{id} for an id that does not exist.",
+            "url": "{{base_url}}/api/v1/da-services/advisors/ADV-DOES-NOT-EXIST"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
