@@ -34,12 +34,17 @@ pipeline {
                 checkout scm
                 script {
                     // Branches that build and deploy. Every other branch only runs the checks.
-                    // staging is not listed yet: the staging namespace has no services-backend /
-                    // services-backend-deps releases (create them with the Ansible apps role first).
+                    // Each target needs the services-backend / services-backend-deps releases and the
+                    // ecr-regcred secret in its namespace on the DA node (Ansible apps role); the
+                    // Deploy stage fails fast if they are missing.
                     def targets = [
                         develop: [
                             namespace: 'develop',
                             verifyUrl: 'https://da-backend-development.oanstaging.com'
+                        ],
+                        staging: [
+                            namespace: 'staging',
+                            verifyUrl: 'https://da-backend-staging.oanstaging.com'
                         ]
                     ]
                     def target = targets[env.BRANCH_NAME]
