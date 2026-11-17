@@ -1,0 +1,288 @@
+{
+  "info": {
+    "_postman_id": "oan-da-gatherings",
+    "name": "OAN DA Gatherings",
+    "description": "Plan / list / get / cancel farmer gatherings (max 20 farmers).\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login — set `user` to the DA Frappe User (email)\n2. Plan a gathering (requires `user`, `title`, `scheduled_at`, `location.name`, `farmers[{farmer_id, farmer_name, phone}]` 1–20). Address geo is stamped from Effective Kebele Assignment.\n3. Get gathering / List gatherings\n4. Cancel gathering\n\n## Auth\nSSO Login only. Native DocType — Bearer token, no staff CSRF.\n\n## Scope\nRole DocPerm + User Permissions on geo Links. No `require_roles` / ScopeContext on handlers.\n\n## SMS\n`notify_farmers_sms` writes Queued log rows. Gateway not wired yet.\n\nDatetimes are site-local ISO without offset.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "usr",
+      "value": ""
+    },
+    {
+      "key": "pwd",
+      "value": ""
+    },
+    {
+      "key": "sso_key",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "user",
+      "value": ""
+    },
+    {
+      "key": "farmer_id",
+      "value": "FR-427495614351"
+    },
+    {
+      "key": "farmer_id_2",
+      "value": ""
+    },
+    {
+      "key": "gathering_id",
+      "value": ""
+    },
+    {
+      "key": "client_op_id",
+      "value": ""
+    },
+    {
+      "key": "scheduled_at",
+      "value": "2026-11-20 09:00:00"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "SSO Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"SSO Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) { pm.collectionVariables.set(\"access_token\", data.access_token); pm.environment.set(\"access_token\", data.access_token); }",
+                  "if (data.csrf_token) { pm.collectionVariables.set(\"csrf_token\", data.csrf_token); pm.environment.set(\"csrf_token\", data.csrf_token); }",
+                  "if (!pm.collectionVariables.get(\"user\") && pm.collectionVariables.get(\"usr\")) { pm.collectionVariables.set(\"user\", pm.collectionVariables.get(\"usr\")); }",
+                  "if (!pm.environment.get(\"user\") && pm.environment.get(\"usr\")) { pm.environment.set(\"user\", pm.environment.get(\"usr\")); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/sso/login",
+            "description": "Stores access_token. Copies usr → user when user is empty (DA self-plan)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Plan",
+      "item": [
+        {
+          "name": "Plan a gathering",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"client_op_id\")) {",
+                  "  pm.collectionVariables.set(\"client_op_id\", \"gath-\" + Date.now());",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Plan returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Has name and Planned status\", function () {",
+                  "  pm.expect(data.name).to.be.a(\"string\");",
+                  "  pm.expect(data.status).to.eql(\"Planned\");",
+                  "  pm.expect(data.user).to.be.ok;",
+                  "});",
+                  "if (data.name) {",
+                  "  pm.collectionVariables.set(\"gathering_id\", data.name);",
+                  "  pm.environment.set(\"gathering_id\", data.name);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user\": \"{{user}}\",\n  \"title\": \"Fertilizer timing training\",\n  \"purpose\": \"Seasonal advisory\",\n  \"scheduled_at\": \"{{scheduled_at}}\",\n  \"location\": {\n    \"name\": \"Kebele meeting hall\",\n    \"landmark\": \"Beside the church\",\n    \"lat\": 9.032,\n    \"lng\": 38.7469\n  },\n  \"farmers\": [\n    {\n      \"farmer_id\": \"{{farmer_id}}\",\n      \"farmer_name\": \"Gathering Postman Farmer\",\n      \"phone\": \"911111111\"\n    }\n  ],\n  \"notify_farmers_sms\": true,\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/gatherings",
+            "description": "POST /gatherings — plan (201).\n\n### Body\n| Field | Required | Notes |\n| --- | --- | --- |\n| user | yes | User Link for assigned DA; no session fallback |\n| title | yes | |\n| scheduled_at | yes* | or date + time |\n| location.name | yes | Venue (editable) |\n| location.landmark | no | |\n| location.lat/lng | no | map only |\n| farmers | yes | 1–20; each needs farmer_id, farmer_name, phone |\n| notify_farmers_sms | no | default true; SMS gateway later |\n| client_op_id | no | idempotency |\n\nAddress + region/zone/woreda/kebele are stamped read-only from Effective Kebele Assignment.\nRoles: DocPerm Development Agent / Supervisor / Admin."
+          }
+        },
+        {
+          "name": "Plan without user (refused)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Missing user is refused\", function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([400, 417, 422]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Missing user\",\n  \"scheduled_at\": \"{{scheduled_at}}\",\n  \"location\": { \"name\": \"Hall\", \"landmark\": \"Near store\" },\n  \"farmers\": [{ \"farmer_id\": \"{{farmer_id}}\", \"farmer_name\": \"X\", \"phone\": \"911111111\" }]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/gatherings",
+            "description": "Expect validation error — user is required."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Read",
+      "item": [
+        {
+          "name": "List gatherings",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"List returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"data is a list\", function () { pm.expect(body.data).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/gatherings?limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "gatherings"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "start", "value": "0" },
+                { "key": "status", "value": "Planned", "disabled": true },
+                { "key": "from", "value": "2026-11-01", "disabled": true },
+                { "key": "to", "value": "2026-11-30", "disabled": true }
+              ]
+            },
+            "description": "GET /gatherings — optional filters date|from&to, status, da_id, region, zone, woreda, kebele, limit, start."
+          }
+        },
+        {
+          "name": "Get gathering",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Get returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Includes attendees and location\", function () {",
+                  "  pm.expect(data.attendees).to.be.an(\"array\");",
+                  "  pm.expect(data.location).to.be.an(\"object\");",
+                  "  pm.expect(data.location.name).to.be.ok;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/gatherings/{{gathering_id}}",
+            "description": "GET /gatherings/<id> — detail with attendees and sms_logs."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Cancel",
+      "item": [
+        {
+          "name": "Cancel gathering",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Cancel returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"Status Cancelled\", function () { pm.expect(data.status).to.eql(\"Cancelled\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Weather\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/gatherings/{{gathering_id}}/cancel",
+            "description": "POST /gatherings/<id>/cancel — Planned → Cancelled."
+          }
+        }
+      ]
+    }
+  ]
+}

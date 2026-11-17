@@ -275,6 +275,25 @@ can be created. (b) The evidence list on this screen shows the DA's own certific
 `EVIDENCE_DOCUMENTS`); visit evidence should be photos of the visit. (c) Mock dates "Jun 24, 2016" in the
 submitted list are a mock bug (the data file says 2026).
 
+### 2.Gatherings Plan a gathering (`/gatherings` — portal route TBD)
+
+A DA plans a gathering for **1–20 farmers** (FE picker is kebele-scoped; server requires name + phone snapshots). Client location inputs are
+**Venue** (`location.name`), optional `landmark` + lat/lng. Composed `address` + region/zone/woreda/kebele
+are stamped read-only from the DA's Effective Kebele Assignment. Access mirrors Visits: Role DocPerm + User
+Permissions; plan requires FE `user` (no session fallback). SMS gateway is not wired — create writes
+Queued/Skipped log rows and enqueues a stub job.
+
+| Element | API | Source |
+|---|---|---|
+| Plan | `POST /gatherings` body: `user` (required), `title`, `scheduled_at` (or `date`+`time`), `location {name, landmark?, lat?, lng?}`, `farmers[{farmer_id, farmer_name, phone}]` (1–20, all required), `notify_farmers_sms`, `client_op_id` → `{name, status: Planned, attendees[], sms_logs[], location}` (address + geo stamped) | ours: DA Gathering (+ Attendee, SMS Log children) |
+| List | `GET /gatherings?date\|from&to&status&da_id&region&zone&woreda&kebele&limit&start` | ours |
+| Detail | `GET /gatherings/{id}` | ours |
+| Cancel | `POST /gatherings/{id}/cancel {reason}` → `status: Cancelled` | ours |
+| Farmer picker | `GET /farmers` (existing kebele-scoped list) | ours: DA Farmer Reference |
+
+Contract docs: [gatherings-integration.md](gatherings-integration.md), [gatherings-frontend.md](gatherings-frontend.md).
+Postman: `postman/Gatherings/`.
+
 ### 2.10 Grievances (`/grievances`)
 
 Frontend `Grievance`: `ticketId, title, submitter, region, woreda, type, category (Inputs | Schemes | Payments |
