@@ -34,6 +34,7 @@ FIELDS = [
 	"title",
 	"body",
 	"href",
+	"source",
 	"read",
 	"read_at",
 	"event",
@@ -78,6 +79,7 @@ def notify(
 	reference_name: str | None = None,
 	da_id: str | None = None,
 	channel: str = "App",
+	source: str | None = None,
 ) -> str:
 	"""Create one notification row for `user`. Returns its name."""
 	if kind not in KINDS:
@@ -90,6 +92,7 @@ def notify(
 			"title": title[:140],
 			"body": body,
 			"href": href,
+			"source": source,
 			"event": event,
 			"reference_doctype": reference_doctype,
 			"reference_name": reference_name,
@@ -160,6 +163,8 @@ def mark_all_read(ctx: ScopeContext | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 BROADCAST_SCOPES = ("all", "region", "zone", "woreda")
+# The signal sources of the Broadcast form; the recipient's notification is tagged with the one chosen.
+BROADCAST_SOURCES = ("Knowledge", "Emergency", "Weather", "Informational")
 BROADCAST_SENT = "notification.broadcast.sent"
 
 
@@ -195,7 +200,11 @@ def _assert_broadcast_scope_allowed(ctx: ScopeContext, scope: str, scope_value: 
 	"""
 	if ctx.unrestricted:
 		return
-	if not (ctx.region_scopes or ctx.zone_scopes or ctx.woreda_scopes):
+	# A Development Agent (who is not also a Communications Officer) reaches their own Woreda only.
+	if not ctx.has_any_role(C.ROLE_COMMS):
+		if scope != "woreda" or not ctx.woreda_scopes:
+			frappe.throw(_("You can only broadcast to your own Woreda."), frappe.PermissionError)
+	elif not (ctx.region_scopes or ctx.zone_scopes or ctx.woreda_scopes):
 		return
 	if scope == "all":
 		frappe.throw(
@@ -222,6 +231,7 @@ def broadcast(
 	scope: str = "all",
 	scope_value: str | None = None,
 	client_op_id: str | None = None,
+	source: str | None = None,
 ) -> dict:
 	"""Send one Broadcast notification to every DA in the scope.
 
@@ -245,6 +255,12 @@ def broadcast(
 	if len(title) > 140:
 		frappe.throw(_("title must be 140 characters or fewer."), frappe.ValidationError)
 
+	source = (source or "").strip() or None
+	if source and source not in BROADCAST_SOURCES:
+		frappe.throw(
+			_("source must be one of: {0}").format(", ".join(BROADCAST_SOURCES)), frappe.ValidationError
+		)
+
 	href = _validate_href(href)
 	_assert_broadcast_scope_allowed(ctx, scope, scope_value)
 
@@ -261,6 +277,7 @@ def broadcast(
 			"title": title,
 			"body": body,
 			"href": href,
+			"source": source,
 			"scope": scope,
 			"scope_value": scope_value,
 			"sent_by": ctx.user,
@@ -287,7 +304,7 @@ def broadcast(
 				frappe.ValidationError,
 			)
 		for user in recipients:
-			notify(user, kind="Broadcast", title=title, body=body, href=href, event=event_key)
+			notify(user, kind="Broadcast", title=title, body=body, href=href, event=event_key, source=source)
 		record.db_set("recipients", len(recipients), update_modified=False)
 		audit_log.record(
 			BROADCAST_SENT,
