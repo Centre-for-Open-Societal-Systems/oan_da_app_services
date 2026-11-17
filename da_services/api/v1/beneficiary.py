@@ -115,7 +115,7 @@ def _farmer_beneficiary_counts(segments: list[str]) -> dict[str, int]:
 #
 # GET  /api/v1/da-services/farmer-beneficiaries?farmer_id=&beneficiary_segment=&region=&zone=&woreda=&kebele=&limit=&start=
 # POST /api/v1/da-services/farmer-beneficiaries
-#      {"farmer_id", "region", "zone", "woreda", "kebele", "beneficiary_segment"}
+#      {"farmer_ids": [...], "region", "zone", "woreda", "kebele", "beneficiary_segment"}
 #
 # Frappe's DocType permissions decide who may read and create.
 # ---------------------------------------------------------------------------
@@ -134,7 +134,9 @@ FB_FIELDS = [
 	"modified",
 ]
 FB_FILTERS = ("farmer_id", "beneficiary_segment", "region", "zone", "woreda", "kebele", "user")
-FB_REQUIRED = ("farmer_id", "region", "zone", "woreda", "kebele", "beneficiary_segment")
+# Shared by every row of a bulk create.
+FB_SHARED = ("region", "zone", "woreda", "kebele", "beneficiary_segment")
+MAX_BULK = 500
 
 
 @route("/farmer-beneficiaries", methods=("GET",), summary="List farmer beneficiaries")
@@ -178,41 +180,82 @@ def list_farmer_beneficiaries(**kwargs):
 	)
 
 
-@route("/farmer-beneficiaries", methods=("POST",), status=201, summary="Create a farmer beneficiary")
+@route("/farmer-beneficiaries", methods=("POST",), status=201, summary="Create farmer beneficiaries in bulk")
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def create_farmer_beneficiary(**kwargs):
-	"""Body: {"farmer_id", "region", "zone", "woreda", "kebele", "beneficiary_segment"}, all
-	required. ``user`` is the caller. The segment must be active, and a farmer can be in a
-	segment only once (409 otherwise)."""
-	b = request_fields(kwargs, *FB_REQUIRED)
-	values = {k: str(b.get(k) or "").strip() for k in FB_REQUIRED}
-	missing = [k for k, v in values.items() if not v]
+	"""Body: {"farmer_ids": ["FR-1", "FR-2", ...], "region", "zone", "woreda", "kebele",
+	"beneficiary_segment"}, all required. One Farmer Beneficiary is created per farmer id, all
+	with the same segment and location; ``user`` is the caller.
+
+	- ``farmer_ids`` is a list (or a JSON list string) of 1-500 ids; blanks and repeats are dropped.
+	- The segment must be active.
+	- A farmer already in the segment is skipped and listed in ``skipped``.
+	- Any other failure (validation, permission, bad link) creates nothing.
+
+	Returns:
+	    {
+	        "success": true,
+	        "data": {"created": [{"name", "user", "farmer_id", ...}], "skipped": ["FR-1", ...]},
+	        "meta": {"requested", "created", "skipped"}
+	    }
+	"""
+	b = request_fields(kwargs, "farmer_ids", *FB_SHARED, json_keys=("farmer_ids",))
+	values = {k: str(b.get(k) or "").strip() for k in FB_SHARED}
+	farmer_ids = _farmer_ids(b.get("farmer_ids"))
+	missing = (["farmer_ids"] if not farmer_ids else []) + [k for k, v in values.items() if not v]
 	if missing:
 		frappe.throw(_("Missing required fields: {0}.").format(", ".join(missing)), frappe.ValidationError)
-
-	if not frappe.db.get_value(DOCTYPE, {"name": values["beneficiary_segment"], "is_active": 1}):
+	if len(farmer_ids) > MAX_BULK:
 		frappe.throw(
-			_("Beneficiary Segment {0} does not exist or is not active.").format(
-				values["beneficiary_segment"]
-			),
+			_("At most {0} farmer_ids can be sent at once.").format(MAX_BULK), frappe.ValidationError
+		)
+
+	segment = values["beneficiary_segment"]
+	if not frappe.db.get_value(DOCTYPE, {"name": segment, "is_active": 1}):
+		frappe.throw(
+			_("Beneficiary Segment {0} does not exist or is not active.").format(segment),
 			frappe.ValidationError,
 		)
-	if frappe.db.exists(
-		FB_DOCTYPE,
-		{"farmer_id": values["farmer_id"], "beneficiary_segment": values["beneficiary_segment"]},
-	):
-		frappe.throw(
-			_("Farmer {0} is already in segment {1}.").format(
-				values["farmer_id"], values["beneficiary_segment"]
-			),
-			frappe.DuplicateEntryError,
+
+	existing = set(
+		frappe.get_all(
+			FB_DOCTYPE,
+			filters={"beneficiary_segment": segment, "farmer_id": ["in", farmer_ids]},
+			pluck="farmer_id",
 		)
-
-	doc = frappe.get_doc({"doctype": FB_DOCTYPE, "user": frappe.session.user, **values})
-	doc.insert()  # DocType permissions and link validation apply
-
-	return success_response(
-		data={f: doc.get(f) for f in FB_FIELDS},
-		message="Farmer beneficiary created",
 	)
+	created = []
+	for farmer_id in farmer_ids:
+		if farmer_id in existing:
+			continue
+		doc = frappe.get_doc(
+			{"doctype": FB_DOCTYPE, "user": frappe.session.user, "farmer_id": farmer_id, **values}
+		)
+		doc.insert()  # DocType permissions and link validation apply
+		created.append({f: doc.get(f) for f in FB_FIELDS})
+
+	skipped = [f for f in farmer_ids if f in existing]
+	return success_response(
+		data={"created": created, "skipped": skipped},
+		message=_("{0} farmer beneficiaries created, {1} already in the segment.").format(
+			len(created), len(skipped)
+		),
+		meta={"requested": len(farmer_ids), "created": len(created), "skipped": len(skipped)},
+	)
+
+
+def _farmer_ids(raw) -> list[str]:
+	"""``farmer_ids`` as a list of unique, non-blank ids in the order sent."""
+	if raw in (None, ""):
+		return []
+	if not isinstance(raw, list | tuple):
+		frappe.throw(_("farmer_ids must be a list of farmer ids."), frappe.ValidationError)
+	ids = []
+	for item in raw:
+		if not isinstance(item, str | int):
+			frappe.throw(_("farmer_ids must be a list of farmer ids."), frappe.ValidationError)
+		farmer_id = str(item).strip()
+		if farmer_id and farmer_id not in ids:
+			ids.append(farmer_id)
+	return ids
