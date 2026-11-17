@@ -164,7 +164,9 @@ def published_commit(env, name, chart=CHART):
 			data = response.read()
 		with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
 			text = archive.extractfile("%s/Chart.yaml" % chart).read().decode("utf-8")
-	except (OSError, KeyError, tarfile.TarError):
+	# `as` keeps the parentheses: ruff targets py314 and would drop them without it, which the
+	# python3 on the Jenkins agent may not parse.
+	except (OSError, KeyError, tarfile.TarError) as _error:
 		return None
 	match = re.search(r"oan\.org/source-commit: *\"?([0-9a-f]{7,40})", text)
 	return match.group(1) if match else None
