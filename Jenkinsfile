@@ -57,11 +57,10 @@ pipeline {
                     env.GIT_SHA = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
                     env.IMAGE_TAG_BUILD = "${env.TARGET_ENV}-${env.BUILD_NUMBER}-${env.GIT_SHA.substring(0, 7)}"
                     env.FULL_IMAGE      = "${env.IMAGE_REPO}:${env.IMAGE_TAG_BUILD}"
-                    // develop only: the oan_dev image, eoan/oan-da-services/da-services:<__version__>-develop.<build>
+                    // develop only: the oan_dev image, eoan/oan-da-services/da-services:<__version__>-develop.<build>,
+                    // which is also the chart version (ci/package_chart.py version)
                     if (env.BRANCH_NAME == 'develop') {
-                        def version = sh(returnStdout: true,
-                            script: "sed -n 's/^__version__ = \"\\(.*\\)\"/\\1/p' da_services/__init__.py").trim()
-                        env.IMMUTABLE_TAG = "${version}-develop.${env.BUILD_NUMBER}"
+                        env.IMMUTABLE_TAG = sh(returnStdout: true, script: 'python3 ci/package_chart.py version').trim()
                         env.HELM_IMAGE    = "${env.IMAGE_REGISTRY}/${env.ECR_REPO}:${env.IMMUTABLE_TAG}"
                     } else {
                         env.HELM_IMAGE    = ''
@@ -247,6 +246,44 @@ ENDSSH
             }
         }
 
+        // Flow (develop): Checkout (version) -> Build image -> Push image -> Package chart -> deploy -> Publish chart.
+        // helm/oan-da-services is zipped with this build's image before the oan_dev deploy; the deploy installs
+        // that archive, and the same archive is published to oan-helm afterwards.
+        stage('Package chart') {
+            when { branch 'develop' }
+            steps {
+                script {
+                    env.IMAGE_TAG = env.IMMUTABLE_TAG
+                    env.SOURCE_COMMIT = env.GIT_SHA
+                    env.COMMIT_SUBJECT = sh(returnStdout: true, script: 'git log -1 --pretty=%s').trim()
+                    env.IMAGE_REPOSITORY = "${env.IMAGE_REGISTRY}/${env.ECR_REPO}"
+                }
+                sh 'python3 ci/package_chart.py package'
+                // The deploy stages run on the VPN deploy agent, which gets the archive from here.
+                stash name: 'built-chart', includes: 'built-chart/**'
+            }
+        }
+
+        // The routes chart (apisix/k8s) is packaged and published like the app chart, but only for a build that
+        // changed the routes or the gateway values: those are the builds that install it.
+        stage('Package gateway chart') {
+            when {
+                beforeAgent true
+                allOf {
+                    branch 'develop'
+                    anyOf {
+                        changeset 'apisix/**'
+                        changeset 'da_services/api/**'
+                        changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
+                    }
+                }
+            }
+            steps {
+                sh 'python3 ci/package_chart.py gateway-package'
+                stash name: 'built-gateway-chart', includes: 'built-gateway-chart/**'
+            }
+        }
+
         // ---- develop -> Helm release `da-services` on the oan_dev k3s node ----
         // Runs after the DA node deploy above, so a problem here never blocks it. Same image, pushed
         // under eoan/oan-da-services/da-services:<__version__>-develop.<build> by "Push image".
@@ -256,6 +293,7 @@ ENDSSH
             options { timeout(time: 45, unit: 'MINUTES') }
             steps {
                 checkout scm
+                unstash 'built-chart'
                 withCredentials([file(credentialsId: 'oan-dev-kubeconfig', variable: 'KUBECONFIG')]) {
                     sh 'bash ci/deploy-helm-dev.sh'
                 }
@@ -280,6 +318,7 @@ ENDSSH
             options { timeout(time: 15, unit: 'MINUTES') }
             steps {
                 checkout scm
+                unstash 'built-gateway-chart'
                 withCredentials([file(credentialsId: 'oan-dev-kubeconfig', variable: 'KUBECONFIG')]) {
                     sh 'bash ci/deploy-gateway.sh'
                 }
@@ -303,6 +342,43 @@ ENDSSH
                     echo "da-services did not report healthy at $url"
                     exit 1
                 '''
+            }
+        }
+
+        // ---- Helm chart publish ----
+        // Adds the archive built by 'Package chart' to repository/develop/ of oan-helm, only after
+        // the oan_dev deploy and its verify succeeded.
+        stage('Publish chart') {
+            when { branch 'develop' }
+            steps {
+                // UNSTABLE, not failed: the image is already deployed.
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    withCredentials([usernamePassword(credentialsId: 'oan-helm-fork-token', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+                        sh 'python3 ci/package_chart.py publish'
+                    }
+                }
+            }
+        }
+
+        stage('Publish gateway chart') {
+            when {
+                beforeAgent true
+                allOf {
+                    branch 'develop'
+                    anyOf {
+                        changeset 'apisix/**'
+                        changeset 'da_services/api/**'
+                        changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
+                    }
+                }
+            }
+            steps {
+                // UNSTABLE, not failed: the routes are already installed.
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    withCredentials([usernamePassword(credentialsId: 'oan-helm-fork-token', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+                        sh 'python3 ci/package_chart.py gateway-publish'
+                    }
+                }
             }
         }
     }

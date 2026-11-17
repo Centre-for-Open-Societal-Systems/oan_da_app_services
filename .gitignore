@@ -68,3 +68,5 @@ DEMO_PRESENTATION.html
 # Local Cursor skills and notes. Do not commit.
 .cursor/
 
+built-chart/
+built-gateway-chart/

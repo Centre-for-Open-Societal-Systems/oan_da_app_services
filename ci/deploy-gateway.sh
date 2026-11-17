@@ -16,7 +16,9 @@ set -euo pipefail
 NS="${DA_NAMESPACE:-da-app}"
 RELEASE="${GATEWAY_RELEASE:-da-services-gateway}"
 APISIX_NS="${GATEWAY_APISIX_NAMESPACE:-api6-gateway}"
-CHART="${GATEWAY_CHART:-apisix/k8s}"
+# The archive "Package gateway chart" built for this commit (unstashed into built-gateway-chart/), else the chart folder.
+PACKAGED="$(ls built-gateway-chart/oan-da-services-gateway-*.tgz 2>/dev/null | head -n 1 || true)"
+CHART="${GATEWAY_CHART:-${PACKAGED:-apisix/k8s}}"
 VALUES="${GATEWAY_VALUES:-helm/environments/dev/oan-da-services-gateway.yaml}"
 
 # The committed routes must match the declared endpoints. Needs the bench's python; skipped otherwise.
