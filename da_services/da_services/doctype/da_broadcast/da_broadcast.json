@@ -18,6 +18,7 @@
   "sec_content",
   "body",
   "href",
+  "source",
   "sec_device",
   "client_op_id"
  ],
@@ -94,6 +95,13 @@
    "read_only": 1
   },
   {
+   "description": "Signal source the sender chose: Knowledge, Emergency, Weather or Informational.",
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "label": "Signal source",
+   "read_only": 1
+  },
+  {
    "fieldname": "sec_device",
    "fieldtype": "Section Break",
    "label": "Idempotency"
@@ -109,7 +117,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-26 12:00:00.000000",
+ "modified": "2026-11-17 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Broadcast",
