@@ -79,6 +79,10 @@ Query: `date` or `from`+`to`, `status`, `farmer_id`, `da_id`, `region`, `zone`,
 `woreda`, `kebele`, `limit`, `start`. Meta: `{ total, limit, start }` (`total` is the
 returned page length unless a cross-page total is added later).
 
+Each row carries `advisory_qa[] {question, answer}`, as the detail does: an Advisory
+visit's questions in the order they were saved, `[]` for every other visit type. The
+farmer's Advisory tab reads them with `GET /visits?farmer_id=`.
+
 ## Other routes
 
 | Method | Path | Notes |

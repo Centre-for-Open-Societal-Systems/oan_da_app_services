@@ -647,7 +647,25 @@ def list_visits(
 		limit_page_length=limit,
 		limit_start=start,
 	)
+	_attach_advisory_qa(rows)
 	return rows, len(rows)
+
+
+def _attach_advisory_qa(rows: list[dict]) -> None:
+	"""Give each listed visit its ``advisory_qa``, as the detail has it (one read for the page)."""
+	by_name = {row.name: row for row in rows}
+	for row in rows:
+		row.advisory_qa = []
+	advisory = [row.name for row in rows if row.visit_type == "Advisory"]
+	if not advisory:
+		return
+	for qa in frappe.get_all(
+		"DA Visit Advisory QA",
+		filters={"parenttype": "DA Visit", "parent": ("in", advisory)},
+		fields=["parent", "question", "answer"],
+		order_by="parent asc, idx asc",
+	):
+		by_name[qa.parent].advisory_qa.append({"question": qa.question, "answer": qa.answer})
 
 
 def dashboard_counts(da_id: str, from_date, to_date) -> dict:

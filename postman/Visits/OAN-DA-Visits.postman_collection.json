@@ -604,7 +604,7 @@
                 }
               ]
             },
-            "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
+            "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nEach row carries advisory_qa[] {question, answer}: an Advisory visit's questions in the order they were saved, [] for other visit types.\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
           },
           "response": []
         },
@@ -631,7 +631,7 @@
                 "{{visit_id}}"
               ]
             },
-            "description": "One visit + derived ui_status / planner_status + timeline[] built from visit timestamps."
+            "description": "One visit + derived ui_status / planner_status + timeline[] built from visit timestamps. An Advisory visit also carries advisory_qa[] {question, answer}."
           },
           "response": []
         },

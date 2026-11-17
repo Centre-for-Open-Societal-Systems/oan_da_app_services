@@ -292,6 +292,37 @@ class TestDAVisit(IntegrationTestCase):
 		rows, total = visits.list_visits(status="Completed")
 		self.assertEqual(total, 0)
 
+	def test_list_carries_advisory_qa(self):
+		frappe.set_user(DA1)
+		advisory = visits.plan_visit(
+			farmer_id="FR-ADV-1",
+			scheduled_at=self.tomorrow,
+			visit_type="Advisory",
+			advisory_qa=[
+				{"question": "Rust on teff?", "answer": "Spray within 3 days"},
+				{"question": "When to top-dress?", "answer": "At tillering"},
+			],
+			user=DA1,
+		)
+		stamp_visit_geo(advisory["name"], self.geo)
+
+		rows, _total = visits.list_visits(da_id="DA-000001")
+		by_name = {row["name"]: row for row in rows}
+		self.assertEqual(
+			by_name[advisory["name"]]["advisory_qa"],
+			[
+				{"question": "Rust on teff?", "answer": "Spray within 3 days"},
+				{"question": "When to top-dress?", "answer": "At tillering"},
+			],
+		)
+		# A visit of another type lists with no questions.
+		self.assertEqual(by_name[self.v1["name"]]["advisory_qa"], [])
+
+		# The questions follow the visit's own visibility: a DA elsewhere gets neither.
+		frappe.set_user(DA3)
+		rows, _total = visits.list_visits(farmer_id="FR-ADV-1")
+		self.assertEqual(rows, [])
+
 	def test_list_area_filters_use_user_permissions(self):
 		# Out-of-scope geography filters no longer throw; get_list + User Permissions return empty.
 		frappe.set_user(SUP)

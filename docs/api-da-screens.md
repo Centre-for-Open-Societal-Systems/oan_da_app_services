@@ -231,7 +231,7 @@ yet delivered / Other), farmer notified by SMS.
 
 | Element | API | Source |
 |---|---|---|
-| Table + stats + facets | `GET /visits?region&zone&woreda&kebele&status&from&to&da_id&farmer_id&limit&start` → visit rows (+ derived `ui_status` / `planner_status`). Row set from Role DocPerm + User Permissions; query args only narrow. Out-of-grant geography yields an empty page, not a service-layer 403 | ours: DA Visit |
+| Table + stats + facets | `GET /visits?region&zone&woreda&kebele&status&from&to&da_id&farmer_id&limit&start` → visit rows (+ derived `ui_status` / `planner_status`, + `advisory_qa[] {question, answer}`, `[]` unless the visit is Advisory). Row set from Role DocPerm + User Permissions; query args only narrow. Out-of-grant geography yields an empty page, not a service-layer 403 | ours: DA Visit |
 | View details | `GET /visits/{id}` → record + `timeline[]` (from DA Visit status history) | ours |
 | Reschedule | `POST /visits/{id}/reschedule {scheduled_at, reason}` → new DA Visit with `rescheduled_from`, old one `Rescheduled`; SMS job | ours + SMS |
 | Supervisor assigns a visit to a DA (`assignedBy`) | `POST /visits` with `da_id` by a Supervisor (scope: own Woreda) | ours |
