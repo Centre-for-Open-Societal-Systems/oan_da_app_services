@@ -358,7 +358,7 @@ class TestVisitAPI(IntegrationTestCase):
 		out = api.list_visits(farmer_id="FRM-000102")
 		self.assertEqual(out["meta"]["total"], 1)
 
-	def test_farmer_advisory_returns_questions_within_scope(self):
+	def test_farmer_advisory_returns_all_questions_of_the_farmer(self):
 		frappe.set_user(DA1)
 		self._plan(
 			visit_type="Advisory",
@@ -374,18 +374,22 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(set(row), {"question", "answer", "creation", "modified"})
 		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000102")["data"], [])
 
-		# A visit outside the caller's geography gives no questions; Comms may not call it.
+		# A visit planned in another DA's geography is still part of the farmer's Advisory, and
+		# any signed-in role gets it: the endpoint has no permission or scope filter.
 		frappe.set_user("Administrator")
 		self._plan(
 			da_id="DA-000003",
 			farmer_id="FRM-000199",
 			visit_type="Advisory",
-			advisory_qa=[{"question": "Out of scope?", "answer": ""}],
+			advisory_qa=[{"question": "Other kebele?", "answer": ""}],
 		)
 		frappe.set_user(DA1)
-		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000199")["data"], [])
+		self.assertEqual(
+			[r["question"] for r in farmers_api.get_farmer_advisory("FRM-000199")["data"]], ["Other kebele?"]
+		)
 		frappe.set_user(COMMS)
-		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000101")["status"], "error")
+		self.assertEqual(len(farmers_api.get_farmer_advisory("FRM-000101")["data"]), 1)
+		self.assertEqual(farmers_api.get_farmer_advisory(" ")["status"], "error")
 
 	def test_executive_reads_region_but_not_other_region(self):
 		frappe.set_user(DA1)

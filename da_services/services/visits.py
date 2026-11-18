@@ -651,15 +651,19 @@ def list_visits(
 
 
 def list_farmer_advisory(farmer_id: str, *, limit: int = 50, start: int = 0) -> list[dict]:
-	"""A farmer's Advisory questions and answers: one row per question, newest first.
+	"""Every Advisory question and answer of a farmer: one row per question, newest first.
 
-	Each row is ``question``, ``answer``, ``creation`` and ``modified`` of the Q&A row. Rows
-	are found by the row's own ``farmer_id`` and read through DA Visit, so Role DocPerm +
-	User Permissions still apply: a caller gets only the questions of visits they may see.
+	Each row is ``question``, ``answer``, ``creation`` and ``modified`` of the Q&A row. All of
+	the farmer's Advisory visits are read, whoever planned them: no DocPerm, User Permission
+	or role filter. Visits with no questions give no row.
 	"""
-	return frappe.get_list(
+	return frappe.get_all(
 		"DA Visit",
-		filters=[["DA Visit Advisory QA", "farmer_id", "=", farmer_id]],
+		filters=[
+			["DA Visit", "farmer_id", "=", farmer_id],
+			["DA Visit", "visit_type", "=", "Advisory"],
+			["DA Visit Advisory QA", "question", "is", "set"],
+		],
 		fields=[
 			"advisory_qa.question",
 			"advisory_qa.answer",

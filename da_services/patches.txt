@@ -8,4 +8,3 @@ da_services.patches.backfill_zone
 da_services.patches.survey_answers_to_rows
 da_services.patches.survey_languages_to_text
 da_services.patches.survey_parameter_json_to_columns
-da_services.patches.advisory_qa_farmer_id

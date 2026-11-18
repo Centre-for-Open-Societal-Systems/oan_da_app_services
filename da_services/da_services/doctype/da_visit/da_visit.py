@@ -81,8 +81,6 @@ class DAVisit(Document):
 			frappe.throw(_("A follow-up visit needs a date."))
 		if self.visit_type != "Advisory" and self.advisory_qa:
 			frappe.throw(_("Advisory Q&A belongs to Advisory visits only."))
-		for row in self.advisory_qa or []:
-			row.farmer_id = self.farmer_id
 
 	def _validate_client_op_id(self):
 		if not self.client_op_id:

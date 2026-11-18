@@ -37,7 +37,7 @@ Every `{id}` accepts the registry internal id or the Farmer-ID (`FR-…`).
 | GET | `/farmers/{id}/plots` | Land records (area, ownership, soil fertility, land use) |
 | GET | `/farmers/{id}/photo` | `photo_url` (signed link, about 1 hour) and `document_id` |
 | GET | `/farmers/{id}/visits` | Visit history |
-| GET | `/farmers/{id}/advisory` | Questions and answers of the farmer's Advisory visits |
+| GET | `/farmers/{id}/advisory` | All questions and answers of the farmer's Advisory visits (no permission filter) |
 | GET | `/farmers/{id}/permissions` | `can_edit`, `reason`, `is_linked` |
 | GET | `/farmers/{id}/change-requests?status=&tab=` | Change requests raised on the farmer in the registry |
 

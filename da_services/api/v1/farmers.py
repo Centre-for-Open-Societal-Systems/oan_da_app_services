@@ -396,9 +396,12 @@ def get_farmer_advisory(farmer_id: str, limit=None, start=None):
 	"""Questions and answers of a farmer's Advisory visits (farmer profile, Advisory tab).
 
 	One row per question, newest first; each row carries ``question``, ``answer``,
-	``creation`` and ``modified``. Access is DA Visit's Role DocPerm and
-	User Permissions, applied by ``frappe.get_list``: only visits the caller may see are read.
+	``creation`` and ``modified``. Every Advisory Q&A of the farmer is returned, with no
+	permission or scope filter.
 	"""
+	farmer_id = (farmer_id or "").strip()
+	if not farmer_id:
+		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
 	limit = cint(limit or 50)
 	start = cint(start or 0)
 	rows = visit_svc.list_farmer_advisory(farmer_id, limit=limit, start=start)

@@ -106,10 +106,10 @@ first, in the order the questions were saved:
 creation when it is first saved, and the visit's modified on every save of the visit).
 
 Query: `limit` (default 50, max 500), `start`. Meta: `{ total, limit, start }` (`total` is
-the returned page length). Access: DA Visit Role DocPerm + User Permissions (no extra role check).
-Rows are found by `farmer_id` on the `DA Visit Advisory QA` row itself (indexed, copied from the
-visit on every save; never sent by the client) and read through DA Visit, so only visits the
-caller may see are read. An Advisory visit with no questions gives no row.
+the returned page length). Every Advisory Q&A of the farmer is returned, whoever planned the
+visit and whatever the caller's kebele or role: this endpoint applies no DA Visit Role DocPerm,
+User Permissions or role check. Rows are found by the parent `DA Visit.farmer_id`. An Advisory
+visit with no questions gives no row. A blank `farmer_id` is a validation error.
 `GET /visits` does not carry the questions; `GET /visits/<id>` does (`advisory_qa[]`).
 
 ## Related
