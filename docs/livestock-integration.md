@@ -101,7 +101,7 @@ Prefix: `/api/v1/da-services`
 
 Read: DA, Supervisor, Executive, Admin. Write: DA, Supervisor, Admin. `{id}` is the Farmer-ID, or an internal id that DA Farmer Reference maps to one. A Livestock record names its farmer by Farmer-ID, so an id without one is refused.
 
-The list returns `kind: submission` for drafts and submissions waiting for approval. Each submission includes `sections`, and each section includes its records. `kind: record` is a full section row. A livestock holding carries the farmer, survey and location columns. An animal row carries `ear_tag_id`, `species`, `breed`, `gender`, `health_status`, `vaccination_status` and the other animal columns. The screen labels those names from `GET /livestock/intake-form`. A submission of another farmer is refused on read, save and finalize.
+The list returns `kind: submission` for drafts and submissions waiting for approval. Each submission includes `sections`, and each section includes its records. `kind: record` is a full section row. A livestock holding carries the farmer, survey and location columns. An animal row carries `ear_tag_id`, `species`, `breed`, `gender`, `health_status`, `vaccination_status` and the other animal columns. The screen labels those names from `GET /livestock/intake-form`. A submission of another farmer is refused on read, save and finalize. The owner is the `farmer_id` in the draft's lookup row, which DA Services fills from the route on every save; `record_name` is the registry's display name (the farmer's name), so it is only compared when a draft has no `farmer_id`.
 
 ## What the intake form returns
 
@@ -140,6 +140,8 @@ Each field has `field_name`, `widget` (`text`, `number`, `date`, `select`, `radi
 ```
 
 The response has `submission_id` and `subject_record_id`. Send `submission_id` with later sections; `subject_record_id` is optional, it is read from the draft when missing.
+
+When a section fails after earlier sections of the same call were saved, the 400 (or 503) error body also carries `data: { farmer_id, submission_id, subject_record_id, saved_sections }`. Retry with that `submission_id` and only the sections not in `saved_sections`, so the draft is continued instead of a second one being opened.
 
 Checks before each save, all from the live form:
 
