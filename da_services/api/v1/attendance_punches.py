@@ -1,0 +1,46 @@
+"""v1: DA Attendance Punch (punch-in / punch-out).
+
+GET  /api/v1/da-services/attendance-punches/today
+POST /api/v1/da-services/attendance-punches
+
+Thin: parse body, call service, wrap envelope. Access and field rules come from
+DA Attendance Punch Role DocPerm + meta (``get_list`` / ``insert``). Sequence /
+button state is FE-owned. No ``require_roles`` / ScopeContext.
+"""
+
+from __future__ import annotations
+
+import frappe
+from oan_auth_service.api.utils import handle_api_errors, success_response
+
+from da_services.api.router import route
+from da_services.api.v1.common import request_fields
+from da_services.services import attendance_punches as svc
+
+
+@route("/attendance-punches/today", methods=("GET",), summary="Latest attendance punch for today")
+@frappe.whitelist()
+@handle_api_errors
+def today():
+	"""Return the session user's latest punch for the site calendar day, or null."""
+	return success_response(data=svc.get_today_latest())
+
+
+@route("/attendance-punches", methods=("POST",), status=201, summary="Create attendance punch")
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def create(**kwargs):
+	"""Body: action, punched_at, region, zone; optional woreda, kebele.
+
+	user and da_id come from the session (``user`` + ``fetch_from`` da_id).
+	"""
+	body = request_fields(kwargs, "action", "punched_at", "region", "zone", "woreda", "kebele")
+	out = svc.create_punch(
+		action=body.get("action"),
+		punched_at=body.get("punched_at"),
+		region=body.get("region"),
+		zone=body.get("zone"),
+		woreda=body.get("woreda"),
+		kebele=body.get("kebele"),
+	)
+	return success_response(data=out, message="Attendance punch recorded")
