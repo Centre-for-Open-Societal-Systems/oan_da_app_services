@@ -141,6 +141,9 @@ def kebele_chain(kebele: str) -> dict:
 
 def live_geo() -> dict:
 	"""Active master chain for this site (do not invent Admin Area / dummy codes)."""
+	# A fresh site (CI) may have no geo masters yet, or test_geo_master_sync may have
+	# emptied them; make sure the shared test chain (two regions) is there to pick from.
+	ensure_geo_masters()
 	row = frappe.get_all(
 		"DA Kebele", filters={"is_active": 1}, fields=["name", "woreda"], order_by="name asc", limit=1
 	)[0]
