@@ -1,7 +1,8 @@
 """Keep DA Country / DA Region / DA Zone / DA Woreda / DA Kebele in step with Master Data.
 
 Login: the Master Data Sync account of DA Services Settings (username, password, login
-key) signs in through ``sso_login``, the function behind ``POST /sso/login``. Its
+key) signs in through ``sso_login``, the function behind ``POST /sso/login``
+(``services/utils.sync_account_login``). Its
 ``access_token`` goes to Master Data as ``Authorization: Bearer`` and its ``csrf_token``
 as ``X-CSRF-Token`` (header and cookie). When Master Data refuses the token part-way
 through a run (it expired), the account logs in again once.
@@ -32,11 +33,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import frappe
-from frappe.utils import get_url, now_datetime
+from frappe.utils import now_datetime
 
 from da_services.integrations.master import MasterDataClient, MasterDataError
 from da_services.integrations.master.client import base_url_from_domain
 from da_services.integrations.sso import SSOLoginError, sso_login
+from da_services.services import utils
 
 # Master Data level mnemonic, top first. Each level's parent is the one before it.
 LEVELS = ("country", "region", "zone", "woreda", "kebele")
@@ -105,36 +107,19 @@ class MasterDataSource:
 		return self._client
 
 	def _login(self) -> None:
-		settings = frappe.get_cached_doc("DA Services Settings")
-		username = (settings.master_sync_username or "").strip()
-		password = settings.get_password("master_sync_password", raise_exception=False) or ""
-		key = (settings.master_sync_login_key or "").strip()
-		missing = [
-			label
-			for label, value in (
-				("Master Data Domain", settings.master_data_domain),
-				("Username", username),
-				("Password", password),
-				("Login Key", key),
+		settings = frappe.get_cached_doc(utils.SETTINGS_DOCTYPE)
+		try:
+			result = utils.sync_account_login(
+				also_required={"Master Data Domain": settings.master_data_domain}, login=self._sso_login
 			)
-			if not value
-		]
-		if missing:
-			raise GeoSyncError(f"DA Services Settings: set {', '.join(missing)} for the Master Data sync")
-		conf = frappe.conf
-		result = self._sso_login(
-			username=username,
-			password=password,
-			key=key,
-			return_url=conf.get("sso_return_url") or get_url(),
-			timeout=int(conf.get("sso_timeout_seconds") or 20),
-		)
+		except utils.StaffAPIError as exc:
+			raise GeoSyncError(f"{exc} for the Master Data sync") from exc
 		self._client = MasterDataClient(
 			base_url=base_url_from_domain(settings.master_data_domain),
 			token=result.access_token,
 			csrf_token=result.csrf_token,
-			sender_app=conf.get("da_registry_sender_app") or "da-services",
-			timeout=int(conf.get("master_data_timeout_seconds") or 20),
+			sender_app=utils.sender_app(),
+			timeout=int(frappe.conf.get("master_data_timeout_seconds") or 20),
 		)
 
 
