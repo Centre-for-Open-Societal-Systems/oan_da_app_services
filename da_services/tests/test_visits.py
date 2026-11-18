@@ -4,6 +4,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, add_to_date, now_datetime, today
 
+from da_services.patches import advisory_qa_farmer_id
 from da_services.services import constants as C
 from da_services.services import visits
 from da_services.tests.fixtures import (
@@ -339,6 +340,20 @@ class TestDAVisit(IntegrationTestCase):
 		)
 		self.assertEqual(rows[0].physical_status, visits.COMPLETE)
 		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1", limit=1, start=1)), 1)
+
+		# Each question carries its visit's farmer, which is what the list filters on.
+		self.assertEqual(
+			set(frappe.get_all("DA Visit Advisory QA", {"parent": older["name"]}, pluck="farmer_id")),
+			{"FR-ADV-1"},
+		)
+
+		# Rows saved before the column existed are filled from their visit by the patch.
+		frappe.db.sql(
+			"update `tabDA Visit Advisory QA` set farmer_id = null where parent = %s", older["name"]
+		)
+		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1")), 1)
+		advisory_qa_farmer_id.execute()
+		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1")), 3)
 
 		# The questions follow the visit's own visibility: a DA elsewhere gets none.
 		frappe.set_user(DA3)

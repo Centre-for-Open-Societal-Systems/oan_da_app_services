@@ -104,7 +104,9 @@ visit first, in the order the questions were saved:
 
 Query: `limit` (default 50, max 500), `start`. Meta: `{ total, limit, start }` (`total` is
 the returned page length). Roles: Development Agent, Supervisor, Executive, OAN Administrator.
-Only visits the caller may see are read; an Advisory visit with no questions gives no row.
+Rows are found by `farmer_id` on the `DA Visit Advisory QA` row itself (indexed, copied from the
+visit on every save; never sent by the client) and read through DA Visit, so only visits the
+caller may see are read. An Advisory visit with no questions gives no row.
 `GET /visits` does not carry the questions; `GET /visits/<id>` does (`advisory_qa[]`).
 
 ## Related

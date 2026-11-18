@@ -6,7 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "question",
-  "answer"
+  "answer",
+  "farmer_id"
  ],
  "fields": [
   {
@@ -21,12 +22,20 @@
    "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Advice Given"
+  },
+  {
+   "description": "Copied from the visit on save, so a farmer's questions can be read by farmer.",
+   "fieldname": "farmer_id",
+   "fieldtype": "Data",
+   "label": "Farmer ID",
+   "read_only": 1,
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-10-09 11:00:00.000000",
+ "modified": "2026-11-18 17:30:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Visit Advisory QA",
