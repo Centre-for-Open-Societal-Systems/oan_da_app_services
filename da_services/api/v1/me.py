@@ -21,6 +21,7 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.integrations.da_registry.client import DARegistryAuthError, DARegistryError, get_client
 from da_services.services import constants as C
+from da_services.services.notifications import own_kebeles
 from da_services.utils.permissions import ScopeContext, require_roles
 
 # Single role code and label the portal switches on (frontend lib/rbac.ts ROLES / ROLE_LABELS).
@@ -131,6 +132,19 @@ def profile_for(ctx: ScopeContext, include_agent: bool = True) -> dict:
 		"da_id": da_id,
 		"menu": menu_for(ctx),
 	}
+	if C.ROLE_DA in ctx.roles:
+		# The Kebeles the DA is posted to (Effective assignments); a DA broadcasts to these.
+		codes = own_kebeles(ctx)
+		names = (
+			dict(
+				frappe.get_all(
+					"DA Kebele", filters={"name": ("in", codes)}, fields=["name", "kebele_name"], as_list=True
+				)
+			)
+			if codes
+			else {}
+		)
+		data["kebeles"] = [{"code": c, "name": names.get(c) or c} for c in codes]
 	if include_agent and da_id:
 		try:
 			data["agent"] = get_client().get_da(da_id).to_dict()
