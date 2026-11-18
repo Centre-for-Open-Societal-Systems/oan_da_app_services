@@ -234,42 +234,90 @@ class TestBeneficiaryAPI(IntegrationTestCase):
 		frappe.set_user(EXEC)
 		self.assertEqual(_code(api.list_farmer_beneficiaries()), "PERMISSION_DENIED")
 
-	# -- Farmer Beneficiary create --------------------------------------------------------
+	# -- Farmer Beneficiary bulk create ---------------------------------------------------
 
-	def test_create_sets_caller_as_user(self):
+	def _create(self, farmer_ids, segment=None, loc=None):
+		return api.create_farmer_beneficiary(
+			farmer_ids=farmer_ids, beneficiary_segment=segment or self.seg_b, **(loc or LOC_W01)
+		)
+
+	def _exists(self, farmer_id):
+		return frappe.db.exists("Farmer Beneficiary", {"farmer_id": f"{TAG}-{farmer_id}"})
+
+	def test_create_makes_one_row_per_farmer_with_caller_as_user(self):
 		frappe.set_user(DA_W01)
-		res = api.create_farmer_beneficiary(farmer_id=f"{TAG}-NEW", beneficiary_segment=self.seg_b, **LOC_W01)
+		res = self._create([f"{TAG}-N1", f"{TAG}-N2", f"{TAG}-N3"])
 		self.assertEqual(_code(res), "ok")
-		self.assertEqual(res["data"]["user"], DA_W01)
-		self.assertEqual(res["data"]["beneficiary_segment"], self.seg_b)
-		self.assertTrue(frappe.db.exists("Farmer Beneficiary", res["data"]["name"]))
+		created = res["data"]["created"]
+		self.assertEqual([r["farmer_id"] for r in created], [f"{TAG}-N1", f"{TAG}-N2", f"{TAG}-N3"])
+		self.assertTrue(all(r["user"] == DA_W01 for r in created))
+		self.assertTrue(all(r["beneficiary_segment"] == self.seg_b for r in created))
+		self.assertTrue(all(r["woreda"] == "ET04-W01" for r in created))
+		self.assertEqual(res["data"]["skipped"], [])
+		self.assertEqual(res["meta"], {**res["meta"], "requested": 3, "created": 3, "skipped": 0})
+
+	def test_create_accepts_a_json_list_string(self):
+		res = self._create(f'["{TAG}-N1", "{TAG}-N2"]')
+		self.assertEqual(res["meta"]["created"], 2)
+
+	def test_create_drops_blank_and_repeated_ids(self):
+		res = self._create([f"{TAG}-N1", f" {TAG}-N1 ", "", "  ", f"{TAG}-N2"])
+		self.assertEqual([r["farmer_id"] for r in res["data"]["created"]], [f"{TAG}-N1", f"{TAG}-N2"])
+		self.assertEqual(res["meta"]["requested"], 2)
+
+	def test_create_skips_farmers_already_in_the_segment(self):
+		# F1 and F2 are already in segment A; F4 is in segment B only.
+		res = self._create([f"{TAG}-F1", f"{TAG}-F4", f"{TAG}-N1"], segment=self.seg_a)
+		self.assertEqual(_code(res), "ok")
+		self.assertEqual([r["farmer_id"] for r in res["data"]["created"]], [f"{TAG}-F4", f"{TAG}-N1"])
+		self.assertEqual(res["data"]["skipped"], [f"{TAG}-F1"])
+		self.assertEqual(frappe.db.count("Farmer Beneficiary", {"farmer_id": f"{TAG}-F1"}), 1)
+
+	def test_create_when_every_farmer_is_already_in_the_segment(self):
+		res = self._create([f"{TAG}-F1", f"{TAG}-F2"], segment=self.seg_a)
+		self.assertEqual(_code(res), "ok")
+		self.assertEqual(res["data"], {"created": [], "skipped": [f"{TAG}-F1", f"{TAG}-F2"]})
 
 	def test_create_lists_missing_fields(self):
-		res = api.create_farmer_beneficiary(farmer_id=f"{TAG}-NEW", region="ET04")
+		res = api.create_farmer_beneficiary(region="ET04")
 		self.assertEqual(_code(res), "VALIDATION_ERROR")
-		for field in ("zone", "woreda", "kebele", "beneficiary_segment"):
+		for field in ("farmer_ids", "zone", "woreda", "kebele", "beneficiary_segment"):
 			self.assertIn(field, res["message"])
+		empty = self._create([])
+		self.assertEqual(_code(empty), "VALIDATION_ERROR")
+		self.assertIn("farmer_ids", empty["message"])
+
+	def test_create_rejects_a_bad_farmer_ids_shape(self):
+		for value in ("FR-1", "not json [", {"a": 1}, [["FR-1"]], [None]):
+			with self.subTest(farmer_ids=value):
+				self.assertEqual(_code(self._create(value)), "VALIDATION_ERROR")
+
+	def test_create_caps_the_batch_size(self):
+		res = self._create([f"{TAG}-X{i}" for i in range(api.MAX_BULK + 1)])
+		self.assertEqual(_code(res), "VALIDATION_ERROR")
+		self.assertFalse(self._exists("X0"))
 
 	def test_create_rejects_inactive_or_unknown_segment(self):
 		for segment in (self.seg_off, "BS-NOPE"):
 			with self.subTest(segment=segment):
-				res = api.create_farmer_beneficiary(
-					farmer_id=f"{TAG}-NEW", beneficiary_segment=segment, **LOC_W01
-				)
-				self.assertEqual(_code(res), "VALIDATION_ERROR")
+				self.assertEqual(_code(self._create([f"{TAG}-N1"], segment=segment)), "VALIDATION_ERROR")
+		self.assertFalse(self._exists("N1"))
 
-	def test_create_rejects_a_duplicate(self):
-		res = api.create_farmer_beneficiary(farmer_id=f"{TAG}-F1", beneficiary_segment=self.seg_a, **LOC_W01)
-		self.assertEqual(_code(res), "DUPLICATE_ENTRY")
-
-	def test_create_outside_the_users_woreda_is_refused(self):
+	def test_create_outside_the_users_woreda_creates_nothing(self):
 		frappe.set_user(DA_W01)
-		res = api.create_farmer_beneficiary(farmer_id=f"{TAG}-NEW", beneficiary_segment=self.seg_a, **LOC_W02)
+		res = self._create([f"{TAG}-N1", f"{TAG}-N2"], segment=self.seg_a, loc=LOC_W02)
 		self.assertNotEqual(_code(res), "ok")
 		frappe.set_user("Administrator")
-		self.assertFalse(frappe.db.exists("Farmer Beneficiary", {"farmer_id": f"{TAG}-NEW"}))
+		self.assertFalse(self._exists("N1"))
+		self.assertFalse(self._exists("N2"))
+
+	def test_create_failure_mid_batch_rolls_back_the_whole_batch(self):
+		# N1 inserts; the second id is longer than the Data field allows and fails on insert.
+		# The row already inserted for N1 must not survive.
+		res = self._create([f"{TAG}-N1", f"{TAG}-" + "X" * 200])
+		self.assertNotEqual(_code(res), "ok")
+		self.assertFalse(self._exists("N1"))
 
 	def test_create_needs_create_permission(self):
 		frappe.set_user(EXEC)
-		res = api.create_farmer_beneficiary(farmer_id=f"{TAG}-NEW", beneficiary_segment=self.seg_a, **LOC_W01)
-		self.assertEqual(_code(res), "PERMISSION_DENIED")
+		self.assertEqual(_code(self._create([f"{TAG}-N1"], segment=self.seg_a)), "PERMISSION_DENIED")

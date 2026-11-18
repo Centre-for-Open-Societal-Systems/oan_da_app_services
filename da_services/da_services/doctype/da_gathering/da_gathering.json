@@ -1,0 +1,310 @@
+{
+ "actions": [],
+ "autoname": "format:DA-GATH-{YYYY}-{#######}",
+ "creation": "2026-11-15 12:00:00.000000",
+ "description": "A planned gathering of up to 20 farmers in a DA's kebele. Venue/landmark/lat/lng are editable; address geo is stamped read-only from the DA's Effective Kebele Assignment.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "da_id",
+  "title",
+  "status",
+  "col_head",
+  "purpose",
+  "scheduled_at",
+  "assigned_by",
+  "notify_farmers_sms",
+  "sec_location",
+  "location_name",
+  "landmark",
+  "col_location",
+  "location_lat",
+  "location_lng",
+  "sec_address",
+  "address",
+  "region",
+  "zone",
+  "col_address",
+  "woreda",
+  "kebele",
+  "sec_attendees",
+  "attendees",
+  "sec_sms",
+  "sms_logs",
+  "sec_cancel",
+  "cancel_reason",
+  "cancelled_at",
+  "sec_meta",
+  "created_by_user",
+  "client_op_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "label": "User",
+   "options": "User",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fetch_from": "user.da_registry_id",
+   "fieldname": "da_id",
+   "fieldtype": "Read Only",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "DA-ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "default": "Planned",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Planned\nCancelled",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "purpose",
+   "fieldtype": "Small Text",
+   "label": "Purpose"
+  },
+  {
+   "fieldname": "scheduled_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Scheduled At",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Supervisor who planned this gathering for the DA; empty when the DA planned it.",
+   "fieldname": "assigned_by",
+   "fieldtype": "Link",
+   "label": "Assigned By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "notify_farmers_sms",
+   "fieldtype": "Check",
+   "label": "Notify Farmers by SMS"
+  },
+  {
+   "fieldname": "sec_location",
+   "fieldtype": "Section Break",
+   "label": "Venue"
+  },
+  {
+   "description": "Venue name (editable). Used in SMS and in the composed address.",
+   "fieldname": "location_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Venue",
+   "reqd": 1
+  },
+  {
+   "fieldname": "landmark",
+   "fieldtype": "Data",
+   "label": "Landmark"
+  },
+  {
+   "fieldname": "col_location",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Optional map pin; not used in SMS text.",
+   "fieldname": "location_lat",
+   "fieldtype": "Float",
+   "label": "Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "location_lng",
+   "fieldtype": "Float",
+   "label": "Longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "sec_address",
+   "fieldtype": "Section Break",
+   "label": "Address (from DA Kebele Assignment)"
+  },
+  {
+   "description": "Read-only. Composed as Venue, Kebele, Woreda, Zone, Region from the DA's Effective Kebele Assignment.",
+   "fieldname": "address",
+   "fieldtype": "Small Text",
+   "label": "Address",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "description": "Stamped from the DA's Effective Kebele Assignment. Not editable.",
+   "fieldname": "region",
+   "fieldtype": "Link",
+   "label": "Region",
+   "options": "DA Region",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Link",
+   "label": "Zone",
+   "options": "DA Zone",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "col_address",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Link",
+   "label": "Woreda",
+   "options": "DA Woreda",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "kebele",
+   "fieldtype": "Link",
+   "label": "Kebele",
+   "options": "DA Kebele",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "sec_attendees",
+   "fieldtype": "Section Break",
+   "label": "Attendees"
+  },
+  {
+   "fieldname": "attendees",
+   "fieldtype": "Table",
+   "label": "Attendees",
+   "options": "DA Gathering Attendee"
+  },
+  {
+   "fieldname": "sec_sms",
+   "fieldtype": "Section Break",
+   "label": "SMS Log"
+  },
+  {
+   "fieldname": "sms_logs",
+   "fieldtype": "Table",
+   "label": "SMS Logs",
+   "options": "DA Gathering SMS Log"
+  },
+  {
+   "fieldname": "sec_cancel",
+   "fieldtype": "Section Break",
+   "label": "Cancellation"
+  },
+  {
+   "fieldname": "cancel_reason",
+   "fieldtype": "Small Text",
+   "label": "Cancel Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cancelled_at",
+   "fieldtype": "Datetime",
+   "label": "Cancelled At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_meta",
+   "fieldtype": "Section Break",
+   "label": "Meta"
+  },
+  {
+   "fieldname": "created_by_user",
+   "fieldtype": "Link",
+   "label": "Created By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "description": "Idempotency key from the device operation that created this row; unique when set.",
+   "fieldname": "client_op_id",
+   "fieldtype": "Data",
+   "label": "Client Op ID",
+   "search_index": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-11-16 15:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Gathering",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Development Agent",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "scheduled_at",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}
