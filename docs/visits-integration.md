@@ -95,12 +95,15 @@ returned page length unless a cross-page total is added later).
 ## `GET /farmers/<farmer_id>/advisory`
 
 Farmer profile, Advisory tab. One row per question of the farmer's Advisory visits, newest
-visit first, in the order the questions were saved:
+first, in the order the questions were saved:
 
 ```json
-{ "visit": "DA-VIS-2026-0000123", "scheduled_at": "2026-11-20 10:00:00",
-  "physical_status": "Planned", "question": "Which fertiliser for teff?", "answer": "" }
+{ "question": "Which fertiliser for teff?", "answer": "",
+  "creation": "2026-11-17 15:29:29.432267", "modified": "2026-11-18 10:02:11.120345" }
 ```
+
+`creation` and `modified` are the Q&A row's own Frappe timestamps (a row takes the visit's
+creation when it is first saved, and the visit's modified on every save of the visit).
 
 Query: `limit` (default 50, max 500), `start`. Meta: `{ total, limit, start }` (`total` is
 the returned page length). Access: DA Visit Role DocPerm + User Permissions (no extra role check).

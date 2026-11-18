@@ -293,7 +293,7 @@ class TestDAVisit(IntegrationTestCase):
 		rows, total = visits.list_visits(status="Completed")
 		self.assertEqual(total, 0)
 
-	def test_farmer_advisory_lists_questions_newest_visit_first(self):
+	def test_farmer_advisory_lists_questions_newest_first(self):
 		frappe.set_user(DA1)
 		older = visits.plan_visit(
 			farmer_id="FR-ADV-1",
@@ -331,14 +331,15 @@ class TestDAVisit(IntegrationTestCase):
 
 		rows = visits.list_farmer_advisory("FR-ADV-1")
 		self.assertEqual(
-			[(row.visit, row.question, row.answer) for row in rows],
+			[(row.question, row.answer) for row in rows],
 			[
-				(newer["name"], "Which seed rate?", "25 kg/ha"),
-				(older["name"], "Rust on teff?", "Spray within 3 days"),
-				(older["name"], "When to top-dress?", ""),
+				("Which seed rate?", "25 kg/ha"),
+				("Rust on teff?", "Spray within 3 days"),
+				("When to top-dress?", ""),
 			],
 		)
-		self.assertEqual(rows[0].physical_status, visits.COMPLETE)
+		self.assertEqual(set(rows[0]), {"question", "answer", "creation", "modified"})
+		self.assertTrue(all(row.creation and row.modified for row in rows))
 		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1", limit=1, start=1)), 1)
 
 		# Each question carries its visit's farmer, which is what the list filters on.

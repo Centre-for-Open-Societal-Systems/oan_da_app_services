@@ -395,8 +395,8 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 def get_farmer_advisory(farmer_id: str, limit=None, start=None):
 	"""Questions and answers of a farmer's Advisory visits (farmer profile, Advisory tab).
 
-	One row per question, newest visit first; each row carries ``visit``, ``scheduled_at``,
-	``physical_status``, ``question`` and ``answer``. Access is DA Visit's Role DocPerm and
+	One row per question, newest first; each row carries ``question``, ``answer``,
+	``creation`` and ``modified``. Access is DA Visit's Role DocPerm and
 	User Permissions, applied by ``frappe.get_list``: only visits the caller may see are read.
 	"""
 	limit = cint(limit or 50)
