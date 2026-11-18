@@ -232,6 +232,7 @@ class DAVisit(Document):
 					"user": self.user,
 					"da_id": self.da_id,
 					"farmer_id": self.farmer_id,
+					"farmer_name": self.farmer_name,
 					"visit_type": "Follow-up",
 					"purpose": self.next_action_note or _("Follow-up to {0}").format(self.name),
 					"scheduled_at": due,
