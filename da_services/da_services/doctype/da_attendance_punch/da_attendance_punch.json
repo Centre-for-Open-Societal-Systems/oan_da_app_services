@@ -11,12 +11,16 @@
   "da_id",
   "column_break_drqs",
   "action",
-  "punched_at",
+  "punched_date",
+  "punched_time",
   "sec_geo",
   "region",
   "zone",
   "woreda",
-  "kebele"
+  "kebele",
+  "sec_gps",
+  "gps_lat",
+  "gps_lng"
  ],
  "fields": [
   {
@@ -54,11 +58,18 @@
    "reqd": 1
   },
   {
-   "fieldname": "punched_at",
-   "fieldtype": "Datetime",
+   "fieldname": "punched_date",
+   "fieldtype": "Date",
    "in_list_view": 1,
-   "label": "Punched At",
-   "read_only": 1,
+   "label": "Punched Date",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "punched_time",
+   "fieldtype": "Time",
+   "in_list_view": 1,
+   "label": "Punched Time",
    "reqd": 1
   },
   {
@@ -70,16 +81,14 @@
    "fieldname": "region",
    "fieldtype": "Link",
    "label": "Region",
-   "options": "DA Region",
-   "reqd": 1
+   "options": "DA Region"
   },
   {
    "fieldname": "zone",
    "fieldtype": "Link",
    "in_filter": 1,
    "label": "Zone",
-   "options": "DA Zone",
-   "reqd": 1
+   "options": "DA Zone"
   },
   {
    "fieldname": "woreda",
@@ -94,12 +103,29 @@
    "in_filter": 1,
    "label": "Kebele",
    "options": "DA Kebele"
+  },
+  {
+   "fieldname": "sec_gps",
+   "fieldtype": "Section Break",
+   "label": "GPS"
+  },
+  {
+   "fieldname": "gps_lat",
+   "fieldtype": "Float",
+   "label": "GPS Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "gps_lng",
+   "fieldtype": "Float",
+   "label": "GPS Longitude",
+   "precision": "6"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-18 13:21:28.049516",
+ "modified": "2026-11-18 21:47:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Attendance Punch",
@@ -168,7 +194,7 @@
  ],
  "row_format": "Dynamic",
  "rows_threshold_for_grid_search": 20,
- "sort_field": "punched_at",
+ "sort_field": "punched_date",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

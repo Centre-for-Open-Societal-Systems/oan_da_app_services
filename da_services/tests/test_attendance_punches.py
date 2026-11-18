@@ -1,4 +1,4 @@
-"""DA Attendance Punch: create + today-latest (no sequence checks)."""
+"""DA Attendance Punch: create + today-latest with next_action."""
 
 from __future__ import annotations
 
@@ -31,6 +31,16 @@ def _user(email: str, roles: list[str]) -> str:
 	return email
 
 
+def _split_now(when=None) -> tuple[str, str]:
+	dt = when or now_datetime()
+	stamp = str(dt)
+	# "YYYY-MM-DD HH:MM:SS[.ffffff]"
+	date_part, time_part = stamp.split(" ", 1)
+	if "." in time_part:
+		time_part = time_part.split(".", 1)[0]
+	return date_part, time_part
+
+
 class TestAttendancePunches(IntegrationTestCase):
 	@classmethod
 	def setUpClass(cls):
@@ -55,10 +65,12 @@ class TestAttendancePunches(IntegrationTestCase):
 			if frappe.db.exists("User", email):
 				frappe.db.set_value("User", email, "da_registry_id", None, update_modified=False)
 
-	def _punch(self, *, action: str = "Punch In", woreda=True, kebele=True, punched_at=None, **over):
+	def _punch(self, *, action: str = "Punch In", woreda=True, kebele=True, when=None, **over):
+		punched_date, punched_time = _split_now(when)
 		body = {
 			"action": action,
-			"punched_at": punched_at or now_datetime(),
+			"punched_date": punched_date,
+			"punched_time": punched_time,
 			"region": self.geo["region"],
 			"zone": self.geo["zone"],
 		}
@@ -67,52 +79,99 @@ class TestAttendancePunches(IntegrationTestCase):
 		if kebele:
 			body["kebele"] = self.geo["kebele"]
 		body.update(over)
-		return svc.create_punch(**body)
+		svc.create_punch(**body)
+		# Latest for this user/day after insert (tests assert via get_today_latest / get_doc).
+		return frappe.get_all(
+			"DA Attendance Punch",
+			filters={"user": frappe.session.user},
+			fields=[
+				"name",
+				"action",
+				"punched_date",
+				"punched_time",
+				"da_id",
+				"region",
+				"zone",
+				"woreda",
+				"kebele",
+				"gps_lat",
+				"gps_lng",
+			],
+			order_by="creation desc",
+			limit=1,
+		)[0]
 
-	def test_today_empty_then_create_returns_row(self):
+	def test_today_empty_then_create_and_next_action(self):
 		frappe.set_user(DA_USER)
-		self.assertIsNone(svc.get_today_latest())
-		created = self._punch()
-		self.assertEqual(created["action"], "Punch In")
-		self.assertEqual(created["user"], DA_USER)
-		self.assertEqual(created["da_id"], DA_ID)
-		self.assertEqual(created["region"], self.geo["region"])
-		self.assertEqual(created["zone"], self.geo["zone"])
-		self.assertEqual(created["woreda"], self.geo["woreda"])
-		self.assertEqual(created["kebele"], self.geo["kebele"])
-		latest = svc.get_today_latest()
-		self.assertIsNotNone(latest)
-		self.assertEqual(latest["id"], created["id"])
-		self.assertEqual(latest["punched_at"], created["punched_at"])
+		empty = svc.get_today_latest()
+		self.assertEqual(empty["next_action"], "Punch In")
+		self.assertIsNone(empty["id"])
+		self.assertIsNone(empty["punched_date"])
+		self.assertIsNone(empty["punched_time"])
 
-	def test_supervisor_region_zone_woreda_without_kebele(self):
+		created = self._punch(lat=9.032, lng=38.7469)
+		self.assertEqual(created.action, "Punch In")
+		self.assertEqual(created.da_id, DA_ID)
+		self.assertEqual(created.region, self.geo["region"])
+		self.assertEqual(float(created.gps_lat), 9.032)
+		self.assertEqual(float(created.gps_lng), 38.7469)
+
+		latest = svc.get_today_latest()
+		self.assertEqual(latest["id"], created.name)
+		self.assertEqual(latest["next_action"], "Punch Out")
+		self.assertEqual(latest["punched_date"], str(created.punched_date))
+		self.assertTrue(latest["punched_time"])
+
+	def test_supervisor_without_kebele_and_optional_geo(self):
 		frappe.set_user(SUP_USER)
 		created = self._punch(action="Punch In", kebele=False)
-		self.assertEqual(created["da_id"], SUP_DA_ID)
-		self.assertEqual(created["woreda"], self.geo["woreda"])
-		self.assertFalse(created.get("kebele"))
+		self.assertEqual(created.da_id, SUP_DA_ID)
+		self.assertEqual(created.woreda, self.geo["woreda"])
+		self.assertFalse(created.kebele)
 
-	def test_multiple_punches_same_day_allowed(self):
+		# region/zone optional: punch with none
+		svc.create_punch(
+			action="Punch Out",
+			punched_date=today(),
+			punched_time="18:00:00",
+		)
+		row = frappe.get_all(
+			"DA Attendance Punch",
+			filters={"user": SUP_USER, "action": "Punch Out"},
+			fields=["region", "zone", "name"],
+			limit=1,
+		)[0]
+		self.assertFalse(row.region)
+		self.assertFalse(row.zone)
+
+	def test_multiple_punches_next_action_flips(self):
 		frappe.set_user(DA_USER)
 		first = self._punch(action="Punch In")
-		second = self._punch(action="Punch Out")
-		self.assertNotEqual(first["id"], second["id"])
 		latest = svc.get_today_latest()
-		self.assertEqual(latest["id"], second["id"])
-		self.assertEqual(latest["action"], "Punch Out")
+		self.assertEqual(latest["id"], first.name)
+		self.assertEqual(latest["next_action"], "Punch Out")
+
+		second = self._punch(action="Punch Out")
+		latest = svc.get_today_latest()
+		self.assertEqual(latest["id"], second.name)
+		self.assertEqual(latest["next_action"], "Punch In")
+
 		third = self._punch(action="Punch In")
 		latest = svc.get_today_latest()
-		self.assertEqual(latest["id"], third["id"])
-		self.assertEqual(latest["action"], "Punch In")
+		self.assertEqual(latest["id"], third.name)
+		self.assertEqual(latest["next_action"], "Punch Out")
 
 	def test_yesterday_punch_not_in_today_latest(self):
 		frappe.set_user(DA_USER)
 		yesterday = f"{add_days(today(), -1)} 18:00:00"
-		self._punch(action="Punch In", punched_at=yesterday)
-		self.assertIsNone(svc.get_today_latest())
+		self._punch(action="Punch In", when=yesterday)
+		empty = svc.get_today_latest()
+		self.assertEqual(empty["next_action"], "Punch In")
+		self.assertIsNone(empty["id"])
+
 		today_row = self._punch(action="Punch In")
 		latest = svc.get_today_latest()
-		self.assertEqual(latest["id"], today_row["id"])
+		self.assertEqual(latest["id"], today_row.name)
 
 	def test_missing_da_registry_id_rejected(self):
 		frappe.set_user(DA_USER)
@@ -120,12 +179,11 @@ class TestAttendancePunches(IntegrationTestCase):
 		with self.assertRaises(frappe.MandatoryError):
 			self._punch()
 
-	def test_missing_punched_at_rejected(self):
+	def test_missing_punched_date_rejected(self):
 		frappe.set_user(DA_USER)
 		with self.assertRaises(frappe.MandatoryError):
 			svc.create_punch(
 				action="Punch In",
-				punched_at=None,
-				region=self.geo["region"],
-				zone=self.geo["zone"],
+				punched_date=None,
+				punched_time="09:00:00",
 			)

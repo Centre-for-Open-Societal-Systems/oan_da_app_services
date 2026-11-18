@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-attendance-punches",
     "name": "OAN DA Attendance Punches",
-    "description": "Punch-in / punch-out for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today (null → show Punch In; last Punch In → Punch Out; last Punch Out → Punch In)\n3. POST punch with action, punched_at, region, zone; optional woreda, kebele\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region + zone required (Link masters); woreda + kebele optional\n- No punch-sequence checks on the backend\n- Datetimes are site-local ISO without offset",
+    "description": "Punch-in / punch-out for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET always returns {next_action, id, punched_date, punched_time}\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -25,8 +25,12 @@
     { "key": "zone", "value": "" },
     { "key": "woreda", "value": "" },
     { "key": "kebele", "value": "" },
-    { "key": "punched_at", "value": "" },
-    { "key": "punch_id", "value": "" }
+    { "key": "lat", "value": "9.032" },
+    { "key": "lng", "value": "38.7469" },
+    { "key": "punched_date", "value": "" },
+    { "key": "punched_time", "value": "" },
+    { "key": "punch_id", "value": "" },
+    { "key": "next_action", "value": "" }
   ],
   "item": [
     {
@@ -79,9 +83,13 @@
                 "exec": [
                   "pm.test(\"GET today returns 200\", function () { pm.response.to.have.status(200); });",
                   "const body = pm.response.json() || {};",
-                  "pm.test(\"envelope has data key\", function () { pm.expect(body).to.have.property(\"data\"); });",
-                  "const data = body.data;",
-                  "if (data && data.id) { pm.collectionVariables.set(\"punch_id\", data.id); pm.environment.set(\"punch_id\", data.id); }"
+                  "pm.test(\"envelope has data object\", function () { pm.expect(body.data).to.be.an(\"object\"); });",
+                  "const data = body.data || {};",
+                  "pm.test(\"next_action is Punch In or Punch Out\", function () {",
+                  "  pm.expect([\"Punch In\", \"Punch Out\"]).to.include(data.next_action);",
+                  "});",
+                  "if (data.next_action) { pm.collectionVariables.set(\"next_action\", data.next_action); pm.environment.set(\"next_action\", data.next_action); }",
+                  "if (data.id) { pm.collectionVariables.set(\"punch_id\", data.id); pm.environment.set(\"punch_id\", data.id); }"
                 ]
               }
             }
@@ -90,7 +98,7 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": "{{base_url}}/api/v1/da-services/attendance-punches/today",
-            "description": "Latest punch for the session user on the site calendar day. data is null when none."
+            "description": "Always returns {next_action, id, punched_date, punched_time}. Null id/date/time when none today."
           }
         }
       ]
@@ -106,13 +114,14 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if (!pm.collectionVariables.get(\"punched_at\") && !pm.environment.get(\"punched_at\")) {",
-                  "  const d = new Date();",
-                  "  const pad = (n) => String(n).padStart(2, \"0\");",
-                  "  const stamp = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate()) + \" \" + pad(d.getHours()) + \":\" + pad(d.getMinutes()) + \":\" + pad(d.getSeconds());",
-                  "  pm.collectionVariables.set(\"punched_at\", stamp);",
-                  "  pm.environment.set(\"punched_at\", stamp);",
-                  "}"
+                  "const d = new Date();",
+                  "const pad = (n) => String(n).padStart(2, \"0\");",
+                  "const date = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate());",
+                  "const time = pad(d.getHours()) + \":\" + pad(d.getMinutes()) + \":\" + pad(d.getSeconds());",
+                  "pm.collectionVariables.set(\"punched_date\", date);",
+                  "pm.collectionVariables.set(\"punched_time\", time);",
+                  "pm.environment.set(\"punched_date\", date);",
+                  "pm.environment.set(\"punched_time\", time);"
                 ]
               }
             },
@@ -122,9 +131,9 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"POST Punch In returns 201\", function () { pm.response.to.have.status(201); });",
-                  "const data = (pm.response.json() || {}).data || {};",
-                  "pm.test(\"action is Punch In\", function () { pm.expect(data.action).to.eql(\"Punch In\"); });",
-                  "if (data.id) { pm.collectionVariables.set(\"punch_id\", data.id); pm.environment.set(\"punch_id\", data.id); }"
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"message recorded\", function () { pm.expect(body.message).to.eql(\"Attendance punch recorded\"); });",
+                  "pm.test(\"no punch payload\", function () { pm.expect(body.data == null || Object.keys(body.data || {}).length === 0).to.be.true; });"
                 ]
               }
             }
@@ -137,11 +146,11 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"action\": \"Punch In\",\n  \"punched_at\": \"{{punched_at}}\",\n  \"region\": \"{{region}}\",\n  \"zone\": \"{{zone}}\",\n  \"woreda\": \"{{woreda}}\",\n  \"kebele\": \"{{kebele}}\"\n}",
+              "raw": "{\n  \"action\": \"Punch In\",\n  \"punched_date\": \"{{punched_date}}\",\n  \"punched_time\": \"{{punched_time}}\",\n  \"region\": \"{{region}}\",\n  \"zone\": \"{{zone}}\",\n  \"woreda\": \"{{woreda}}\",\n  \"kebele\": \"{{kebele}}\",\n  \"lat\": {{lat}},\n  \"lng\": {{lng}}\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": "{{base_url}}/api/v1/da-services/attendance-punches",
-            "description": "Create Punch In. Set region/zone (required). woreda/kebele optional — clear if role has no lower geo."
+            "description": "Create Punch In. Geo Links and lat/lng optional. Response is message-only."
           }
         },
         {
@@ -154,9 +163,12 @@
                 "exec": [
                   "const d = new Date();",
                   "const pad = (n) => String(n).padStart(2, \"0\");",
-                  "const stamp = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate()) + \" \" + pad(d.getHours()) + \":\" + pad(d.getMinutes()) + \":\" + pad(d.getSeconds());",
-                  "pm.collectionVariables.set(\"punched_at\", stamp);",
-                  "pm.environment.set(\"punched_at\", stamp);"
+                  "const date = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate());",
+                  "const time = pad(d.getHours()) + \":\" + pad(d.getMinutes()) + \":\" + pad(d.getSeconds());",
+                  "pm.collectionVariables.set(\"punched_date\", date);",
+                  "pm.collectionVariables.set(\"punched_time\", time);",
+                  "pm.environment.set(\"punched_date\", date);",
+                  "pm.environment.set(\"punched_time\", time);"
                 ]
               }
             },
@@ -166,9 +178,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"POST Punch Out returns 201\", function () { pm.response.to.have.status(201); });",
-                  "const data = (pm.response.json() || {}).data || {};",
-                  "pm.test(\"action is Punch Out\", function () { pm.expect(data.action).to.eql(\"Punch Out\"); });",
-                  "if (data.id) { pm.collectionVariables.set(\"punch_id\", data.id); pm.environment.set(\"punch_id\", data.id); }"
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"message recorded\", function () { pm.expect(body.message).to.eql(\"Attendance punch recorded\"); });"
                 ]
               }
             }
@@ -181,11 +192,11 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"action\": \"Punch Out\",\n  \"punched_at\": \"{{punched_at}}\",\n  \"region\": \"{{region}}\",\n  \"zone\": \"{{zone}}\",\n  \"woreda\": \"{{woreda}}\"\n}",
+              "raw": "{\n  \"action\": \"Punch Out\",\n  \"punched_date\": \"{{punched_date}}\",\n  \"punched_time\": \"{{punched_time}}\",\n  \"region\": \"{{region}}\",\n  \"zone\": \"{{zone}}\",\n  \"woreda\": \"{{woreda}}\",\n  \"lat\": {{lat}},\n  \"lng\": {{lng}}\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": "{{base_url}}/api/v1/da-services/attendance-punches",
-            "description": "Create Punch Out. Example omits kebele (Supervisor-style partial geo)."
+            "description": "Create Punch Out. Example omits kebele."
           }
         }
       ]
