@@ -292,36 +292,57 @@ class TestDAVisit(IntegrationTestCase):
 		rows, total = visits.list_visits(status="Completed")
 		self.assertEqual(total, 0)
 
-	def test_list_carries_advisory_qa(self):
+	def test_farmer_advisory_lists_questions_newest_visit_first(self):
 		frappe.set_user(DA1)
-		advisory = visits.plan_visit(
+		older = visits.plan_visit(
 			farmer_id="FR-ADV-1",
 			scheduled_at=self.tomorrow,
 			visit_type="Advisory",
 			advisory_qa=[
 				{"question": "Rust on teff?", "answer": "Spray within 3 days"},
-				{"question": "When to top-dress?", "answer": "At tillering"},
+				{"question": "When to top-dress?", "answer": ""},
 			],
 			user=DA1,
 		)
-		stamp_visit_geo(advisory["name"], self.geo)
+		# A farmer has one open Advisory visit at a time, so each is closed before the next is planned.
+		frappe.db.set_value("DA Visit", older["name"], "physical_status", visits.COMPLETE)
+		newer = visits.plan_visit(
+			farmer_id="FR-ADV-1",
+			scheduled_at=add_days(self.tomorrow, 2),
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Which seed rate?", "answer": "25 kg/ha"}],
+			user=DA1,
+		)
+		frappe.db.set_value("DA Visit", newer["name"], "physical_status", visits.COMPLETE)
+		# This farmer's Advisory visit with no questions, and another farmer's Advisory visit.
+		empty = visits.plan_visit(
+			farmer_id="FR-ADV-1", scheduled_at=add_days(self.tomorrow, 4), visit_type="Advisory", user=DA1
+		)
+		other = visits.plan_visit(
+			farmer_id="FR-ADV-2",
+			scheduled_at=self.tomorrow,
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Not this farmer", "answer": ""}],
+			user=DA1,
+		)
+		for visit in (older, newer, empty, other):
+			stamp_visit_geo(visit["name"], self.geo)
 
-		rows, _total = visits.list_visits(da_id="DA-000001")
-		by_name = {row["name"]: row for row in rows}
+		rows = visits.list_farmer_advisory("FR-ADV-1")
 		self.assertEqual(
-			by_name[advisory["name"]]["advisory_qa"],
+			[(row.visit, row.question, row.answer) for row in rows],
 			[
-				{"question": "Rust on teff?", "answer": "Spray within 3 days"},
-				{"question": "When to top-dress?", "answer": "At tillering"},
+				(newer["name"], "Which seed rate?", "25 kg/ha"),
+				(older["name"], "Rust on teff?", "Spray within 3 days"),
+				(older["name"], "When to top-dress?", ""),
 			],
 		)
-		# A visit of another type lists with no questions.
-		self.assertEqual(by_name[self.v1["name"]]["advisory_qa"], [])
+		self.assertEqual(rows[0].physical_status, visits.COMPLETE)
+		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1", limit=1, start=1)), 1)
 
-		# The questions follow the visit's own visibility: a DA elsewhere gets neither.
+		# The questions follow the visit's own visibility: a DA elsewhere gets none.
 		frappe.set_user(DA3)
-		rows, _total = visits.list_visits(farmer_id="FR-ADV-1")
-		self.assertEqual(rows, [])
+		self.assertEqual(visits.list_farmer_advisory("FR-ADV-1"), [])
 
 	def test_list_area_filters_use_user_permissions(self):
 		# Out-of-scope geography filters no longer throw; get_list + User Permissions return empty.

@@ -11,6 +11,7 @@ from PIL import Image
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
+from da_services.api.v1 import farmers as farmers_api
 from da_services.api.v1 import visits as api
 from da_services.services import constants as C
 from da_services.services import visits as svc
@@ -356,6 +357,37 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(out["meta"]["total"], 3)
 		out = api.list_visits(farmer_id="FRM-000102")
 		self.assertEqual(out["meta"]["total"], 1)
+
+	def test_farmer_advisory_returns_questions_within_scope(self):
+		frappe.set_user(DA1)
+		visit = self._plan(
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Fertiliser timing?", "answer": "At tillering"}],
+		)["data"]
+		self._plan(date=add_days(today(), 2), farmer_id="FRM-000102")
+
+		out = farmers_api.get_farmer_advisory("FRM-000101")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual((out["meta"]["total"], out["meta"]["limit"], out["meta"]["start"]), (1, 50, 0))
+		row = out["data"][0]
+		self.assertEqual(
+			(row["visit"], row["physical_status"], row["question"], row["answer"]),
+			(visit["name"], "Planned", "Fertiliser timing?", "At tillering"),
+		)
+		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000102")["data"], [])
+
+		# A visit outside the caller's geography gives no questions; Comms may not call it.
+		frappe.set_user("Administrator")
+		self._plan(
+			da_id="DA-000003",
+			farmer_id="FRM-000199",
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Out of scope?", "answer": ""}],
+		)
+		frappe.set_user(DA1)
+		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000199")["data"], [])
+		frappe.set_user(COMMS)
+		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000101")["status"], "error")
 
 	def test_executive_reads_region_but_not_other_region(self):
 		frappe.set_user(DA1)

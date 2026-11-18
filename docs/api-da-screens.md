@@ -154,6 +154,7 @@ The API returns the Farmer Registry's own state and the UI maps it.
 | Holdings | `Plot {code, crop, areaHa, soil, zone, lat, lng, tenure}` | `GET /farmers/{id}/plots` | Farmer Registry (Land Registry later) |
 | Crop history | Crop Sown rows (`source` split); GPS in section/tabs when staff returns it | `GET /farmers/{id}/crops?source=submission\|register` (required); `?submission_id=` for one draft; `?internal_record_id=&tab_id=` for one register tab; intake via `GET /crop-sown/intake-form?form=` (required) | Crop Sown staff |
 | Visit history | `Visit {title, summary, date, time}` | `GET /visits?farmer_id=&status=Completed` | ours: DA Visit |
+| Advisory (questions and answers) | one row per question `{visit, scheduled_at, physical_status, question, answer}`, newest visit first | `GET /farmers/{id}/advisory?limit&start` (rows of visits the caller may see; saved by `POST /visits`, answered by `POST /visits/{id}/submit`) | ours: DA Visit + `DA Visit Advisory QA` |
 | Documents | `FarmerDocument {name, uploadedAt, size}` + download | `GET /farmers/{id}/documents`, file URL | Farmer Registry (files) |
 | Advisory notes | `AdvisoryNote {date, author, text}`; Add note modal | `GET/POST /farmers/{id}/advisory-notes` | ours: new child of DA Farmer Link (`DA Advisory Note`, see §3) |
 | Action strip: Plan visit | §2.6 | | |
@@ -231,7 +232,7 @@ yet delivered / Other), farmer notified by SMS.
 
 | Element | API | Source |
 |---|---|---|
-| Table + stats + facets | `GET /visits?region&zone&woreda&kebele&status&from&to&da_id&farmer_id&limit&start` → visit rows (+ derived `ui_status` / `planner_status`, + `advisory_qa[] {question, answer}`, `[]` unless the visit is Advisory). Row set from Role DocPerm + User Permissions; query args only narrow. Out-of-grant geography yields an empty page, not a service-layer 403 | ours: DA Visit |
+| Table + stats + facets | `GET /visits?region&zone&woreda&kebele&status&from&to&da_id&farmer_id&limit&start` → visit rows (+ derived `ui_status` / `planner_status`). Row set from Role DocPerm + User Permissions; query args only narrow. Out-of-grant geography yields an empty page, not a service-layer 403 | ours: DA Visit |
 | View details | `GET /visits/{id}` → record + `timeline[]` (from DA Visit status history) | ours |
 | Reschedule | `POST /visits/{id}/reschedule {scheduled_at, reason}` → new DA Visit with `rescheduled_from`, old one `Rescheduled`; SMS job | ours + SMS |
 | Supervisor assigns a visit to a DA (`assignedBy`) | `POST /visits` with `da_id` by a Supervisor (scope: own Woreda) | ours |

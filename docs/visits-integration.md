@@ -79,10 +79,6 @@ Query: `date` or `from`+`to`, `status`, `farmer_id`, `da_id`, `region`, `zone`,
 `woreda`, `kebele`, `limit`, `start`. Meta: `{ total, limit, start }` (`total` is the
 returned page length unless a cross-page total is added later).
 
-Each row carries `advisory_qa[] {question, answer}`, as the detail does: an Advisory
-visit's questions in the order they were saved, `[]` for every other visit type. The
-farmer's Advisory tab reads them with `GET /visits?farmer_id=`.
-
 ## Other routes
 
 | Method | Path | Notes |
@@ -94,6 +90,22 @@ farmer's Advisory tab reads them with `GET /visits?farmer_id=`.
 | POST | `/visits/<id>/submit` | Outcome |
 | POST | `/visits/<id>/attachments` | Multipart evidence |
 | GET | `/reports/activity` | Weekly report (`week`, optional `da_id`) |
+| GET | `/farmers/<farmer_id>/advisory` | A farmer's Advisory questions and answers (below) |
+
+## `GET /farmers/<farmer_id>/advisory`
+
+Farmer profile, Advisory tab. One row per question of the farmer's Advisory visits, newest
+visit first, in the order the questions were saved:
+
+```json
+{ "visit": "DA-VIS-2026-0000123", "scheduled_at": "2026-11-20 10:00:00",
+  "physical_status": "Planned", "question": "Which fertiliser for teff?", "answer": "" }
+```
+
+Query: `limit` (default 50, max 500), `start`. Meta: `{ total, limit, start }` (`total` is
+the returned page length). Roles: Development Agent, Supervisor, Executive, OAN Administrator.
+Only visits the caller may see are read; an Advisory visit with no questions gives no row.
+`GET /visits` does not carry the questions; `GET /visits/<id>` does (`advisory_qa[]`).
 
 ## Related
 

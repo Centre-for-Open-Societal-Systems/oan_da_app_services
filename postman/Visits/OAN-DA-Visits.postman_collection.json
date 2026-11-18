@@ -245,6 +245,46 @@
             "description": "Visit history for one farmer. First loads farmer profile for scope check (registry/cache)."
           },
           "response": []
+        },
+        {
+          "name": "Get farmer advisory (questions and answers)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/advisory?limit=50&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{farmer_id}}",
+                "advisory"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size in questions (default 50, max 500)"
+                },
+                {
+                  "key": "start",
+                  "value": "0",
+                  "description": "Offset (default 0)"
+                }
+              ]
+            },
+            "description": "Questions and answers of the farmer's Advisory visits (farmer profile, Advisory tab). One row per question, newest visit first: { visit, scheduled_at, physical_status, question, answer }. Only visits the caller may see (Role DocPerm + User Permissions) are read; an Advisory visit with no questions gives no row. Meta: { total, limit, start } (total is len of returned page).\n\nQuestions are saved with POST /visits (advisory_qa[]) and answered with POST /visits/{id}/submit (advisory_qa[])."
+          },
+          "response": []
         }
       ]
     },
@@ -604,7 +644,7 @@
                 }
               ]
             },
-            "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nEach row carries advisory_qa[] {question, answer}: an Advisory visit's questions in the order they were saved, [] for other visit types.\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
+            "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
           },
           "response": []
         },
@@ -631,7 +671,7 @@
                 "{{visit_id}}"
               ]
             },
-            "description": "One visit + derived ui_status / planner_status + timeline[] built from visit timestamps. An Advisory visit also carries advisory_qa[] {question, answer}."
+            "description": "One visit + derived ui_status / planner_status + timeline[] built from visit timestamps."
           },
           "response": []
         },

@@ -67,6 +67,7 @@ Every `{id}` takes the registry id or the Farmer-ID (`FR-…`).
 | Avatar | GET | `photo_url` from the list, or `/farmers/{id}/photo` |
 | Edit button | GET | `/farmers/{id}/permissions` |
 | Visit history | GET | `/farmers/{id}/visits` |
+| Advisory tab | GET | `/farmers/{id}/advisory` |
 | Change requests | GET | `/farmers/{id}/change-requests?status=&tab=` |
 | Register wizard, dropdowns | GET | `/registries/farmer/field-options` |
 | Register wizard, location cascade | GET | `/registries/farmer/places?level=region\|zone\|woreda\|kebele&parent=` |

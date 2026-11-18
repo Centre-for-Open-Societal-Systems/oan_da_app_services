@@ -647,25 +647,33 @@ def list_visits(
 		limit_page_length=limit,
 		limit_start=start,
 	)
-	_attach_advisory_qa(rows)
 	return rows, len(rows)
 
 
-def _attach_advisory_qa(rows: list[dict]) -> None:
-	"""Give each listed visit its ``advisory_qa``, as the detail has it (one read for the page)."""
-	by_name = {row.name: row for row in rows}
-	for row in rows:
-		row.advisory_qa = []
-	advisory = [row.name for row in rows if row.visit_type == "Advisory"]
-	if not advisory:
-		return
-	for qa in frappe.get_all(
-		"DA Visit Advisory QA",
-		filters={"parenttype": "DA Visit", "parent": ("in", advisory)},
-		fields=["parent", "question", "answer"],
-		order_by="parent asc, idx asc",
-	):
-		by_name[qa.parent].advisory_qa.append({"question": qa.question, "answer": qa.answer})
+def list_farmer_advisory(farmer_id: str, *, limit: int = 50, start: int = 0) -> list[dict]:
+	"""Questions and answers of a farmer's Advisory visits: one row per question, newest visit first.
+
+	The visits are read through Role DocPerm + User Permissions, so a caller gets only the
+	questions of visits they may see.
+	"""
+	return frappe.get_list(
+		"DA Visit",
+		filters=[
+			["DA Visit", "farmer_id", "=", farmer_id],
+			["DA Visit", "visit_type", "=", "Advisory"],
+			["DA Visit Advisory QA", "question", "is", "set"],
+		],
+		fields=[
+			"name as visit",
+			"scheduled_at",
+			"physical_status",
+			"advisory_qa.question",
+			"advisory_qa.answer",
+		],
+		order_by="`tabDA Visit`.scheduled_at desc, `tabDA Visit Advisory QA`.idx asc",
+		limit_page_length=max(1, min(int(limit), 500)),
+		limit_start=max(0, int(start)),
+	)
 
 
 def dashboard_counts(da_id: str, from_date, to_date) -> dict:
