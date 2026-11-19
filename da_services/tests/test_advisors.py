@@ -125,52 +125,12 @@ class TestAdvisors(IntegrationTestCase):
 		with self.assertRaises(frappe.DoesNotExistError):
 			svc.get_advisor("ADV-NOPE")
 
-	def test_da_sees_only_advisors_of_their_woreda(self):
-		from types import SimpleNamespace
-
-		from da_services.services import constants as C
-
-		# Only the code -> name lookup matters here, so the Zone / Region chain is not built.
-		area = frappe.get_doc(
-			{
-				"doctype": "DA Administrative Area",
-				"code": "TST9-W01",
-				"level": "Woreda",
-				"name_en": "Test Scope Woreda",
-			}
-		)
-		area.flags.ignore_validate = True
-		area.insert(ignore_permissions=True)
-		by_name = svc.create_advisor(**{**GOOD, "woreda": "Test Scope Woreda"})
-		by_code = svc.create_advisor(**{**GOOD, "woreda": "TST9-W01"})
+	def test_da_sees_the_whole_directory(self):
+		# No Woreda scoping: a DA lists and opens advisors of any Woreda, same as an officer.
+		here = svc.create_advisor(**{**GOOD, "woreda": "Test Scope Woreda"})
 		elsewhere = svc.create_advisor(**{**GOOD, "woreda": "Test Other Woreda"})
-
-		def ctx(*roles, woredas=(), unrestricted=False):
-			return SimpleNamespace(
-				unrestricted=unrestricted,
-				woreda_scopes=frozenset(woredas),
-				has_any_role=lambda *asked: bool(set(asked) & set(roles)),
-			)
-
-		da = ctx(C.ROLE_DA, woredas=["TST9-W01"])
-		rows, total = svc.list_advisors(da, limit=500)
-		self.assertEqual({r["id"] for r in rows}, {by_name["id"], by_code["id"]})
-		self.assertEqual(total, 2)
-		# A requested Woreda narrows the scope but never widens it.
-		self.assertEqual(svc.list_advisors(da, woreda="Test Other Woreda"), ([], 0))
-		self.assertEqual([r["id"] for r in svc.list_advisors(da, woreda="TST9-W01")[0]], [by_code["id"]])
-		self.assertEqual(svc.get_advisor(by_name["id"], da)["id"], by_name["id"])
-		with self.assertRaises(frappe.DoesNotExistError):
-			svc.get_advisor(elsewhere["id"], da)
-		# A DA with no Woreda sees nothing.
-		self.assertEqual(svc.list_advisors(ctx(C.ROLE_DA)), ([], 0))
-
-		# Officers and the Administrator see the whole directory.
-		for officer in (
-			ctx(C.ROLE_SUPERVISOR, woredas=["TST9-W01"]),
-			ctx(C.ROLE_DA, C.ROLE_SUPERVISOR, woredas=["TST9-W01"]),
-			ctx(C.ROLE_ADMIN, unrestricted=True),
-		):
-			ids = {r["id"] for r in svc.list_advisors(officer, limit=500)[0]}
-			self.assertTrue({by_name["id"], by_code["id"], elsewhere["id"]} <= ids)
-			self.assertEqual(svc.get_advisor(elsewhere["id"], officer)["id"], elsewhere["id"])
+		ids = {r["id"] for r in svc.list_advisors(limit=500)[0]}
+		self.assertTrue({here["id"], elsewhere["id"]} <= ids)
+		self.assertEqual(svc.get_advisor(elsewhere["id"])["id"], elsewhere["id"])
+		rows, _ = svc.list_advisors(woreda="Test Other Woreda", limit=500)
+		self.assertEqual({r["id"] for r in rows}, {elsewhere["id"]})
