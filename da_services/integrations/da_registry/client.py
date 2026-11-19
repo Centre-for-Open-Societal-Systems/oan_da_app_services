@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 
 import frappe
 
-from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
+from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate, SectionChange
 
 
 class DARegistryError(Exception):
@@ -138,6 +138,22 @@ class DARegistryClient(ABC):
 		Raises DARegistryUnavailable when the list cannot be read right now.
 		"""
 		raise DARegistryContractPending(f"Master Data list {attribute_id} is not available")
+
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""Store a file in the registry's document store; return its document_id."""
+		raise DARegistryContractPending("Registry documents are not available")
+
+	def push_section_change(self, change: SectionChange) -> IntegrationResult:
+		"""Open a registry change request on a list section or the photo (DA Registry #66)."""
+		raise DARegistryContractPending("Registry list sections are not available")
+
+	def document_links(self, document_ids: list[str]) -> dict[str, str]:
+		"""Short-lived links to registry documents (a photo, a certificate), {document_id: url}.
+
+		An id the registry has no link for is left out. Raises DARegistryUnavailable when
+		the registry cannot be asked right now.
+		"""
+		raise DARegistryContractPending("Registry documents are not available")
 
 	@abstractmethod
 	def geo_levels(self) -> list[dict]:

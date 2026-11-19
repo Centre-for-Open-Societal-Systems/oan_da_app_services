@@ -46,7 +46,7 @@ from da_services.integrations.da_registry.client import (
 )
 from da_services.integrations.da_registry.schemas import DAReference, ProfileUpdate
 from da_services.services import constants as C
-from da_services.services import profile_fields
+from da_services.services import profile_fields, profile_lists
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.notifications import notify, notify_da
 from da_services.utils import audit
@@ -57,6 +57,7 @@ READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 SUBMIT_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR)
 DECIDE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 AGENT_PROFILE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
+DOCUMENT_ROLES = (C.ROLE_DA, *AGENT_PROFILE_ROLES)
 DECISIONS = {"Approve": "Approved", "Reject": "Rejected", "Request changes": "Changes requested"}
 LEVEL2_DECISIONS = ("Approve", "Reject")
 NOTE_MIN_LENGTH = 5
@@ -237,7 +238,13 @@ def _profile(ref: DAReference) -> dict:
 		"email": ref.email,
 		"language": ref.language,
 		"photo": ref.photo_url,
+		# DA Registry #66: view only here; changes to these lists come later.
+		"qualifications": ref.qualifications,
+		"dependents": ref.dependents,
+		# The main education record's level and passout year, as the registry copies them
+		# onto the DA record: read only, changed through the education records.
 		"education_tier": ref.education_tier,
+		"passout_year": ref.passout_year,
 		"specialisation": ref.specialisation,
 		"region": ref.region,
 		"zone": ref.zone,
@@ -259,13 +266,30 @@ def _profile(ref: DAReference) -> dict:
 		"birth_year_ec": ref.birth_year_ec,
 		"telegram_number": ref.telegram_number,
 		"alternate_number": ref.alternate_number,
+		"home_address": ref.home_address,
 		"position": ref.position,
+		"position_code": ref.position_code,
+		"reports_to": ref.reports_to,
 		"country": ref.country,
 		"region_name": ref.region_name,
 		"zone_name": ref.zone_name,
 		"woreda_name": ref.woreda_name,
 		"kebele_name": ref.kebele_name,
 	}
+
+
+def _reports_to_person(da_id: str | None) -> tuple[str | None, str | None]:
+	"""(name, position) of the person a DA reports to, read from the registry by DA-ID.
+
+	None, None when there is none or the registry cannot say now: the DA-ID is still shown.
+	"""
+	if not da_id:
+		return None, None
+	try:
+		boss = get_client().get_da(da_id)
+	except DARegistryError:
+		return None, None
+	return boss.full_name or None, boss.position
 
 
 def _profile_view(ref: DAReference, ctx: ScopeContext) -> dict:
@@ -275,11 +299,19 @@ def _profile_view(ref: DAReference, ctx: ScopeContext) -> dict:
 		fields=FIELDS,
 		order_by="creation desc",
 	)
+	profile = _profile(ref)
+	if not profile["photo"] and ref.photo_document_id:
+		profile["photo"] = _document_url(ref.photo_document_id)
+	profile["reports_to_name"], profile["reports_to_position"] = _reports_to_person(ref.reports_to)
+	fields = profile_fields.catalog(ref, get_client())
+	if "reports_to" in fields:
+		fields["reports_to"]["current_label"] = profile["reports_to_name"]
 	return {
-		"profile": _profile(ref),
+		"profile": profile,
 		"editable_fields": sorted(profile_fields.FIELDS),
-		"fields": profile_fields.catalog(ref, get_client()),
+		"fields": fields,
 		"note_min_length": profile_fields.NOTE_MIN_LENGTH,
+		"list_options": profile_lists.form_options(get_client()),
 		"locked_fields": [],
 		"pending_requests": serialize_many(open_rows, ctx),
 	}
@@ -308,6 +340,52 @@ def agent_profile(da_id: str, ctx: ScopeContext | None = None) -> dict:
 	out = _profile_view(ref, ctx)
 	out["can_request"] = _supervises(ctx, ref.woreda) and not ctx.owns_da(ref.da_id)
 	return out
+
+
+def _documents_of(ref: DAReference) -> dict[str, str | None]:
+	"""The registry documents on a DA's record, {document_id: file name}."""
+	docs: dict[str, str | None] = {}
+	if ref.photo_document_id:
+		docs[ref.photo_document_id] = "photo"
+	for record in ref.qualifications:
+		for f in record.get("certificates") or []:
+			docs[f["document_id"]] = f.get("name")
+	return docs
+
+
+def _document_url(document_id: str) -> str | None:
+	"""A short-lived link, or None while the registry cannot give one (the profile still shows)."""
+	try:
+		return get_client().document_links([document_id]).get(document_id)
+	except DARegistryError:
+		return None
+
+
+def document_link(document_id: str, *, da_id: str | None = None, ctx: ScopeContext | None = None) -> dict:
+	"""A short-lived link to one of a DA's registry documents: a certificate or the photo.
+
+	A DA opens their own; a Supervisor, Executive or Administrator one of a DA in their
+	scope (``da_id``). Only a document on that DA's record opens, so a guessed id leads
+	nowhere.
+	"""
+	ctx = ctx or require_roles(*DOCUMENT_ROLES)
+	target = (da_id or "").strip()
+	if target and ctx.has_any_role(*AGENT_PROFILE_ROLES):
+		ref = get_da_reference(target, ctx)  # scope: the registry's own posting of the DA
+	elif ctx.has_any_role(C.ROLE_DA):
+		ref = get_da_reference(_own_da_id(ctx), ctx)
+	else:
+		frappe.throw(_("da_id is required: name a DA in your scope."), frappe.ValidationError)
+	names = _documents_of(ref)
+	if document_id not in names:
+		raise frappe.DoesNotExistError(_("DA {0} has no document {1}.").format(ref.da_id, document_id))
+	try:
+		url = get_client().document_links([document_id]).get(document_id)
+	except DARegistryUnavailable:
+		frappe.throw(_("The DA Registry is unavailable. Try again shortly."), frappe.ValidationError)
+	if not url:
+		frappe.throw(_("The document cannot be opened right now. Try again shortly."), frappe.ValidationError)
+	return {"da_id": ref.da_id, "document_id": document_id, "name": names[document_id], "url": url}
 
 
 def _supervises(ctx: ScopeContext, woreda: str | None) -> bool:
@@ -343,6 +421,19 @@ def submit_change_request(
 		if existing:
 			return serialize(frappe.get_doc(DOCTYPE, existing), ctx)
 
+	ref, as_supervisor = _target(ctx, da_id)
+	section, diff = profile_fields.validate_changes(
+		changes, ref=ref, reason=reason, client=get_client(), as_supervisor=as_supervisor
+	)
+	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+
+
+def _target(ctx: ScopeContext, da_id: str | None) -> tuple[DAReference, bool]:
+	"""(the DA a request is about, whether a Supervisor asks for them), checked for scope.
+
+	A DA's ``da_id`` always comes from their own DA RBAC assignment: one sent in the
+	request is ignored. A Supervisor names the DA; the DA must be posted in their Woreda.
+	"""
 	target = (da_id or "").strip()
 	as_supervisor = bool(target) and ctx.has_any_role(C.ROLE_SUPERVISOR) and not ctx.owns_da(target)
 	if as_supervisor:
@@ -353,10 +444,22 @@ def submit_change_request(
 		ref = get_da_reference(_own_da_id(ctx), ctx)
 	else:
 		frappe.throw(_("da_id is required: name a DA of your Woreda."), frappe.ValidationError)
-
 	if _refresh_registry_results(ref.da_id):
 		ref = get_da_reference(ref.da_id, ctx)  # an earlier change just landed: diff against it
-	section, diff = profile_fields.validate_changes(changes, ref=ref, reason=reason, client=get_client())
+	return ref, as_supervisor
+
+
+def _submit(
+	ctx: ScopeContext,
+	ref: DAReference,
+	as_supervisor: bool,
+	section: str,
+	diff: dict,
+	reason: str | None,
+	client_op_id: str | None,
+	on_created=None,
+) -> dict:
+	"""Store a checked request. ``on_created(doc)`` adds what belongs to it (a file)."""
 	# Two submits for one DA at once (a double tap, the DA and the Supervisor together)
 	# would both pass the open-request check: take them one at a time.
 	lock = _lock_da(ref.da_id)
@@ -369,12 +472,299 @@ def submit_change_request(
 			existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
 			if existing:
 				return serialize(frappe.get_doc(DOCTYPE, existing), ctx)  # the same operation, sent twice
-		out = _create_request(ctx, ref, section, diff, reason, client_op_id, as_supervisor)
+		out = _create_request(ctx, ref, section, diff, reason, client_op_id, as_supervisor, on_created)
 		# Committed before the lock is released, so the next holder sees this request.
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		return out
 	finally:
 		_unlock(lock)
+
+
+def _submitter(
+	ctx: ScopeContext | None, client_op_id: str | None
+) -> tuple[ScopeContext, str | None, dict | None]:
+	"""(caller, client_op_id, the request it already made with that id or None)."""
+	ctx = ctx or require_roles(*SUBMIT_ROLES)
+	if not ctx.has_any_role(*SUBMIT_ROLES):
+		frappe.throw(
+			_("Only a Development Agent or their Supervisor can request a profile change."),
+			frappe.PermissionError,
+		)
+	client_op_id = (client_op_id or "").strip() or None
+	if client_op_id:
+		existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
+		if existing:
+			return ctx, client_op_id, serialize(frappe.get_doc(DOCTYPE, existing), ctx)
+	return ctx, client_op_id, None
+
+
+# -- lists, certificates, photo (DA Registry #66; services/profile_lists.py) ---------------
+
+
+def submit_record_change(
+	*,
+	action: str,
+	record_id: str | None = None,
+	values: dict | None = None,
+	reason: str | None = None,
+	client_op_id: str | None = None,
+	da_id: str | None = None,
+	ctx: ScopeContext | None = None,
+) -> dict:
+	"""Add, change or remove one of a DA's Education & Professional records."""
+	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	if done:
+		return done
+	ref, as_supervisor = _target(ctx, da_id)
+	section, diff = profile_lists.record_change(
+		ref, get_client(), action=action, record_id=record_id, values=values or {}
+	)
+	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+
+
+def submit_family_change(
+	*,
+	action: str,
+	member_id: str | None = None,
+	values: dict | None = None,
+	reason: str | None = None,
+	client_op_id: str | None = None,
+	da_id: str | None = None,
+	ctx: ScopeContext | None = None,
+) -> dict:
+	"""Add, change or remove one of a DA's family members."""
+	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	if done:
+		return done
+	ref, as_supervisor = _target(ctx, da_id)
+	section, diff = profile_lists.member_change(
+		ref, get_client(), action=action, member_id=member_id, values=values or {}
+	)
+	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+
+
+def submit_certificate(
+	*,
+	record_id: str | None,
+	filename: str | None,
+	content: bytes | None,
+	title: str | None = None,
+	issuer: str | None = None,
+	issued_on: str | None = None,
+	expires_on: str | None = None,
+	replaces: str | None = None,
+	reason: str | None = None,
+	client_op_id: str | None = None,
+	da_id: str | None = None,
+	ctx: ScopeContext | None = None,
+) -> dict:
+	"""Add a certificate to an Education & Professional record, or a new file in place of one.
+
+	The file stays in DA Services, private, until the request is approved at both levels;
+	the certificate counts as verified once the registry holds it.
+	"""
+	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	if done:
+		return done
+	file_name, _type = profile_lists.check_file(filename, content, photo=False)
+	ref, as_supervisor = _target(ctx, da_id)
+	section, diff = profile_lists.certificate_change(
+		ref,
+		record_id=record_id,
+		file_name=file_name,
+		title=title,
+		issuer=issuer,
+		issued_on=issued_on,
+		expires_on=expires_on,
+		replaces=replaces,
+	)
+	entry = next(iter(diff.values()))
+
+	def keep(doc):
+		profile_lists.attach_file(doc, file_name, content)
+		profile_lists.save_certificate(doc, entry)
+
+	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id, keep)
+
+
+def submit_certificate_removal(
+	*,
+	record_id: str | None,
+	document_id: str | None,
+	reason: str | None = None,
+	client_op_id: str | None = None,
+	da_id: str | None = None,
+	ctx: ScopeContext | None = None,
+) -> dict:
+	"""Take a certificate off an Education & Professional record (the registry keeps the file)."""
+	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	if done:
+		return done
+	ref, as_supervisor = _target(ctx, da_id)
+	section, diff = profile_lists.certificate_removal(ref, record_id=record_id, document_id=document_id)
+	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+
+
+def submit_photo(
+	*,
+	filename: str | None = None,
+	content: bytes | None = None,
+	remove: bool = False,
+	reason: str | None = None,
+	client_op_id: str | None = None,
+	da_id: str | None = None,
+	ctx: ScopeContext | None = None,
+) -> dict:
+	"""Set the DA's photo (a new file) or, with ``remove``, take it off."""
+	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	if done:
+		return done
+	file_name = None
+	if not remove:
+		file_name, _type = profile_lists.check_file(filename, content, photo=True)
+	ref, as_supervisor = _target(ctx, da_id)
+	section, diff = profile_lists.photo_change(ref, file_name=file_name)
+
+	def keep(doc):
+		if file_name:
+			profile_lists.attach_file(doc, file_name, content)
+
+	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id, keep)
+
+
+CERTIFICATE_STATUS = {
+	states.PENDING_SUPERVISOR: "Pending verification",
+	states.PENDING_ADMINISTRATOR: "Pending verification",
+	states.SENT_TO_REGISTRY: "Pending verification",
+	states.REGISTRY_FAILED: "Pending verification",
+	states.REJECTED: "Rejected",
+	# The Supervisor asked the DA for another file: the DA sends a new request.
+	states.CHANGES_REQUESTED: "Changes requested",
+}
+
+
+def list_certificates(da_id: str | None = None, ctx: ScopeContext | None = None) -> list[dict]:
+	"""A DA's certificates: the ones the registry holds (verified), each with the details DA
+	Services keeps, then the ones still waiting for verification or rejected."""
+	ctx = ctx or require_roles(*DOCUMENT_ROLES)
+	target = (da_id or "").strip()
+	if target and ctx.has_any_role(*AGENT_PROFILE_ROLES):
+		ref = get_da_reference(target, ctx)
+	elif ctx.has_any_role(C.ROLE_DA):
+		ref = get_da_reference(_own_da_id(ctx), ctx)
+	else:
+		frappe.throw(_("da_id is required: name a DA in your scope."), frappe.ValidationError)
+	ours = frappe.get_all(
+		profile_lists.CERTIFICATE,
+		filters={"da_id": ref.da_id},
+		fields=[
+			"name",
+			"record_id",
+			"title",
+			"issuer",
+			"issued_on",
+			"expires_on",
+			"file_name",
+			"change_request",
+			"registry_document_id",
+			"replaces_document_id",
+		],
+		order_by="creation desc",
+	)
+	by_document = {c.registry_document_id: c for c in ours if c.registry_document_id}
+	statuses = dict(
+		frappe.get_all(
+			DOCTYPE,
+			filters={"name": ("in", [c.change_request for c in ours] or [""])},
+			fields=["name", "status"],
+			as_list=True,
+		)
+	)
+
+	def details(c) -> dict:
+		if not c:
+			return {"title": None, "issuer": None, "issued_on": None, "expires_on": None}
+		return {
+			"title": c.title,
+			"issuer": c.issuer,
+			"issued_on": str(c.issued_on) if c.issued_on else None,
+			"expires_on": str(c.expires_on) if c.expires_on else None,
+		}
+
+	out = []
+	for record in ref.qualifications:
+		for f in record.get("certificates") or []:
+			c = by_document.get(f["document_id"])
+			out.append(
+				{
+					"document_id": f["document_id"],
+					"file_name": f.get("name"),
+					"record_id": record.get("id"),
+					"status": "Verified",
+					"change_request": c.change_request if c else None,
+					**details(c),
+				}
+			)
+	for c in ours:
+		status = CERTIFICATE_STATUS.get(statuses.get(c.change_request))
+		if not status:
+			continue  # verified (listed above), withdrawn or closed
+		out.append(
+			{
+				"document_id": None,
+				"file_name": c.file_name,
+				"record_id": c.record_id,
+				"status": status,
+				"change_request": c.change_request,
+				"replaces_document_id": c.replaces_document_id,
+				**details(c),
+			}
+		)
+	return out
+
+
+def request_file(name: str, ctx: ScopeContext | None = None) -> tuple[str, bytes, str]:
+	"""(file name, bytes, content type) of the file a certificate or photo request carries,
+	for whoever may read the request (to look at it before deciding)."""
+	ctx = ctx or require_roles(*READ_ROLES)
+	doc = frappe.get_doc(DOCTYPE, name)
+	_check_read(doc, ctx)
+	f = profile_lists.request_file(doc) if doc.section in profile_lists.FILE_SECTIONS else None
+	if not f:
+		raise frappe.DoesNotExistError(_("Change request {0} carries no file.").format(name))
+	return f.file_name, _bytes(f), _content_type(f.file_name)
+
+
+def _bytes(f) -> bytes:
+	"""The stored file as bytes: Frappe decodes a file that reads as text unless told not to."""
+	content = f.get_content(encodings=[])
+	return content.encode() if isinstance(content, str) else content
+
+
+def _content_type(file_name: str) -> str:
+	extension = file_name[file_name.rfind(".") :].lower() if "." in file_name else ""
+	return {**profile_lists.CERTIFICATE_TYPES, **profile_lists.PHOTO_TYPES}.get(
+		extension, "application/octet-stream"
+	)
+
+
+def _push_list_change(doc, ctx: ScopeContext, client):
+	"""Upload the request's file (once: a retry reuses the id), then the change request."""
+	ref = client.get_da(doc.da_id)
+	entry = next(iter(_changes(doc).values()))
+	document_id = doc.get("uploaded_document_id")
+	if (
+		doc.section in profile_lists.FILE_SECTIONS
+		and entry.get("action") in ("add", "replace", "set")
+		and not document_id
+	):
+		f = profile_lists.request_file(doc)
+		if not f:
+			raise profile_fields.InvalidProfileChange(_("The file of this request is missing."))
+		document_id = client.upload_document(f.file_name, _bytes(f), _content_type(f.file_name))
+		doc.db_set("uploaded_document_id", document_id, update_modified=False)
+	change = profile_lists.registry_change(doc, ref, document_id=document_id, approver=ctx.user)
+	return client.push_section_change(change)
 
 
 def _lock(key: str, busy: str) -> str | None:
@@ -439,6 +829,7 @@ def _create_request(
 	reason: str | None,
 	client_op_id: str | None,
 	as_supervisor: bool,
+	on_created=None,
 ) -> dict:
 	# One open request per field: a second request may change other fields of the same
 	# section (email while a mobile change waits), never a field that is already in an
@@ -485,6 +876,8 @@ def _create_request(
 		# The Supervisor who asks is the request's level 1.
 		doc.update({"l1_by": ctx.user, "l1_at": now, "l1_note": _("Requested by the Supervisor")})
 	doc.insert(ignore_permissions=True)
+	if on_created:
+		on_created(doc)
 	audit.record(
 		"profile_change_requested",
 		entity_type=doc.doctype,
@@ -827,10 +1220,13 @@ def _send_to_registry(doc, ctx: ScopeContext, *, wait: bool = True) -> None:
 		update_modified=False,
 	)
 	try:
-		changes = profile_fields.registry_changes(doc.section, _changes(doc), client)
-		result = client.push_profile_update(
-			ProfileUpdate(da_id=doc.da_id, changes=changes, approver=ctx.user, reference=doc.name)
-		)
+		if doc.section in profile_lists.SECTIONS:
+			result = _push_list_change(doc, ctx, client)
+		else:
+			changes = profile_fields.registry_changes(doc.section, _changes(doc), client)
+			result = client.push_profile_update(
+				ProfileUpdate(da_id=doc.da_id, changes=changes, approver=ctx.user, reference=doc.name)
+			)
 	except DARegistryUnavailable as exc:
 		_push_failed(doc, "Unavailable", None, str(exc))
 		_persist()
@@ -957,6 +1353,8 @@ def _registry_already_has(doc) -> bool:
 		ref = get_client().get_da(doc.da_id)
 	except DARegistryError:
 		return False
+	if doc.section in profile_lists.SECTIONS:
+		return profile_lists.already_applied(doc, ref)
 	return profile_fields.already_applied(doc.section, _changes(doc), ref, get_client())
 
 
@@ -1137,6 +1535,7 @@ def _mark_applied(doc, *, outcome: str = "applied") -> None:
 		entity_name=doc.name,
 		details={"outcome": outcome, "change_request_id": doc.registry_reference},
 	)
+	profile_lists.after_applied(doc)
 	if doc.section == "Location":
 		_follow_transfer(doc)
 

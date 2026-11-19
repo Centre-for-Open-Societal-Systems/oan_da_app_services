@@ -8,6 +8,7 @@ and nowhere else.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
 
@@ -24,6 +25,12 @@ SECTION_IDENTITY = "da_identity_section_01"
 SECTION_SERVICE = "da_service_section_02"
 SECTION_LOCATION = "da_location_section_03"
 SECTION_CONTACT = "da_contact_section_04"
+# List sections of the same tab (DA Registry #66). Each row is a record of its own
+# register, linked to the DA by link_internal_record_id.
+SECTION_QUALIFICATION = "da_qualification_section_05"
+SECTION_DEPENDENT = "da_dependent_section_06"
+QUALIFICATION_REGISTER = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3fa0"
+DEPENDENT_REGISTER = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3fb0"
 
 # ProfileUpdate.changes key (services/profile_fields.py) -> (section, registry field)
 PROFILE_FIELDS: dict[str, tuple[str, str]] = {
@@ -31,10 +38,13 @@ PROFILE_FIELDS: dict[str, tuple[str, str]] = {
 	"telegram_number": (SECTION_CONTACT, "telegram_number"),
 	"alternate_number": (SECTION_CONTACT, "alternate_number"),
 	"email": (SECTION_CONTACT, "email"),
-	"education_tier": (SECTION_SERVICE, "education_level"),
+	"home_address": (SECTION_CONTACT, "address_line_1"),
+	# Position and reporting. The DA record's education_level and passout_year are filled
+	# by the registry from the main education record: changed only through that list.
 	"specialisation": (SECTION_SERVICE, "specialisation"),
 	"position": (SECTION_SERVICE, "position"),
 	"joined_date": (SECTION_SERVICE, "joined_date"),
+	"reports_to": (SECTION_SERVICE, "reports_to"),
 	"prefix": (SECTION_IDENTITY, "prefix"),
 	"first_name": (SECTION_IDENTITY, "first_name"),
 	"father_name": (SECTION_IDENTITY, "middle_name"),
@@ -97,6 +107,7 @@ LABEL_ATTRIBUTES = {
 	"education_level": "DA_EDUCATION_LEVEL",
 	"specialisation": "DA_SPECIALISATION",
 	"position": "DA_POSITION",
+	"relationship": "DA_RELATIONSHIP",
 }
 
 # Ethiopian calendar months, birth_month_ec 1-13
@@ -122,6 +133,71 @@ def _int(value) -> int | None:
 		return int(value) if value not in (None, "") else None
 	except TypeError, ValueError:
 		return None
+
+
+def _coded(field: str, code, labels: dict[str, dict]) -> str | None:
+	"""The Master Data label of a coded value; the code as words when the list is not known."""
+	if not code:
+		return None
+	label = (labels.get(LABEL_ATTRIBUTES[field]) or {}).get(code)
+	if label:
+		return label
+	# DA_RELATIONSHIP codes carry a prefix ("REL_SON"): the words are what follows it.
+	return _to_label(code.removeprefix("REL_") if field == "relationship" else code)
+
+
+def _files(value) -> list[dict]:
+	"""A list cell of stored files, [{"document_id", "name"}] (sent as JSON text or as a list)."""
+	if isinstance(value, str):
+		try:
+			value = json.loads(value)
+		except ValueError:
+			return []
+	return [
+		{"document_id": str(f["document_id"]), "name": f.get("name") or None}
+		for f in value or []
+		if isinstance(f, dict) and f.get("document_id")
+	]
+
+
+def qualification_rows(rows, labels: dict[str, dict] | None = None) -> list[dict]:
+	"""Education & Professional records: the main record first, then newest passout year.
+
+	A record holds the education level, the passout year and its certificates. The main
+	record is the one the registry copies into the DA record's education_level and
+	passout_year: the latest passout year (registry qualification_sync.py).
+	"""
+	labels = labels or {}
+	out = [
+		{
+			"id": r.get("internal_record_id"),
+			"education_level": r.get("education_level"),
+			"education_level_label": _coded("education_level", r.get("education_level"), labels),
+			"passout_year": _int(r.get("passout_year")),
+			"certificates": _files(r.get("certificates")),
+			"is_main": False,
+		}
+		for r in rows or []
+	]
+	if out:
+		max(out, key=lambda q: q["passout_year"] or 0)["is_main"] = True
+		out.sort(key=lambda q: (not q["is_main"], -(q["passout_year"] or 0)))
+	return out
+
+
+def dependent_rows(rows, labels: dict[str, dict] | None = None) -> list[dict]:
+	"""Family members / dependents of the DA, as the registry holds them (no status there)."""
+	labels = labels or {}
+	return [
+		{
+			"id": r.get("internal_record_id"),
+			"name": r.get("member_name"),
+			"relationship": r.get("relationship"),
+			"relationship_label": _coded("relationship", r.get("relationship"), labels),
+			"date_of_birth": r.get("date_of_birth") or None,
+		}
+		for r in rows or []
+	]
 
 
 def registry_record_to_da_reference(record: dict, labels: dict[str, dict] | None = None) -> DAReference:
@@ -170,13 +246,22 @@ def registry_record_to_da_reference(record: dict, labels: dict[str, dict] | None
 		birth_year_ec=_int(record.get("birth_year_ec")),
 		telegram_number=record.get("telegram_number"),
 		alternate_number=record.get("alternate_number"),
+		home_address=record.get("address_line_1") or None,
 		position=label("position"),
+		position_code=record.get("position") or None,
+		reports_to=record.get("reports_to") or None,
+		passout_year=_int(record.get("passout_year")),
 		# Every DA is posted in Ethiopia; the register has no country field.
 		country="Ethiopia",
 		region_name=_geo_name(record, "region"),
 		zone_name=_geo_name(record, "zone"),
 		woreda_name=_geo_name(record, "woreda"),
 		kebele_name=_geo_name(record, "kebele"),
+		# The photo's link from a read lives about an hour; the document id stays.
+		photo_url=record.get("record_image_url") or None,
+		photo_document_id=record.get("record_image_document_id") or None,
+		qualifications=qualification_rows(record.get("_qualifications"), labels),
+		dependents=dependent_rows(record.get("_dependents"), labels),
 		source_version=record.get("last_approved_at"),
 		fetched_at=datetime.now(UTC),
 	)
@@ -225,8 +310,12 @@ def to_da_reference(payload: dict) -> DAReference:
 		email=payload.get("email"),
 		telegram_number=payload.get("telegram_number"),
 		alternate_number=payload.get("alternate_number"),
+		home_address=payload.get("home_address"),
 		language=payload.get("language"),
 		photo_url=payload.get("photo_url"),
+		photo_document_id=payload.get("photo_document_id"),
+		qualifications=[dict(q) for q in payload.get("qualifications") or []],
+		dependents=[dict(d) for d in payload.get("dependents") or []],
 		salutation=payload.get("salutation"),
 		first_name=payload.get("first_name"),
 		father_name=payload.get("father_name"),
@@ -237,6 +326,9 @@ def to_da_reference(payload: dict) -> DAReference:
 		birth_month_ec=_int(payload.get("birth_month_ec")),
 		birth_year_ec=_int(payload.get("birth_year_ec")),
 		position=payload.get("position"),
+		position_code=payload.get("position_code"),
+		reports_to=payload.get("reports_to"),
+		passout_year=_int(payload.get("passout_year")),
 		source_version=str(payload["version"]) if payload.get("version") is not None else None,
 		fetched_at=datetime.now(UTC),
 	)

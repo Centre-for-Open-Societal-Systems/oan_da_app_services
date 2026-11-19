@@ -61,8 +61,27 @@ Prefix: `/api/v1/da-services`
 | `POST /profile/change-requests/{id}/sync-local` (Administrator) | DA Services only: repeats the move of the DA's DA RBAC grant after an applied location change (`local_sync_state = Failed`) |
 | `POST /profile/change-requests/{id}/close` (Administrator) | DA Services only |
 | `GET /profile/me`, `GET /profile/agents/{da_id}` (Supervisor, Executive, Administrator in scope) | Reads only: the DA's record and the Master Data code lists |
+| `GET /profile/documents/{document_id}?da_id=` (a DA: own, without `da_id`) | Reads only: `documents/get_documents` for a short-lived link. Only a document on that DA's record (the photo, a certificate) opens |
+| `POST /profile/qualifications` `{action: add/update/delete, record_id, values, reason, da_id}` | Reads only, then a `DA Profile Change Request` (section `Education records`). `values`: `education_level` (a `DA_EDUCATION_LEVEL` code or label) and `passout_year` (EC year, 1950 to now), both needed to add; nothing else (position, specialisation and joining date are Position and reporting fields). A Development Agent or Senior DA keeps at least one record |
+| `POST /profile/family-members` `{action, member_id, values, reason, da_id}` | As above (section `Family members`). `values`: `name`, `relationship` (`DA_RELATIONSHIP`), `date_of_birth` |
+| `POST /profile/certificates` (multipart: `file`, `record_id`, `title`, `issuer`, `issued_on`, `expires_on`, `replaces`, `reason`, `da_id`) | Reads only. The file is kept in DA Services, private, on a request of section `Certificates`. PDF, JPG, PNG or WebP, up to 2 MB, at most 3 on a record; `replaces` is the `document_id` it takes the place of |
+| `POST /profile/certificates/remove` `{record_id, document_id, reason, da_id}` | Reads only, then a request of section `Certificates` |
+| `GET /profile/certificates?da_id=` | DA Services only: each certificate's title, issuer and dates with `status` (`Pending verification`, `Verified`, `Rejected`); the registry keeps the file and its name only |
+| `POST /profile/photo` (multipart: `file`, `reason`, `da_id`), `POST /profile/photo/remove` | Reads only, then a request of section `Photo`. JPG, PNG or WebP, up to 2 MB (as the registry portal allows) |
+| `GET /profile/change-requests/{id}/file` | DA Services only: the file a `Certificates` or `Photo` request carries, to look at before deciding |
+| `decide`, level 2 `Approve`, on one of these four sections | `documents/upload_documents` for the request's file (once; a retry reuses the id), then `create_change_request` on the list section (`edit_action` ADD / UPDATE / DELETE; a record's `certificates` as its whole list) or, for the photo, `record_image_document_id` on the identity section. `documents/delete_documents` is never called |
 
 What the portal gets with these answers, so it repeats none of the rules:
+
+- **The DA record's lists** (DA Registry #66): `profile.photo` (a link that lives
+  about an hour; made from the photo's document when the record carries no link),
+  `profile.qualifications[]` (`id`, `education_level` and `_label`, `passout_year`,
+  `certificates[] {document_id, name}`, `is_main`; the main record first: the latest passout year,
+  which the registry copies onto the DA record as `profile.education_tier` and `profile.passout_year`) and `profile.dependents[]` (`id`, `name`, `relationship` and
+  `_label`, `date_of_birth`). A certificate opens through `GET /profile/documents/{document_id}`.
+  They change through the list and file requests in the table above, approved like every other
+  profile change. `profile.home_address` (the registry's `address_line_1`, where the DA lives) is one
+  line of up to 100 characters and changes with the Contact section (`home_address`).
 
 - **`fields`** (both profile calls): per field `section`, `kind`, `note_required`, `profile_key` (the
   key of the same value in `profile`), `current` (the DA's value as a change would send it: the code of
@@ -115,9 +134,9 @@ A field can be in one open request at a time (`Pending …`, `Sent to registry`,
 
 | Section | Request fields | Registry fields | Checks in DA Services |
 | --- | --- | --- | --- |
-| Contact, `da_contact_section_04` | `mobile`, `telegram`, `alternate_mobile`, `email` | `mobile_number`, `telegram_number`, `alternate_number`, `email` | Ethiopian mobile (`0911234567`, `+251911234567`), email |
-| Qualifications, `da_service_section_02` | `education_tier`, `specialisation`, `position`, `joined_date` | `education_level`, `specialisation`, `position`, `joined_date` | Master Data lists `DA_EDUCATION_LEVEL`, `DA_SPECIALISATION`, `DA_POSITION`; date `YYYY-MM-DD`, not in the future |
-| Identity, `da_identity_section_01` | `prefix`, `first_name`, `father_name`, `grandfather_name`, `fayda_id`, `gender`, `marital_status`, `birth_month_ec`, `birth_year_ec` | `prefix`, `first_name`, `middle_name`, `last_name`, `foundational_id`, `gender`, `marital_status`, `birth_month_ec`, `birth_year_ec` | Lists `PREFIX`, `GENDER`, `MARITAL_STATUS`; Fayda ID 16 digits; names letters only; month 1-13. A change of a name or the Fayda ID needs a reason of at least 10 characters |
+| Contact, `da_contact_section_04` | `mobile`, `telegram`, `alternate_mobile`, `email`, `home_address` | `mobile_number`, `telegram_number`, `alternate_number`, `email`, `address_line_1` | Ethiopian phone as the registry takes it, landlines too (`^(\+251\|0)?[1-9][0-9]{8}$`), email, address one line of 100 |
+| Qualifications, `da_service_section_02` ("Position and reporting" in the registry) | `position`, `specialisation`, `joined_date`, `reports_to` | `position`, `specialisation`, `joined_date`, `reports_to` | Master Data lists `DA_POSITION`, `DA_SPECIALISATION`; date `YYYY-MM-DD`, not in the future. `specialisation` for `DEVELOPMENT_AGENT` and `SENIOR_DA` only. `reports_to`: a DA-ID (`DA-…`) of an active person, not the DA, posted in the DA's Woreda or Zone; asked by the DA's Supervisor only, never in a DA's own request; not for `ADMIN`. The education level is not here: the registry refuses `education_level` on this section and copies it from the main education record |
+| Identity, `da_identity_section_01` | `prefix`, `first_name`, `father_name`, `grandfather_name`, `fayda_id`, `gender`, `marital_status`, `birth_month_ec`, `birth_year_ec` | `prefix`, `first_name`, `middle_name`, `last_name`, `foundational_id`, `gender`, `marital_status`, `birth_month_ec`, `birth_year_ec` | Lists `PREFIX`, `GENDER`, `MARITAL_STATUS`; Fayda ID 16 digits; names Latin or Ethiopic letters, spaces, apostrophes and hyphens, 100 at most (the registry's rule); month 1-13. A change of a name or the Fayda ID needs a reason of at least 10 characters |
 | Location, `da_location_section_03` | `region`, `zone`, `woreda`, `kebele` (Master Data codes, all four) | `geo_lowest_level_value_id`, `geo_code_hierarchy_json` | Each level a child of the one above in Master Data |
 
 Anything else is refused before a row is stored. Coded values are stored and sent as codes. The registry still checks formats, codes and duplicate Fayda IDs; its refusal (HTTP 200, `response_status` ERROR) is logged with `response_error_code` and shown to the Administrator.

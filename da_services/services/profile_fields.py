@@ -2,8 +2,11 @@
 
 One request changes one section of the DA register's ``da_details_tab``:
 
-- Contact (da_contact_section_04): mobile, telegram, alternate_mobile, email
-- Qualifications (da_service_section_02): education_tier, specialisation, position, joined_date
+- Contact (da_contact_section_04): mobile, telegram, alternate_mobile, email, home_address
+- Qualifications (da_service_section_02, "Position and reporting" in the registry): position,
+  specialisation, joined_date, reports_to. The education level is changed through the
+  Education & Professional records (services/profile_lists.py); the registry copies the main
+  record's level and passout year onto the DA record and refuses them here.
 - Identity (da_identity_section_01): prefix, first_name, father_name, grandfather_name,
   fayda_id, gender, marital_status, birth_month_ec, birth_year_ec
 - Location (da_location_section_03): region, zone, woreda, kebele (Master Data codes)
@@ -29,28 +32,39 @@ import frappe
 from frappe import _
 
 from da_services.integrations.da_registry.client import (
+	DANotFound,
 	DARegistryClient,
 	DARegistryError,
 	DARegistryUnavailable,
 )
 from da_services.integrations.da_registry.schemas import DAReference
+from da_services.services import constants as C
 
 SECTIONS = ("Contact", "Qualifications", "Identity", "Location")
 NOTE_MIN_LENGTH = 10  # a change of name or Fayda ID needs a reason this long
 GEO_LEVELS = ("region", "zone", "woreda", "kebele")
 
-# Ethiopian mobile number, as the registry takes it: 0911234567 or +251911234567
-_PHONE_RE = re.compile(r"^(?:\+251|0)[79]\d{8}$")
+# An Ethiopian phone number as the registry takes it (mobiles and landlines): 0911234567,
+# +251911234567, 911234567, 0111234567
+_PHONE_RE = re.compile(r"^(?:\+251|0)?[1-9][0-9]{8}$")
 _FAYDA_RE = re.compile(r"^\d{16}$")
-# Letters of any script (Ge'ez included), single spaces, apostrophe, hyphen or dot between them
-_NAME_RE = re.compile(r"^[^\W\d_]+(?:[ '\-.][^\W\d_]+)*\.?$")
+# A DA's name as the registry takes it: a Latin or Ethiopic letter, then also spaces,
+# apostrophes and hyphens; 100 characters at most.
+_NAME_RE = re.compile(r"^[A-Za-z\u1200-\u137F][A-Za-z\u1200-\u137F '\-]*$")
+NAME_MAX = 100
+_DA_ID_RE = re.compile(r"^DA-\d+$")
+# Positions that have a specialisation and must hold an education record; the registry
+# empties the specialisation of every other position (18 Nov 2026).
+DA_POSITIONS = ("DEVELOPMENT_AGENT", "SENIOR_DA")
+POSITION_ADMIN = "ADMIN"  # reports to nobody: the registry hides and empties reports_to
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+HOME_ADDRESS_MAX = 100  # as the registry allows
 
 
 @dataclass(frozen=True)
 class ProfileField:
 	section: str
-	kind: str  # phone, email, code, date, name, fayda, month, year, geo
+	kind: str  # phone, email, address, code, date, name, fayda, month, year, geo, da_ref
 	key: str | None  # ProfileUpdate.changes key (integrations/da_registry/mapper.py PROFILE_FIELDS)
 	current: Callable[[DAReference], object]
 	attribute: str | None = None  # Master Data list of a coded field
@@ -62,14 +76,15 @@ FIELDS: dict[str, ProfileField] = {
 	"telegram": ProfileField("Contact", "phone", "telegram_number", lambda r: r.telegram_number),
 	"alternate_mobile": ProfileField("Contact", "phone", "alternate_number", lambda r: r.alternate_number),
 	"email": ProfileField("Contact", "email", "email", lambda r: r.email),
-	"education_tier": ProfileField(
-		"Qualifications", "code", "education_tier", lambda r: r.education_tier, "DA_EDUCATION_LEVEL"
-	),
+	# Where the DA lives: one line of free text (the Location section is where they work).
+	"home_address": ProfileField("Contact", "address", "home_address", lambda r: r.home_address),
 	"specialisation": ProfileField(
 		"Qualifications", "code", "specialisation", lambda r: r.specialisation, "DA_SPECIALISATION"
 	),
 	"position": ProfileField("Qualifications", "code", "position", lambda r: r.position, "DA_POSITION"),
 	"joined_date": ProfileField("Qualifications", "date", "joined_date", lambda r: r.joined_at),
+	# The DA-ID of the person the DA reports to. Only the DA's Supervisor may ask to change it.
+	"reports_to": ProfileField("Qualifications", "da_ref", "reports_to", lambda r: r.reports_to),
 	"prefix": ProfileField("Identity", "code", "prefix", lambda r: r.salutation, "PREFIX"),
 	"first_name": ProfileField("Identity", "name", "first_name", lambda r: r.first_name, note_required=True),
 	"father_name": ProfileField(
@@ -235,12 +250,22 @@ def _check_value(
 	text = _text(value)
 	if not text:
 		_fail(_("{0} cannot be empty.").format(field))
+	if spec.kind == "address":
+		if "\n" in text or "\r" in text:
+			_fail(_("{0} must be on one line, without line breaks.").format(field))
+		if len(text) > HOME_ADDRESS_MAX:
+			_fail(
+				_("{0} may hold {1} characters at most (this one has {2}).").format(
+					field, HOME_ADDRESS_MAX, len(text)
+				)
+			)
+		return text, None
 	if len(text) > 140:
 		_fail(_("{0} is too long.").format(field))
 	if spec.kind == "phone":
 		if not _PHONE_RE.match(text.replace(" ", "")):
 			_fail(
-				_("{0} must be an Ethiopian mobile number such as 0911234567 or +251911234567.").format(field)
+				_("{0} must be an Ethiopian phone number such as 0911234567 or +251911234567.").format(field)
 			)
 		return text.replace(" ", ""), None
 	if spec.kind == "email":
@@ -261,8 +286,13 @@ def _check_value(
 			_fail(_("{0} cannot be in the future.").format(field))
 		return text, None
 	if spec.kind == "name":
-		if len(text) > 100 or not _NAME_RE.match(text):
-			_fail(_("{0} may hold letters, spaces, apostrophes, hyphens and dots only.").format(field))
+		if len(text) > NAME_MAX or not _NAME_RE.match(text):
+			_fail(
+				_(
+					"{0} may hold Latin or Ethiopic letters, spaces, apostrophes and hyphens only, "
+					"{1} characters at most."
+				).format(field, NAME_MAX)
+			)
 		return text, None
 	if spec.kind == "fayda":
 		if not _FAYDA_RE.match(text):
@@ -285,12 +315,18 @@ def _same(a, b) -> bool:
 
 
 def validate_changes(
-	changes: dict, *, ref: DAReference, reason: str | None, client: DARegistryClient
+	changes: dict,
+	*,
+	ref: DAReference,
+	reason: str | None,
+	client: DARegistryClient,
+	as_supervisor: bool = False,
 ) -> tuple[str, dict]:
 	"""Check a requested change against the DA's current record; return (section, diff).
 
 	``diff`` is {field: {"from", "to"[, "from_label", "to_label"]}} with only the fields
 	that change; the labels are the display names of coded and location values.
+	``as_supervisor``: the DA's Supervisor asks (a DA may not change whom they report to).
 	"""
 	if not isinstance(changes, dict) or not changes:
 		_fail(_("changes must be a non-empty object."))
@@ -301,6 +337,8 @@ def validate_changes(
 	if len(sections) > 1:
 		_fail(_("Send one section per request: {0}.").format(", ".join(sorted(sections))))
 	section = sections.pop()
+	if section == "Qualifications":
+		_check_position_rules(changes, ref, client, as_supervisor=as_supervisor)
 
 	if section == "Location":
 		diff = _location_diff(changes, ref, client)
@@ -309,7 +347,10 @@ def validate_changes(
 		for field, value in changes.items():
 			spec = FIELDS[field]
 			try:
-				new, label = _check_value(field, spec, value, client)
+				if spec.kind == "da_ref":
+					new, label = _check_reports_to(value, ref, client)
+				else:
+					new, label = _check_value(field, spec, value, client)
 			except InvalidProfileChange as exc:
 				exc.field = exc.field or field  # the screen shows the message under this field
 				raise
@@ -338,6 +379,49 @@ def validate_changes(
 			)
 		)
 	return section, diff
+
+
+def _check_position_rules(
+	changes: dict, ref: DAReference, client: DARegistryClient, *, as_supervisor: bool
+) -> None:
+	"""The registry's rules of the Position and reporting section that depend on the position."""
+	if "reports_to" in changes and not as_supervisor:
+		_fail(_("Only the DA's Supervisor can ask to change whom the DA reports to."), "reports_to")
+	if "position" in changes:
+		position, _label = _code(client, "DA_POSITION", _text(changes["position"]), "position")
+	else:
+		position = ref.position_code
+	if "specialisation" in changes and position not in DA_POSITIONS:
+		_fail(_("A specialisation belongs to a Development Agent or a Senior DA only."), "specialisation")
+	if "reports_to" in changes and position == POSITION_ADMIN:
+		_fail(_("An ADMIN reports to nobody: reports_to is not used for this position."), "reports_to")
+
+
+def _check_reports_to(value, ref: DAReference, client: DARegistryClient) -> tuple[str, str]:
+	"""(DA-ID, "name (position)") of the person a DA is to report to, or a 400.
+
+	The registry asks for an active person who is not the DA. DA Services also asks for
+	someone posted in the DA's Woreda or Zone, so a Supervisor cannot point a DA at a
+	person of another area by mistake.
+	"""
+	da_id = _text(value).upper()
+	if not _DA_ID_RE.match(da_id):
+		_fail(_("reports_to must be a DA-ID such as DA-1234567890."))
+	if da_id == ref.da_id.upper():
+		_fail(_("A DA cannot report to themselves."))
+	try:
+		boss = client.get_da(da_id)
+	except DANotFound:
+		_fail(_("{0} is not in the DA Registry.").format(da_id))
+	except DARegistryUnavailable:
+		_registry_down()
+	if boss.active_status != C.ACTIVE_STATUS_ACTIVE:
+		_fail(_("{0} is not active in the DA Registry.").format(da_id))
+	same_area = (boss.woreda and boss.woreda == ref.woreda) or (boss.zone and boss.zone == ref.zone)
+	if not same_area:
+		_fail(_("{0} is not posted in this DA's Woreda or Zone.").format(da_id))
+	label = boss.full_name + (f" ({boss.position})" if boss.position else "")
+	return boss.da_id, label
 
 
 def _location_diff(changes: dict, ref: DAReference, client: DARegistryClient) -> dict:

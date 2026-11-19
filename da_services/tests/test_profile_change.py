@@ -21,6 +21,22 @@ from da_services.services import profile_fields
 from da_services.tests.fixtures import ensure_doctype_schema, ensure_geo_masters, set_da_registry_id
 from da_services.utils.permissions import get_scope_context
 
+
+def _pdf() -> bytes:
+	"""A real one-page PDF: Frappe opens a PDF when it stores it."""
+	import io
+
+	from pypdf import PdfWriter
+
+	writer, out = PdfWriter(), io.BytesIO()
+	writer.add_blank_page(width=72, height=72)
+	writer.write(out)
+	return out.getvalue()
+
+
+PDF = _pdf()
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
 DA1 = "pcr-da1@da.local"  # DA-000001, ET04 / ET04-Z01 / ET04-W01, Kebele ET04-W01-K03
 DA3 = "pcr-da3@da.local"  # DA-000004, ET03 / ET03-W02
 SUP = "pcr-sup@da.local"  # Supervisor ET04-W01
@@ -30,7 +46,9 @@ EXEC = "pcr-exec@da.local"  # Executive ET04
 ADMIN1 = "pcr-admin1@da.local"
 ADMIN2 = "pcr-admin2@da.local"
 SUP_ADMIN = "pcr-supadmin@da.local"  # Supervisor of ET04-W01 who is also an OAN Administrator
-TEST_USERS = (DA1, DA3, SUP, SUP2, SUP_OTHER, EXEC, ADMIN1, ADMIN2, SUP_ADMIN)
+DUAL = "pcr-dual@da.local"  # Supervisor of ET04-W01 who also holds the Development Agent role
+ROLE_ONLY = "pcr-roleonly@da.local"  # DA of ET04-W01 with the Supervisor role but no Supervisor grant
+TEST_USERS = (DA1, DA3, SUP, SUP2, SUP_OTHER, EXEC, ADMIN1, ADMIN2, SUP_ADMIN, DUAL, ROLE_ONLY)
 TEST_DAS = ("DA-000001", "DA-000004")  # mock registry fixtures
 PCR = "DA Profile Change Request"
 
@@ -40,6 +58,11 @@ def _clean():
 	requests = frappe.get_all(PCR, filters={"da_id": ("in", TEST_DAS)}, pluck="name")
 	if requests:
 		frappe.db.delete("DA Notification", {"reference_doctype": PCR, "reference_name": ("in", requests)})
+		for name in frappe.get_all(
+			"File", filters={"attached_to_doctype": PCR, "attached_to_name": ("in", requests)}, pluck="name"
+		):
+			frappe.delete_doc("File", name, ignore_permissions=True, force=True)  # the file on disk too
+	frappe.db.delete("DA Certificate", {"da_id": ("in", TEST_DAS)})
 	frappe.db.delete("DA Notification", {"user": ("in", TEST_USERS)})
 	frappe.db.delete(PCR, {"da_id": ("in", TEST_DAS)})
 	frappe.db.delete("DA RBAC Assignment", {"user": ("in", TEST_USERS)})
@@ -190,6 +213,43 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual(d["fields"]["kebele"]["section"], "Location")
 		self.assertEqual(d["pending_requests"], [])
 
+	def test_the_profile_shows_photo_education_records_and_family(self):
+		frappe.set_user(DA1)
+		p = api.my_profile()["data"]["profile"]
+		self.assertIn("doc-photo-000001", p["photo"])  # a link made from the photo's document
+		self.assertEqual([q["passout_year"] for q in p["qualifications"]], [2011, 2008])
+		self.assertTrue(p["qualifications"][0]["is_main"])
+		self.assertEqual(p["qualifications"][0]["certificates"][0]["name"], "diploma.pdf")
+		self.assertEqual(
+			[(d["name"], d["relationship_label"]) for d in p["dependents"]], [("Almaz Abebe", "Daughter")]
+		)
+		frappe.set_user(EXEC)
+		p = api.agent_profile("DA-000001")["data"]["profile"]
+		self.assertEqual(len(p["qualifications"]), 2)
+		with patch.object(MockDARegistryClient, "document_links", side_effect=DARegistryUnavailable("down")):
+			self.assertIsNone(api.agent_profile("DA-000001")["data"]["profile"]["photo"])  # still shows
+
+	def test_a_document_opens_only_for_its_da_and_people_in_scope(self):
+		frappe.set_user(DA1)
+		out = api.document("doc-cert-000001-a")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual((out["data"]["da_id"], out["data"]["name"]), ("DA-000001", "diploma.pdf"))
+		self.assertIn("doc-cert-000001-a", out["data"]["url"])
+		frappe.db.commit()  # nosemgrep: error answers roll back uncommitted rows
+		self._error(api.document("doc-guessed"), 404)
+		frappe.set_user(DA3)
+		self._error(api.document("doc-cert-000001-a", da_id="DA-000001"), 404)  # a DA opens only their own
+		for user in (SUP, EXEC, ADMIN1):
+			frappe.set_user(user)
+			out = api.document("doc-photo-000001", da_id="DA-000001")
+			self.assertEqual((out["status"], out["data"]["name"]), ("success", "photo"), user)
+		frappe.set_user(SUP_OTHER)
+		self._error(api.document("doc-photo-000001", da_id="DA-000001"), 403)
+		frappe.set_user(SUP)
+		self._error(api.document("doc-photo-000001"), 400)  # names no DA
+		with patch.object(MockDARegistryClient, "document_links", return_value={}):
+			self._error(api.document("doc-photo-000001", da_id="DA-000001"), 400)
+
 	def test_a_supervisor_sees_a_da_of_their_woreda_only(self):
 		frappe.set_user(SUP)
 		d = api.agent_profile("DA-000001")["data"]
@@ -278,6 +338,8 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			{"changes": {"language": "am"}},  # not in the registry
 			{"changes": {}},
 			{"changes": {"email": "not-an-email"}},
+			{"changes": {"home_address": "x" * 101}},  # the registry takes 100 characters
+			{"changes": {"home_address": "House 12\nKebele 03"}},  # one line only
 			{"changes": {"mobile": "12345"}},
 			{"changes": {"education_tier": "PhD"}},
 			{"changes": {"mobile": "+251911999888", "specialisation": "Livestock"}},  # two sections
@@ -705,18 +767,499 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		)
 		self.assertIn("bulk_decide", str(endpoint))
 
+	# -- lists, certificates, photo (DA Registry #66) ------------------------------------------
+
+	def _registry(self):
+		return MockDARegistryClient.shared()
+
+	def _ctx(self, user):
+		frappe.set_user(user)
+		return get_scope_context(user)
+
+	def _refused(self, code_or_exc, call):
+		with self.assertRaises(code_or_exc):
+			call()
+		frappe.db.rollback()
+
+	def test_a_certificate_goes_through_both_levels_then_to_the_registry(self):
+		r = svc.submit_certificate(
+			record_id="qual-000001-1",
+			filename="ipm.pdf",
+			content=PDF,
+			title="Integrated Pest Management",
+			issuer="EATI",
+			issued_on="2026-02-18",
+			expires_on="2028-02-18",
+			reason="New training certificate",
+			ctx=self._ctx(DA1),
+		)
+		self.assertEqual((r["status"], r["section"]), ("Pending Supervisor", "Certificates"))
+		entry = r["changes"]["certificates:qual-000001-1"]
+		self.assertEqual(
+			(entry["action"], entry["to"]["title"], entry["from"]),
+			("add", "Integrated Pest Management", None),
+		)
+		self.assertEqual(self._registry().documents, [])  # nothing leaves before the approvals
+		listed = svc.list_certificates(ctx=self._ctx(DA1))
+		pending = [c for c in listed if c["status"] == "Pending verification"]
+		self.assertEqual(
+			[(c["title"], c["issuer"], c["record_id"]) for c in pending],
+			[("Integrated Pest Management", "EATI", "qual-000001-1")],
+		)
+		self.assertEqual([c["file_name"] for c in listed if c["status"] == "Verified"], ["diploma.pdf"])
+
+		name, content, kind = svc.request_file(r["name"], self._ctx(SUP))  # the Supervisor looks at it
+		self.assertEqual((name, content, kind), ("ipm.pdf", PDF, "application/pdf"))
+		self._refused(frappe.PermissionError, lambda: svc.request_file(r["name"], self._ctx(SUP_OTHER)))
+
+		d = self._approve_both(r["name"])["data"]
+		self.assertEqual(d["status"], "Applied", d)
+		(filename, uploaded, kind) = self._registry().documents[0]
+		self.assertEqual((filename, uploaded, kind), ("ipm.pdf", PDF, "application/pdf"))
+		change = self._registry().section_changes[-1]
+		self.assertEqual((change.approver, change.section_id), (ADMIN1, "da_qualification_section_05"))
+		self.assertEqual(change.rows[0]["certificates"], [{"document_id": "doc-up-1", "name": "ipm.pdf"}])
+		listed = svc.list_certificates(ctx=self._ctx(DA1))
+		verified = {c["document_id"]: c for c in listed if c["status"] == "Verified"}
+		self.assertEqual(set(verified), {"doc-cert-000001-a", "doc-up-1"})
+		self.assertEqual(
+			(verified["doc-up-1"]["title"], verified["doc-up-1"]["expires_on"]),
+			("Integrated Pest Management", "2028-02-18"),
+		)
+		self.assertFalse([c for c in listed if c["status"] != "Verified"])
+
+	def test_a_certificate_sent_back_by_the_supervisor_says_changes_requested(self):
+		r = svc.submit_certificate(
+			record_id="qual-000001-1",
+			filename="blurred.pdf",
+			content=PDF,
+			title="Blurred scan",
+			ctx=self._ctx(DA1),
+		)
+		self._decide(SUP, r["name"], "Request changes", "Please scan it again, it is blurred.")
+		listed = svc.list_certificates(ctx=self._ctx(DA1))
+		self.assertEqual(
+			[c["status"] for c in listed if c.get("title") == "Blurred scan"], ["Changes requested"]
+		)
+
+	def test_a_certificate_is_replaced_and_removed_and_a_record_holds_three(self):
+		r = svc.submit_certificate(
+			record_id="qual-000001-2",
+			filename="diploma-2.pdf",
+			content=PDF,
+			title="Diploma in Plant Science",
+			replaces="doc-cert-000001-a",
+			ctx=self._ctx(DA1),
+		)
+		self.assertEqual(r["changes"]["certificates:qual-000001-2"]["action"], "replace")
+		self._approve_both(r["name"])
+		row = self._registry().section_changes[-1].rows[0]
+		self.assertEqual(
+			row["certificates"], [{"document_id": "doc-up-1", "name": "diploma-2.pdf"}]
+		)  # the old one off
+
+		r = svc.submit_certificate_removal(
+			record_id="qual-000001-2", document_id="doc-up-1", ctx=self._ctx(DA1)
+		)
+		self._approve_both(r["name"])
+		self.assertEqual(self._registry().section_changes[-1].rows[0]["certificates"], [])
+
+		record = self._registry()._records["DA-000001"]["qualifications"][0]
+		record["certificates"] = [{"document_id": f"doc-{i}", "name": f"{i}.pdf"} for i in range(3)]
+		ctx = self._ctx(DA1)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_certificate(
+				record_id=record["id"], filename="4.pdf", content=PDF, title="Fourth", ctx=ctx
+			),
+		)
+		ok = svc.submit_certificate(
+			record_id=record["id"], filename="new.pdf", content=PDF, title="New", replaces="doc-1", ctx=ctx
+		)
+		self.assertEqual(ok["status"], "Pending Supervisor")  # a replacement keeps three
+
+	def test_files_that_are_not_what_they_say_are_refused(self):
+		ctx = self._ctx(DA1)
+		cases = [
+			("notes.txt", b"text", "qual-000001-1"),
+			("fake.pdf", b"MZ\x90\x00 not a pdf", "qual-000001-1"),
+			("broken.pdf", b"%PDF-1.4\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n", "qual-000001-1"),
+			("big.pdf", b"%PDF-1.4\n" + b"0" * (2 * 1024 * 1024), "qual-000001-1"),  # over 2 MB
+			("ok.pdf", b"", "qual-000001-1"),
+			("ok.pdf", PDF, "qual-nope"),
+		]
+		for filename, content, record_id in cases:
+			self._refused(
+				profile_fields.InvalidProfileChange,
+				lambda f=filename, c=content, r=record_id: svc.submit_certificate(
+					record_id=r, filename=f, content=c, title="T", ctx=ctx
+				),
+			)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_certificate(
+				record_id="qual-000001-1", filename="a.pdf", content=PDF, title=" ", ctx=ctx
+			),
+		)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_photo(filename="me.gif", content=b"GIF89a", ctx=ctx),
+		)
+		self.assertEqual(frappe.db.count(PCR, {"da_id": "DA-000001"}), 0)
+
+	def test_a_certificate_may_be_webp_and_a_photo_holds_2_mb(self):
+		# Registry rules: a certificate is PDF, JPG, PNG or WebP up to 2 MB (17 Nov 2026); a
+		# photo too is refused over 2 MB, as the registry portal does (18 Nov 2026).
+		ctx = self._ctx(DA1)
+		webp = b"RIFF\x10\x00\x00\x00WEBP" + b"\x00" * 32
+		r = svc.submit_certificate(
+			record_id="qual-000001-1", filename="scan.webp", content=webp, title="Scan", ctx=ctx
+		)
+		self.assertEqual(r["section"], "Certificates")
+		big = PNG + b"\x00" * (3 * 1024 * 1024)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_certificate(
+				record_id="qual-000001-2", filename="big.png", content=big, title="Big", ctx=ctx
+			),
+		)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_photo(filename="me.png", content=big, ctx=ctx),
+		)
+		fits = PNG + b"\x00" * (1024 * 1024)
+		self.assertEqual(svc.submit_photo(filename="me.png", content=fits, ctx=ctx)["section"], "Photo")
+
+	def test_the_home_address_is_a_contact_change(self):
+		r = self._submit(changes={"home_address": "House 12, Kebele 03, Bako"})["data"]
+		self.assertEqual(r["section"], "Contact")
+		self.assertEqual(r["changes"]["home_address"]["to"], "House 12, Kebele 03, Bako")
+		view = svc.my_profile(self._ctx(DA1))
+		field = view["fields"]["home_address"]
+		self.assertEqual((field["section"], field["kind"]), ("Contact", "address"))
+
+	def test_the_profile_carries_what_the_list_and_file_forms_need(self):
+		options = svc.my_profile(self._ctx(DA1))["list_options"]
+		for name in ("education_level", "relationship"):
+			self.assertTrue(options[name] and {"code", "label"} <= set(options[name][0]), name)
+		# a record holds no position or specialisation (Position and reporting fields)
+		self.assertNotIn("position", options)
+		self.assertNotIn("specialisation", options)
+		self.assertEqual(options["certificate"]["max_bytes"], 2 * 1024 * 1024)
+		self.assertEqual(options["certificate"]["max_per_record"], 3)
+		self.assertIn(".webp", options["certificate"]["extensions"])
+		self.assertEqual(options["photo"]["max_bytes"], 2 * 1024 * 1024)
+
+	def test_one_open_certificate_request_per_record(self):
+		ctx = self._ctx(DA1)
+		svc.submit_certificate(record_id="qual-000001-1", filename="a.pdf", content=PDF, title="A", ctx=ctx)
+		frappe.db.commit()  # nosemgrep
+		self._refused(
+			svc.OpenRequestExists,
+			lambda: svc.submit_certificate(
+				record_id="qual-000001-1", filename="b.pdf", content=PDF, title="B", ctx=ctx
+			),
+		)
+		other = svc.submit_certificate(
+			record_id="qual-000001-2", filename="c.pdf", content=PDF, title="C", ctx=ctx
+		)
+		self.assertEqual(other["status"], "Pending Supervisor")  # another record is free
+
+	def test_the_photo_is_set_and_removed(self):
+		r = svc.submit_photo(filename="me.png", content=PNG, reason="New photo", ctx=self._ctx(DA1))
+		self.assertEqual((r["section"], r["changes"]["photo"]["action"]), ("Photo", "set"))
+		self._approve_both(r["name"])
+		change = self._registry().section_changes[-1]
+		self.assertEqual((change.section_id, change.section_register_id), ("da_identity_section_01", None))
+		self.assertEqual(change.rows[0]["record_image_document_id"], "doc-up-1")
+		frappe.set_user(DA1)
+		self.assertIn("doc-up-1", api.my_profile()["data"]["profile"]["photo"])
+
+		r = svc.submit_photo(remove=True, ctx=self._ctx(SUP), da_id="DA-000001")
+		self.assertEqual((r["status"], r["changes"]["photo"]["action"]), ("Pending Administrator", "remove"))
+		self._decide(ADMIN1, r["name"])
+		self.assertIsNone(self._registry().section_changes[-1].rows[0]["record_image_document_id"])
+		frappe.set_user(DA1)
+		self.assertIsNone(api.my_profile()["data"]["profile"]["photo"])
+		ctx = self._ctx(DA1)
+		self._refused(svc.profile_fields.NothingToChange, lambda: svc.submit_photo(remove=True, ctx=ctx))
+
+	def test_family_members_are_added_changed_and_removed(self):
+		r = svc.submit_family_change(
+			action="add",
+			values={"name": "Kebede  Abebe", "relationship": "Son", "date_of_birth": "2018-05-01"},
+			ctx=self._ctx(DA1),
+		)
+		to = r["changes"]["family:new"]["to"]
+		self.assertEqual(
+			(to["name"], to["relationship"], to["relationship_label"]), ("Kebede Abebe", "REL_SON", "Son")
+		)
+		self._approve_both(r["name"])
+		row = self._registry().section_changes[-1].rows[0]
+		self.assertEqual(
+			(row["edit_action"], row["member_name"], row["relationship"], row["internal_record_id"]),
+			("ADD", "Kebede Abebe", "REL_SON", ""),
+		)
+		frappe.set_user(DA1)
+		family = api.my_profile()["data"]["profile"]["dependents"]
+		self.assertEqual(sorted(d["name"] for d in family), ["Almaz Abebe", "Kebede Abebe"])
+
+		ctx = self._ctx(DA1)
+		self._refused(
+			svc.profile_fields.NothingToChange,
+			lambda: svc.submit_family_change(
+				action="add", values={"name": "Kebede Abebe", "relationship": "REL_SON"}, ctx=ctx
+			),
+		)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_family_change(
+				action="add", values={"name": "X", "relationship": "Cousin"}, ctx=ctx
+			),
+		)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_family_change(
+				action="add", values={"name": "X1", "relationship": "REL_SON"}, ctx=ctx
+			),
+		)
+		r = svc.submit_family_change(
+			action="update", member_id="dep-000001-1", values={"date_of_birth": "2015-03-03"}, ctx=ctx
+		)
+		self.assertEqual(list(r["changes"]["family:dep-000001-1"]["to"]), ["date_of_birth"])
+		self._approve_both(r["name"])
+		r = svc.submit_family_change(action="delete", member_id="dep-000001-1", ctx=self._ctx(DA1))
+		self._approve_both(r["name"])
+		self.assertEqual(self._registry().section_changes[-1].rows[0]["edit_action"], "DELETE")
+		frappe.set_user(DA1)
+		self.assertEqual(
+			[d["name"] for d in api.my_profile()["data"]["profile"]["dependents"]], ["Kebede Abebe"]
+		)
+
+	def test_education_records_are_added_changed_and_one_is_always_kept(self):
+		r = svc.submit_record_change(
+			action="add",
+			values={"education_level": "Degree", "passout_year": 2015},
+			ctx=self._ctx(DA1),
+		)
+		self.assertEqual(r["section"], "Education records")
+		sent = MockDARegistryClient.shared().section_changes
+		self.assertEqual(sent, [])  # nothing reaches the registry before both approvals
+		self._approve_both(r["name"])
+		frappe.set_user(DA1)
+		records = api.my_profile()["data"]["profile"]["qualifications"]
+		self.assertEqual((records[0]["education_level"], records[0]["is_main"]), ("DEGREE", True))  # newest
+		ctx = self._ctx(DA1)
+		latest = profile_fields.ethiopian_year(frappe.utils.getdate())
+		for bad in (
+			{"passout_year": latest + 1},
+			{"passout_year": 1949},
+			{"education_level": "PHD"},
+			# position, specialisation and joining date are no longer on a record
+			{"specialisation": "LIVESTOCK"},
+			{"position": "SENIOR_DA"},
+			{"joined_date": "2019-09-01"},
+		):
+			self._refused(
+				profile_fields.InvalidProfileChange,
+				lambda b=bad: svc.submit_record_change(
+					action="update", record_id="qual-000001-1", values=b, ctx=ctx
+				),
+			)
+		self._refused(
+			svc.profile_fields.NothingToChange,
+			lambda: svc.submit_record_change(
+				action="update", record_id="qual-000001-1", values={"passout_year": 2008}, ctx=ctx
+			),
+		)
+		r = svc.submit_record_change(
+			action="update", record_id="qual-000001-1", values={"education_level": "Diploma"}, ctx=ctx
+		)
+		self.assertEqual(
+			r["changes"]["record:qual-000001-1"]["from"]["education_level"], "CERTIFICATE"
+		)  # level and passout year only
+		self._approve_both(r["name"])
+		for record_id in ("qual-000001-1", "qual-000001-2"):
+			r = svc.submit_record_change(action="delete", record_id=record_id, ctx=self._ctx(DA1))
+			self._approve_both(r["name"])
+		ctx = self._ctx(DA1)
+		last = self._registry().get_da("DA-000001").qualifications
+		self.assertEqual(len(last), 1)
+		self._refused(
+			profile_fields.InvalidProfileChange,
+			lambda: svc.submit_record_change(action="delete", record_id=last[0]["id"], ctx=ctx),
+		)
+
+	def test_a_retry_after_a_refusal_reuses_the_uploaded_file(self):
+		r = svc.submit_certificate(
+			record_id="qual-000001-1", filename="a.pdf", content=PDF, title="A", ctx=self._ctx(DA1)
+		)
+		self._decide(SUP, r["name"])
+		refusal = IntegrationResult(
+			accepted=False, message="pending change request", error_code="REQ-VAL-000"
+		)
+		with patch.object(MockDARegistryClient, "push_section_change", return_value=refusal):
+			d = self._decide(ADMIN1, r["name"])["data"]
+		self.assertEqual((d["status"], len(self._registry().documents)), ("Registry failed", 1))
+		frappe.set_user(ADMIN2)
+		d = api.retry(r["name"])["data"]
+		self.assertEqual(d["status"], "Applied", d)
+		self.assertEqual(len(self._registry().documents), 1)  # uploaded once
+		self.assertEqual(self._row(r["name"]).uploaded_document_id, "doc-up-1")
+
+	def test_who_may_ask_for_list_and_file_changes(self):
+		self._refused(
+			frappe.PermissionError,
+			lambda: svc.submit_photo(
+				filename="me.png", content=PNG, da_id="DA-000001", ctx=self._ctx(SUP_OTHER)
+			),
+		)
+		self._refused(
+			frappe.PermissionError,
+			lambda: svc.submit_family_change(
+				action="add", values={"name": "A B", "relationship": "REL_SON"}, ctx=self._ctx(EXEC)
+			),
+		)
+		self._refused(
+			frappe.PermissionError,
+			lambda: svc.submit_photo(
+				filename="me.png", content=PNG, da_id="DA-000001", ctx=self._ctx(ADMIN1)
+			),
+		)
+		r = svc.submit_certificate(
+			record_id="qual-000001-1",
+			filename="a.pdf",
+			content=PDF,
+			title="A",
+			da_id="DA-000001",
+			ctx=self._ctx(SUP),
+		)
+		self.assertEqual((r["status"], r["initiated_by_role"]), ("Pending Administrator", C.ROLE_SUPERVISOR))
+		self.assertEqual(len(svc.list_certificates("DA-000001", self._ctx(EXEC))), 2)
+		self._refused(
+			frappe.PermissionError, lambda: svc.list_certificates("DA-000001", self._ctx(SUP_OTHER))
+		)
+
+	def test_a_certificate_arrives_as_a_multipart_upload(self):
+		import io
+
+		from werkzeug.test import EnvironBuilder
+		from werkzeug.wrappers import Request
+
+		frappe.set_user(DA1)
+		builder = EnvironBuilder(method="POST", data={"file": (io.BytesIO(PDF), "ipm.pdf")})
+		frappe.local.request = Request(builder.get_environ())
+		try:
+			out = api.certificate_upload(record_id="qual-000001-1", title="IPM", issuer="EATI")
+		finally:
+			frappe.local.request = None
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual(frappe.response.get("http_status_code"), 201)
+		self.assertEqual(out["data"]["changes"]["certificates:qual-000001-1"]["to"]["name"], "ipm.pdf")
+		frappe.db.commit()  # nosemgrep
+		out = api.certificate_upload(record_id="qual-000001-1", title="IPM")  # no file in this request
+		self._error(out, 400)
+
 	# -- what the screens are told ---------------------------------------------------------
+
+	def test_reports_to_is_asked_by_the_supervisor_and_checked(self):
+		# Position and reporting (DA Registry, 18 Nov 2026): reports_to is the DA-ID of an
+		# active person, never the DA; not in a DA's own request. DA Services also keeps it
+		# to the DA's Woreda or Zone.
+		mock = MockDARegistryClient.shared()
+		mock._records["DA-000009"] = {
+			"da_id": "DA-000009",
+			"full_name": "Tigist Bekele",
+			"active_status": C.ACTIVE_STATUS_ACTIVE,
+			"approval_status": "Published",
+			"region": "ET04",
+			"zone": "ET04-Z01",
+			"woreda": "ET04-W01",
+			"position": "Senior DA",
+			"position_code": "SENIOR_DA",
+		}
+		mock._records["DA-000010"] = dict(
+			mock._records["DA-000009"], da_id="DA-000010", region="ET03", zone="ET03-Z02", woreda="ET03-W02"
+		)
+		out = self._submit(changes={"reports_to": "DA-000009"})  # the DA's own request
+		self._error(out, 400)
+		self.assertIn("Supervisor", out["details"]["reports_to"])
+		for bad, why in (
+			("Tigist", "DA-ID"),
+			("DA-000001", "themselves"),
+			("DA-000002", "not active"),  # on leave
+			("DA-000010", "Woreda or Zone"),  # active, posted in ET03
+			("DA-777777", "not in the DA Registry"),
+		):
+			out = self._submit(SUP, changes={"reports_to": bad}, da_id="DA-000001")
+			self._error(out, 400)
+			self.assertIn(why, out["details"]["reports_to"], bad)
+		out = self._submit(SUP, changes={"reports_to": "da-000009"}, da_id="DA-000001")
+		self.assertEqual(out["status"], "success", out)
+		r = out["data"]
+		self.assertEqual((r["section"], r["status"]), ("Qualifications", "Pending Administrator"))
+		self.assertEqual(r["changes"]["reports_to"]["to"], "DA-000009")
+		self.assertEqual(r["changes"]["reports_to"]["to_label"], "Tigist Bekele (Senior DA)")
+		self._decide(ADMIN1, r["name"])
+		self.assertEqual(mock.pushed[-1].changes, {"reports_to": "DA-000009"})
+		frappe.set_user(DA1)
+		view = api.my_profile()["data"]
+		self.assertEqual(
+			(view["profile"]["reports_to"], view["profile"]["reports_to_name"]),
+			("DA-000009", "Tigist Bekele"),
+		)
+		self.assertEqual(view["profile"]["reports_to_position"], "Senior DA")
+		self.assertEqual(view["fields"]["reports_to"]["current_label"], "Tigist Bekele")
+
+	def test_specialisation_belongs_to_a_da_or_senior_da_and_admin_reports_to_nobody(self):
+		mock = MockDARegistryClient.shared()
+		mock._records["DA-000001"]["position_code"] = "SUPERVISOR"
+		out = self._submit(changes={"specialisation": "Livestock"})
+		self._error(out, 400)
+		self.assertIn("Development Agent or a Senior DA", out["details"]["specialisation"])
+		# a change of position decides: back to a DA position, a specialisation is fine
+		out = self._submit(changes={"position": "DEVELOPMENT_AGENT", "specialisation": "Livestock"})
+		self.assertEqual(out["status"], "success", out)
+		mock._records["DA-000001"]["position_code"] = "ADMIN"
+		out = self._submit(SUP, changes={"reports_to": "DA-000002"}, da_id="DA-000001")
+		self._error(out, 400)
+		self.assertIn("ADMIN reports to nobody", out["details"]["reports_to"])
+
+	def test_the_education_level_changes_only_through_the_education_records(self):
+		# The registry refuses education_level on Position and reporting (18 Nov 2026) and
+		# copies the main education record onto the DA record.
+		out = self._submit(changes={"education_tier": "DEGREE"})
+		self._error(out, 400)
+		self.assertIn("education_tier", out["message"])
+		self.assertEqual(frappe.db.count(PCR, {"da_id": "DA-000001"}), 0)
+
+	def test_names_and_phones_follow_the_registry(self):
+		for changes, ok in (
+			({"telegram": "0111234567"}, True),  # a landline, as the registry takes it
+			({"alternate_mobile": "911223344"}, True),  # without 0 or +251
+			({"telegram": "0011234567"}, False),
+		):
+			out = self._submit(changes=changes)
+			self.assertEqual(out["status"] == "success", ok, (changes, out))
+			frappe.db.delete(PCR, {"da_id": "DA-000001"})
+		for name, ok in (("ኣበበ ከበደ", True), ("Wolde-Mariam", True), ("A. Kebede", False), ("Ab3be", False)):
+			out = self._submit(changes={"first_name": name}, reason="Spelling on the Fayda card")
+			self.assertEqual(out["status"] == "success", ok, (name, out))
+			frappe.db.delete(PCR, {"da_id": "DA-000001"})
+		out = self._submit(changes={"first_name": "A" * 101}, reason="Spelling on the Fayda card")
+		self._error(out, 400)
 
 	def test_coded_fields_carry_their_options_and_the_current_code(self):
 		frappe.set_user(SUP)
 		d = api.agent_profile("DA-000001")["data"]
-		tier = d["fields"]["education_tier"]
-		self.assertIn({"code": "DIPLOMA", "label": "Diploma"}, tier["options"])
-		self.assertEqual(len(tier["options"]), 4)
+		spec = d["fields"]["specialisation"]
+		self.assertIn({"code": "LIVESTOCK", "label": "Livestock"}, spec["options"])
+		self.assertEqual(len(spec["options"]), 3)
 		# the DA's own value by code, so the screen can mark it in the list
-		self.assertEqual((tier["current"], tier["current_label"]), ("DIPLOMA", "Diploma"))
-		self.assertEqual(d["profile"]["education_tier"], "Diploma")
-		self.assertEqual(d["fields"]["specialisation"]["current"], "CROP_PRODUCTION")
+		self.assertEqual((spec["current"], spec["current_label"]), ("CROP_PRODUCTION", "Crop production"))
+		# the education level is read only: it follows the main education record
+		self.assertNotIn("education_tier", d["fields"])
+		self.assertEqual((d["profile"]["education_tier"], d["profile"]["passout_year"]), ("Diploma", 2011))
 		self.assertNotIn("options", d["fields"]["mobile"])  # free text, checked by format
 		self.assertEqual(d["fields"]["mobile"]["current"], "+251911000001")
 		self.assertEqual(d["fields"]["woreda"]["current"], "ET04-W01")
@@ -736,10 +1279,10 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		):
 			out = api.my_profile()
 		self.assertEqual(out["status"], "success", out)
-		tier = out["data"]["fields"]["education_tier"]
-		self.assertIsNone(tier["options"])  # no list now: the value is checked on submit
-		self.assertIsNone(tier["current"])
-		self.assertEqual(tier["current_label"], "Diploma")
+		spec = out["data"]["fields"]["specialisation"]
+		self.assertIsNone(spec["options"])  # no list now: the value is checked on submit
+		self.assertIsNone(spec["current"])
+		self.assertEqual(spec["current_label"], "Crop production")
 
 	def test_a_change_keeps_the_old_and_the_new_label(self):
 		r = self._submit(changes={"specialisation": "Livestock"})["data"]
@@ -807,10 +1350,10 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self._error(out, 400)
 		self.assertEqual(out["code"], "NOTHING_TO_CHANGE")
 
-		out = self._submit(changes={"education_tier": "PhD"})
+		out = self._submit(changes={"gender": "Unknown"})
 		self._error(out, 400)
 		self.assertEqual(out["code"], "VALIDATION_ERROR")
-		self.assertIn("must be one of", out["details"]["education_tier"])  # shown under the field
+		self.assertIn("must be one of", out["details"]["gender"])  # shown under the field
 
 		out = self._submit(changes={"mobile": "+251911999888", "specialisation": "Livestock"})
 		self._error(out, 400)  # two sections: about the request, not one field
@@ -832,6 +1375,35 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		out = self._decide(SUP_OTHER, other["name"])
 		self._error(out, 403)  # not theirs to decide: the shared handler's code
 		self.assertEqual(out["code"], "PERMISSION_DENIED")
+
+	def test_a_supervisor_who_is_also_a_da_still_sees_the_woreda_queue(self):
+		# The login option gives every staff user the Development Agent role. It must not
+		# hide a Supervisor's Woreda (seen on Dev, 19 Nov 2026: an empty Approvals list).
+		_user(DUAL, [C.ROLE_DA, C.ROLE_SUPERVISOR])
+		_grant(DUAL, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		# The role string alone, or the area on a DA grant, opens nothing.
+		_user(ROLE_ONLY, [C.ROLE_DA, C.ROLE_SUPERVISOR])
+		_grant(
+			ROLE_ONLY,
+			C.ROLE_DA,
+			da_id="DA-000002",
+			region_scope="ET04",
+			zone_scope="ET04-Z01",
+			woreda_scope="ET04-W01",
+		)
+		name = self._submit()["data"]["name"]
+		frappe.set_user(DUAL)
+		rows = api.list_requests(status="Pending Supervisor")["data"]
+		self.assertEqual([r["name"] for r in rows], [name])
+		self.assertTrue(rows[0]["can_decide"])
+		frappe.set_user(ROLE_ONLY)
+		self.assertEqual(api.list_requests()["data"], [])
+		frappe.set_user(DA1)
+		self.assertEqual([r["name"] for r in api.list_requests()["data"]], [name])  # a DA: own rows
+		frappe.set_user(SUP_OTHER)
+		self.assertEqual(api.list_requests()["data"], [])  # another Woreda
+		out = self._decide(DUAL, name)
+		self.assertEqual(out["data"]["status"], "Pending Administrator", out)
 
 	def test_a_supervisor_lists_the_requests_they_sent(self):
 		own = self._submit()["data"]  # the DA's

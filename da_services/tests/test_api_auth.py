@@ -144,7 +144,8 @@ class TestMe(_Base):
 		# frontend hrefs (lib/rbac.ts NAV_GROUPS), in nav order
 		self.assertEqual(d["menu"][0], "/dashboard")
 		self.assertIn("/assignments", d["menu"])
-		self.assertNotIn("/approvals", d["menu"])  # Admin only in the portal
+		# level 1 of a profile change: the Woreda's Supervisor decides on the Approvals screen
+		self.assertIn("/approvals", d["menu"])
 		self.assertNotIn("/admin/users", d["menu"])
 
 	def test_da_profile_includes_registry_record(self):
