@@ -1,0 +1,201 @@
+{
+ "actions": [],
+ "allow_bulk_edit": 1,
+ "allow_rename": 0,
+ "autoname": "format:DA-ATP-{YYYY}-{#######}",
+ "creation": "2026-11-18 11:17:03.804938",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "da_id",
+  "column_break_drqs",
+  "action",
+  "punched_date",
+  "punched_time",
+  "sec_geo",
+  "region",
+  "zone",
+  "woreda",
+  "kebele",
+  "sec_gps",
+  "gps_lat",
+  "gps_lng"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1,
+   "search_index": 1,
+   "set_only_once": 1
+  },
+  {
+   "fetch_from": "user.da_registry_id",
+   "fieldname": "da_id",
+   "fieldtype": "Read Only",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "DA-ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_drqs",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "action",
+   "fieldtype": "Select",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "label": "Action",
+   "options": "Punch In\nPunch Out",
+   "reqd": 1
+  },
+  {
+   "fieldname": "punched_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Punched Date",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "punched_time",
+   "fieldtype": "Time",
+   "in_list_view": 1,
+   "label": "Punched Time",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sec_geo",
+   "fieldtype": "Section Break",
+   "label": "Geography"
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Link",
+   "label": "Region",
+   "options": "DA Region"
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "label": "Zone",
+   "options": "DA Zone"
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "label": "Woreda",
+   "options": "DA Woreda"
+  },
+  {
+   "fieldname": "kebele",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "label": "Kebele",
+   "options": "DA Kebele"
+  },
+  {
+   "fieldname": "sec_gps",
+   "fieldtype": "Section Break",
+   "label": "GPS"
+  },
+  {
+   "fieldname": "gps_lat",
+   "fieldtype": "Float",
+   "label": "GPS Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "gps_lng",
+   "fieldtype": "Float",
+   "label": "GPS Longitude",
+   "precision": "6"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-11-18 21:47:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Attendance Punch",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "select": 1,
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Development Agent",
+   "select": 1,
+   "share": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor",
+   "select": 1,
+   "share": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Executive",
+   "select": 1,
+   "share": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "select": 1,
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "punched_date",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
