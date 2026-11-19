@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-grievances",
     "name": "OAN DA Grievances",
-    "description": "DA Services grievance routes only. Login stores access_token. Create grievance sends the canal-maintenance body from variables and stores ticket_id. List sends a filter only when that variable is set. List rows include subject, created_at, and location. Summary cards include label, order, is_open, is_terminal, and count. Options return category value and label, and status objects.",
+    "description": "DA Services grievance routes only. Login stores access_token. Create grievance sends the canal-maintenance body from variables and stores ticket_id. List sends a filter only when that variable is set. List rows include subject, created_at, and location. Summary cards include label, order, is_open, is_terminal, and count. Options return category value and label, and status objects. Upload evidence attaches files to ticket_id and stores attachment_id; List evidence shows each file's scan_status; View evidence file returns the file once it is Clean.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -50,7 +50,8 @@
     { "key": "desired_outcome", "value": "Canal cleaned before the next irrigation cycle" },
     { "key": "submitter_type", "value": "Individual Farmer" },
     { "key": "consent_given", "value": "1" },
-    { "key": "is_anonymous", "value": "0" }
+    { "key": "is_anonymous", "value": "0" },
+    { "key": "attachment_id", "value": "" }
   ],
   "item": [
     {
@@ -321,6 +322,97 @@
               "        pm.expect(entry).to.have.property('detail');",
               "    });",
               "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Upload evidence",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "files",
+              "type": "file",
+              "src": [],
+              "description": "Choose one or more files: JPG, PNG, PDF or MP3, 10 MB each."
+            },
+            {
+              "key": "document_type",
+              "value": "Receipt",
+              "type": "text",
+              "description": "Optional label."
+            }
+          ]
+        },
+        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/attachments",
+        "description": "Attach evidence to the grievance in ticket_id. multipart/form-data: choose the file(s) for `files` before sending. The Grievance Service owns the rules (JPG, PNG, PDF or MP3, 10 MB a file, 10 files a grievance) and its refusal comes back as 400 with its message. Returns 201 with data as the list of new rows; each is scan_status Pending until the virus scan finishes. Stores the first attachment_id."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Upload returns 201\", function () { pm.response.to.have.status(201); });",
+              "const first = ((pm.response.json() || {}).data || [])[0];",
+              "if (first && first.attachment_id) pm.collectionVariables.set(\"attachment_id\", first.attachment_id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "List evidence",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/attachments",
+        "description": "Every document on the grievance, oldest first, with scan_status (Pending, Clean, Infected). Stores the first attachment_id."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"List returns 200\", function () { pm.response.to.have.status(200); });",
+              "const rows = (pm.response.json() || {}).data || [];",
+              "if (rows.length) pm.collectionVariables.set(\"attachment_id\", rows[0].attachment_id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "View evidence file",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/attachments/{{attachment_id}}/view",
+        "description": "Returns the file itself, not JSON. Add ?download=1 for a Save As. 404 when the attachment is not on this ticket. The Grievance Service refuses a file whose scan is not Clean: 400 with its message."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"View returns 200\", function () { pm.response.to.have.status(200); });"
             ]
           }
         }

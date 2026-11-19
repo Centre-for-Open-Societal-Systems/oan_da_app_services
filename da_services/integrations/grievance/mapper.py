@@ -357,3 +357,23 @@ def to_grievance_result(payload: dict) -> GrievanceResult:
 		retryable=bool(payload.get("retryable", False)),
 		raw=payload,
 	)
+
+
+def to_attachment(payload: dict) -> dict:
+	"""One evidence row, from either the upload result or the attachment list.
+
+	The upload names the row ``attachment`` and the list names it ``name``; both become
+	``attachment_id``, and ``creation`` becomes ``uploaded_at``. Who uploaded it is an
+	internal user or submitter id and is not passed on.
+	"""
+	return {
+		"attachment_id": payload.get("attachment") or payload.get("name"),
+		"file_name": payload.get("file_name"),
+		"mime_type": payload.get("mime_type"),
+		"size_bytes": payload.get("size_bytes"),
+		"document_type": payload.get("document_type"),
+		"scan_status": payload.get("scan_status"),
+		"scanned_at": payload.get("scanned_at"),
+		"uploaded_at": payload.get("creation"),
+		"timeline_entry": payload.get("timeline_entry"),
+	}

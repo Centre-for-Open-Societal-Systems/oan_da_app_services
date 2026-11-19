@@ -1,0 +1,79 @@
+{
+ "actions": [],
+ "creation": "2026-11-15 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "farmer_id",
+  "phone",
+  "status",
+  "message_body",
+  "provider_ref",
+  "error",
+  "queued_at",
+  "sent_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "farmer_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Farmer ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Phone"
+  },
+  {
+   "default": "Queued",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Queued\nSent\nFailed\nSkipped"
+  },
+  {
+   "fieldname": "message_body",
+   "fieldtype": "Small Text",
+   "label": "Message Body"
+  },
+  {
+   "fieldname": "provider_ref",
+   "fieldtype": "Data",
+   "label": "Provider Ref"
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Error"
+  },
+  {
+   "fieldname": "queued_at",
+   "fieldtype": "Datetime",
+   "label": "Queued At"
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-15 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Gathering SMS Log",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}

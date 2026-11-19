@@ -8,10 +8,14 @@
   "parameter_id",
   "sort_order",
   "prompt",
-  "prompts_json",
+  "prompt_amharic",
+  "prompt_afaan_oromoo",
   "response_type",
   "required",
-  "options_json",
+  "option_1",
+  "option_2",
+  "option_3",
+  "option_4",
   "helper",
   "prefill",
   "condition_parameter_id",
@@ -40,10 +44,14 @@
    "reqd": 1
   },
   {
-   "description": "Optional non-English prompt text keyed by language name or code.",
-   "fieldname": "prompts_json",
-   "fieldtype": "Long Text",
-   "label": "Localized Prompts JSON"
+   "fieldname": "prompt_amharic",
+   "fieldtype": "Small Text",
+   "label": "Prompt (Amharic)"
+  },
+  {
+   "fieldname": "prompt_afaan_oromoo",
+   "fieldtype": "Small Text",
+   "label": "Prompt (Afaan Oromoo)"
   },
   {
    "fieldname": "response_type",
@@ -61,9 +69,32 @@
    "label": "Required"
   },
   {
-   "fieldname": "options_json",
-   "fieldtype": "Long Text",
-   "label": "Options JSON"
+   "columns": 1,
+   "fieldname": "option_1",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Option 1"
+  },
+  {
+   "columns": 1,
+   "fieldname": "option_2",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Option 2"
+  },
+  {
+   "columns": 1,
+   "fieldname": "option_3",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Option 3"
+  },
+  {
+   "columns": 1,
+   "fieldname": "option_4",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Option 4"
   },
   {
    "fieldname": "helper",
@@ -89,7 +120,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-11-09 12:00:00.000000",
+ "modified": "2026-11-16 13:30:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Parameter",

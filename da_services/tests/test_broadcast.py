@@ -138,6 +138,33 @@ class TestBroadcast(IntegrationTestCase):
 		out = svc.broadcast(ctx, title="own woreda", scope="woreda", scope_value="ET04-W01")
 		self.assertEqual(out["recipients"], 1)
 
+	def test_da_can_target_own_woreda(self):
+		ctx = get_scope_context(DA_W01)
+		out = svc.broadcast(ctx, title="own woreda", scope="woreda", scope_value="ET04-W01")
+		self.assertFalse(out["duplicate"])
+
+	def test_da_cannot_target_other_woreda(self):
+		ctx = get_scope_context(DA_W01)
+		with self.assertRaises(frappe.PermissionError):
+			svc.broadcast(ctx, title="x", scope="woreda", scope_value="ET04-W02")
+
+	def test_da_cannot_broadcast_wider_than_a_woreda(self):
+		ctx = get_scope_context(DA_W01)
+		for scope, value in (("all", None), ("region", "ET04")):
+			with self.assertRaises(frappe.PermissionError):
+				svc.broadcast(ctx, title="x", scope=scope, scope_value=value)
+
+	def test_source_is_stored_on_the_notification(self):
+		ctx = get_scope_context(COMMS_NATIONAL)
+		svc.broadcast(ctx, title="Heavy rain", scope="woreda", scope_value="ET04-W01", source="Weather")
+		rows, _meta = svc.list_notifications(get_scope_context(DA_W01), limit=100)
+		self.assertEqual([r["source"] for r in rows if r["title"] == "Heavy rain"], ["Weather"])
+
+	def test_unknown_source_is_rejected(self):
+		ctx = get_scope_context(COMMS_NATIONAL)
+		with self.assertRaises(frappe.ValidationError):
+			svc.broadcast(ctx, title="x", scope="woreda", scope_value="ET04-W01", source="Random")
+
 	def test_admin_is_unrestricted(self):
 		ctx = get_scope_context("Administrator")
 		out = svc.broadcast(ctx, title="admin all", scope="all")

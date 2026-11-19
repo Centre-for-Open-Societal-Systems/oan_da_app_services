@@ -49,13 +49,14 @@ def read_one(notification_id: str):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def broadcast():
-	"""Send a Broadcast notification to every DA in a scope (Communications Officer, Admin).
+	"""Send a Broadcast notification to every DA in a scope (Communications Officer, Admin, DA).
 
 	Request body (JSON):
 	    {
 	        "title": "Fertiliser distribution starts Monday",   // required, <= 140 chars
 	        "body": "Collect vouchers at the Woreda office.",   // optional
 	        "href": "/notifications",                           // optional deep link
+	        "source": "Weather",                                // optional: Knowledge | Emergency | Weather | Informational
 	        "scope": "all" | "region" | "zone" | "woreda",      // default "all"
 	        "scope_value": "ET04-W01",                          // required unless scope is "all"
 	        "client_op_id": "<uuid>"                            // optional idempotency key
@@ -63,12 +64,13 @@ def broadcast():
 
 	Scope rule: Admin may target anything; a Communications Officer with no
 	Region/Zone/Woreda on their grant is the national desk and may target
-	anything; one with a scoped grant may only target inside that scope.
+	anything; one with a scoped grant may only target inside that scope. A
+	Development Agent may only target a Woreda of their own scope.
 
 	Returns:
 	    {"success": true, "data": {"broadcast_id", "scope", "scope_value", "recipients", "duplicate"}}
 	"""
-	ctx = require_roles(C.ROLE_COMMS, C.ROLE_ADMIN)
+	ctx = require_roles(C.ROLE_COMMS, C.ROLE_ADMIN, C.ROLE_DA)
 
 	data = frappe.request.get_json(silent=True) if frappe.request else None
 	if not data and frappe.form_dict:
@@ -84,6 +86,7 @@ def broadcast():
 		scope=data.get("scope") or "all",
 		scope_value=data.get("scope_value"),
 		client_op_id=data.get("client_op_id"),
+		source=data.get("source"),
 	)
 	message = (
 		"Broadcast already sent." if out["duplicate"] else f"Broadcast sent to {out['recipients']} DA(s)."

@@ -1,0 +1,178 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ADV-{####}",
+ "creation": "2026-11-16 16:00:00.000000",
+ "description": "A Ministry of Agriculture subject-matter expert in the advisor directory DAs reference (Add Advisor form). A reference list, not an HR record.",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_details",
+  "full_name",
+  "expertise_area",
+  "column_break_details",
+  "status",
+  "moa_unit",
+  "section_location",
+  "region",
+  "column_break_location",
+  "woreda",
+  "section_contact",
+  "mobile_number",
+  "email",
+  "column_break_contact",
+  "availability"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_details",
+   "fieldtype": "Section Break",
+   "label": "Advisor details"
+  },
+  {
+   "fieldname": "full_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Full Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "expertise_area",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Expertise Area",
+   "options": "Crop protection\nSoil fertility\nLivestock health\nIrrigation\nHorticulture\nAgronomy\nNatural resources\nAgri-finance",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_details",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Active\nOn leave\nInactive",
+   "reqd": 1
+  },
+  {
+   "fieldname": "moa_unit",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "MoA Unit / Directorate",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_location",
+   "fieldtype": "Section Break",
+   "label": "Location"
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Region",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_location",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Woreda",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_contact",
+   "fieldtype": "Section Break",
+   "label": "Contact"
+  },
+  {
+   "fieldname": "mobile_number",
+   "fieldtype": "Data",
+   "label": "Mobile Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "email",
+   "fieldtype": "Data",
+   "label": "Email",
+   "options": "Email",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_contact",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "availability",
+   "fieldtype": "Data",
+   "label": "Availability"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-16 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Advisor",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Supervisor"
+  },
+  {
+   "read": 1,
+   "role": "Development Agent"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "full_name",
+ "track_changes": 1
+}

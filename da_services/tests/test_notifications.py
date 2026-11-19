@@ -122,6 +122,7 @@ class TestDANotification(IntegrationTestCase):
 				"title",
 				"body",
 				"href",
+				"source",
 				"read",
 				"read_at",
 				"event",

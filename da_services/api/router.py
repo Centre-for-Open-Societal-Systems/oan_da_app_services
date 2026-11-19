@@ -68,9 +68,11 @@ def _register() -> None:
 
 	# Importing the endpoint modules executes their @route(...) registrations.
 	from da_services.api.v1 import (
+		advisors,
 		agent_import,
 		agents,
 		assignments,
+		beneficiary,
 		crop_sown,
 		da,
 		dashboard,
@@ -78,6 +80,7 @@ def _register() -> None:
 		farmer_links,
 		farmers,
 		farmers_update,
+		gatherings,
 		leave,
 		livestock,
 		master,

@@ -18,7 +18,7 @@
   "started_at",
   "completed_at",
   "sec_answers",
-  "answers_json",
+  "answers",
   "sec_scope",
   "region",
   "zone",
@@ -103,9 +103,10 @@
    "label": "Answers"
   },
   {
-   "fieldname": "answers_json",
-   "fieldtype": "Long Text",
-   "label": "Answers JSON"
+   "fieldname": "answers",
+   "fieldtype": "Table",
+   "label": "Answers",
+   "options": "DA Survey Answer"
   },
   {
    "fieldname": "sec_scope",
@@ -162,7 +163,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-06 10:34:14.000000",
+ "modified": "2026-11-16 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Response",

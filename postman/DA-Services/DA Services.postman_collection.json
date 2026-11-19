@@ -16,20 +16,10 @@
             {
               "listen": "test",
               "script": {
-                "exec": [
-                  "const jsonData = pm.response.json();",
-                  "",
-                  "if (jsonData && jsonData.data) {",
-                  "    pm.environment.set(\"access_token\", jsonData.data.access_token);",
-                  "    pm.environment.set(\"csrf_token\", jsonData.data.csrf_token);",
-                  "    console.log(\"access_token and csrf_token stored in environment.\");",
-                  "} else {",
-                  "    console.error(\"Unexpected response structure:\", jsonData);",
-                  "}"
-                ],
                 "type": "text/javascript",
-                "packages": {},
-                "requests": {}
+                "exec": [
+                  "const jsonData = pm.response.json();\n\nif (jsonData && jsonData.data) {\n    pm.environment.set(\"access_token\", jsonData.data.access_token);\n    pm.environment.set(\"csrf_token\", jsonData.data.csrf_token);\n    console.log(\"access_token and csrf_token stored in environment.\");\n} else {\n    console.error(\"Unexpected response structure:\", jsonData);\n}"
+                ]
               }
             }
           ],
@@ -50,7 +40,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"username\": \"da-agent@services.com\",\n    \"password\": \"admin@123\",\n    \"key\": \"agent\"\n  }",
+              "raw": "{\n    \"username\": \"da-supervisor@services.com\",\n    \"password\": \"Super@123\",\n    \"key\": \"agent\"\n  }",
               "options": {
                 "raw": {
                   "language": "json"
@@ -135,6 +125,41 @@
                   "key": "search",
                   "value": ""
                 }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get KB Category",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/knowledge-base/categories",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "knowledge-base",
+                "categories"
               ]
             }
           },
@@ -767,6 +792,149 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "4. Beneficiary",
+      "item": [
+        {
+          "name": "Get Beneficiary Segments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Farmer Beneficiaries",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/farmer-beneficiaries?limit=50&start=0",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "farmer-beneficiaries"
+              ],
+              "query": [
+                {
+                  "key": "farmer_id",
+                  "value": "FR-123",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                },
+                {
+                  "key": "beneficiary_segment",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "region",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "zone",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "woreda",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "kebele",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "user",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Farmer Beneficiaries",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer $TOKEN"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"farmer_id\": \"FR-125\",\r\n    \"region\": \"ET01\",\r\n    \"zone\": \"ET0101\",\r\n    \"woreda\": \"ET010108\",\r\n    \"kebele\": \"ET01010805\",\r\n    \"beneficiary_segment\": \"BS-00001\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}api/v1/da-services/farmer-beneficiaries",
+              "host": [
+                "{{base_url}}api"
+              ],
+              "path": [
+                "v1",
+                "da-services",
+                "farmer-beneficiaries"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "article_id",
+      "value": ""
     }
   ]
 }
