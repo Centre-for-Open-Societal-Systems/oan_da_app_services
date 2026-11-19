@@ -214,8 +214,8 @@ each item sequentially in that request and returns partial success so the DA can
 | Element | API | Source |
 |---|---|---|
 | Farmer search + chips | `GET /farmers?q=&limit=10` → items + `flags[]` (`registered`, `voucher_redeemed_season`) | ours projection; voucher flag external (**contract pending**) |
-| Plan (single, legacy) | `POST /visits` flat body: `user` (required User Link), `client_op_id, farmer_id, visit_type, purpose, scheduled_at` (or `date`+`time`), `duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng}` (optional), `notify_farmer_sms, advisory_qa[] {question, answer}`, optional `da_id` (Supervisor). No session-user fallback. → one visit `{name, physical_status: Planned, …}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
-| Plan (single or batch list) | `POST /visits` body: `{ user?, da_id?, visits: [ { same fields as single plan per farmer }, … ] }` — length **1–5**, unique `farmer_id`, per-item schedule allowed. `user` required per item or once on the envelope (not from session). Response `data`: `{ created: [visit…], failed: [ { status, error, code, request } ], summary: { total, created, failed } }`. `failed[].request` echoes that item as received; `code` is `conflict` \| `validation` \| `error`. HTTP **201** if any created; **400** if envelope invalid or zero created. When `visits` is present it is the list path. Row scope stays on Frappe hooks + User Permissions. | ours: loops `plan_visit` (one DA Visit per farmer) |
+| Plan (single, legacy) | `POST /visits` flat body: `user` (required User Link), `client_op_id, farmer_id, farmer_name` (required FE snapshot), `visit_type, purpose, scheduled_at` (or `date`+`time`), `duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng}` (optional), `notify_farmer_sms, advisory_qa[] {question, answer}`, optional `da_id` (Supervisor). No session-user fallback. → one visit `{name, physical_status: Planned, farmer_name, …}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
+| Plan (single or batch list) | `POST /visits` body: `{ user?, da_id?, visits: [ { same fields as single plan per farmer }, … ] }` — length **1–5**, unique `farmer_id`, required `farmer_name` per item, per-item schedule allowed. `user` required per item or once on the envelope (not from session). Response `data`: `{ created: [visit…], failed: [ { status, error, code, request } ], summary: { total, created, failed } }`. `failed[].request` echoes that item as received; `code` is `conflict` \| `validation` \| `error`. HTTP **201** if any created; **400** if envelope invalid or zero created. When `visits` is present it is the list path. Row scope stays on Frappe hooks + User Permissions. | ours: loops `plan_visit` (one DA Visit per farmer) |
 | Save as draft | device | device |
 | "Planned offline" banner | idempotent on per-item `client_op_id` | ours |
 
@@ -483,12 +483,26 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
+| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only | ours: DA Attendance Punch |
 
 Supervisor-side approvals for all of the above are the `ApprovalRequest` queue (`/approvals`): `kind
 (Onboarding | Profile change | Assignment | Specialization)`, `data[] {label, value, verified}`, `trail[]`,
 decisions approve / changes / reject with a note (min 5 chars). Onboarding is Registry; the other three are
 ours → `GET /approvals?kind&status&kebele`, `POST /approvals/{id}/decide {decision, note}` using the approval
 workflow pattern (data-model 6.1).
+
+### Attendance punches
+
+DA / Supervisor / Executive punch-in and punch-out. One `DA Attendance Punch` row per action.
+GET returns `next_action` for the button; POST does not enforce alternation (message-only response).
+Contract: [attendance-punches-integration.md](attendance-punches-integration.md),
+[attendance-punches-frontend.md](attendance-punches-frontend.md).
+Postman: `postman/AttendancePunches/`.
+
+| Element | API | Source |
+|---|---|---|
+| Today status / button | `GET /attendance-punches/today` → `next_action` | ours |
+| Punch In / Punch Out | `POST /attendance-punches {action, punched_date, punched_time, geo?, lat?, lng?}` | ours |
 
 ### 2.19 Notifications
 

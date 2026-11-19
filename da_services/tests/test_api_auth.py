@@ -14,6 +14,7 @@ from da_services.api.v1 import me as me_api
 from da_services.api.v1 import profile as profile_api
 from da_services.api.v1 import rbac as rbac_api
 from da_services.services import constants as C
+from da_services.tests.fixtures import ensure_geo_masters
 from da_services.utils.permissions import ScopeContext
 
 ADMIN = "test-oan-admin@da.local"
@@ -52,6 +53,8 @@ def _request(path: str, token: str | None) -> Request:
 class _Base(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
+		# The RBAC API validates its scope links; do not rely on another module having made them.
+		ensure_geo_masters()
 		frappe.db.delete("DA RBAC Assignment")
 		for e in (ADMIN, SUP, DA_USER, PLAIN):
 			_user(e)

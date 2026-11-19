@@ -100,6 +100,7 @@ def _visits(ctx) -> None:
 	for op, farmer, when, vtype, complete in plan:
 		out = visits.plan_visit(
 			farmer_id=farmer,
+			farmer_name=f"Demo Farmer {farmer}",
 			scheduled_at=when,
 			visit_type=vtype,
 			purpose=f"{vtype} at {farmer}",

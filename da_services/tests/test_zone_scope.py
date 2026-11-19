@@ -105,6 +105,7 @@ class TestZoneScope(IntegrationTestCase):
 		frappe.set_user(DA1)
 		self.v1 = visits.plan_visit(
 			farmer_id="FR-88466",
+			farmer_name="Test Farmer",
 			scheduled_at=f"{today()} 08:30:00",
 			purpose="Crop inspection",
 			user=DA1,
@@ -123,6 +124,7 @@ class TestZoneScope(IntegrationTestCase):
 				"user": ensure_da_user(OTHER_DA),
 				"da_id": OTHER_DA,
 				"farmer_id": "FR-77009",
+				"farmer_name": "Test Farmer",
 				"scheduled_at": f"{add_days(today(), 1)} 09:00:00",
 				"physical_status": "Planned",
 				**OTHER,
