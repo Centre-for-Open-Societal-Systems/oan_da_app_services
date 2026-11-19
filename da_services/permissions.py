@@ -44,23 +44,30 @@ def _officer_scope_clause(table: str, ctx) -> str:
 def da_scoped_query_conditions(doctype: str, user: str | None = None) -> str:
 	"""List filter for operational doctypes that carry `da_id`, `region`, `zone`, `woreda`.
 
-	Same rule as utils.permissions.ScopeContext: a DA sees rows for their own DA-ID; a
-	Supervisor / Executive sees rows whose posting codes fall inside their grants (see
-	_officer_scope_clause); Communications Officer and anyone without a grant see
-	nothing. Unrestricted roles see everything.
+	A DA sees rows for their own DA-ID. A Supervisor / Executive sees rows whose posting
+	codes fall inside their live officer grants (see _officer_scope_clause). A user who is
+	both sees both: the login option gives every staff user the Development Agent role, so
+	that role must not hide a Supervisor's Woreda (their Approvals list would be empty).
+	The officer part needs a live officer assignment, never the role string or the area on
+	a DA grant alone (get_officer_scope_context). Communications Officer and anyone without
+	a grant see nothing. Unrestricted roles see everything.
 	"""
 	user = user or frappe.session.user
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return ""
 	t = f"`tab{doctype}`"
-	if ctx.has_any_role(C.ROLE_DA):
-		if not ctx.da_ids:
-			return DENY
-		return f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})"
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		return _officer_scope_clause(t, ctx)
-	return DENY
+	clauses = []
+	if ctx.has_any_role(C.ROLE_DA) and ctx.da_ids:
+		clauses.append(f"{t}.`da_id` in ({_sql_in(ctx.da_ids)})")
+	officer = get_officer_scope_context(user)
+	if officer is not None:
+		scope = _officer_scope_clause(t, officer)
+		if scope != DENY:
+			clauses.append(scope)
+	if not clauses:
+		return DENY
+	return clauses[0] if len(clauses) == 1 else "(" + " or ".join(clauses) + ")"
 
 
 def has_da_scoped_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
@@ -69,13 +76,14 @@ def has_da_scoped_permission(doc, ptype: str = "read", user: str | None = None) 
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return True
-	if ctx.has_any_role(C.ROLE_DA):
-		return ctx.owns_da(doc.da_id)
-	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		return ctx.covers(doc.region, doc.woreda, doc.zone)
-	if ctx.has_any_role(C.ROLE_EXECUTIVE):
-		return ptype == "read" and ctx.covers(doc.region, doc.woreda, doc.zone)
-	return False
+	if ctx.has_any_role(C.ROLE_DA) and ctx.owns_da(doc.da_id):
+		return True
+	officer = get_officer_scope_context(user)
+	if officer is None or not officer.covers(doc.region, doc.woreda, doc.zone):
+		return False
+	if officer.has_any_role(C.ROLE_SUPERVISOR):
+		return True
+	return ptype == "read"  # Executive
 
 
 def da_task_query_conditions(user: str | None = None) -> str:
