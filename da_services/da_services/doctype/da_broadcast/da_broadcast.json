@@ -38,7 +38,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Scope",
-   "options": "all\nregion\nzone\nworeda",
+   "options": "all\nregion\nzone\nworeda\nkebele",
    "read_only": 1,
    "reqd": 1
   },

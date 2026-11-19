@@ -162,14 +162,52 @@ def mark_all_read(ctx: ScopeContext | None = None) -> dict:
 # Broadcast (Communications Officer -> DAs)
 # ---------------------------------------------------------------------------
 
-BROADCAST_SCOPES = ("all", "region", "zone", "woreda")
+BROADCAST_SCOPES = ("all", "region", "zone", "woreda", "kebele")
 # The signal sources of the Broadcast form; the recipient's notification is tagged with the one chosen.
 BROADCAST_SOURCES = ("Knowledge", "Emergency", "Weather", "Informational")
 BROADCAST_SENT = "notification.broadcast.sent"
 
 
+def own_kebeles(ctx: ScopeContext) -> list[str]:
+	"""The Kebeles a DA is posted to: their Effective DA Kebele Assignment rows (by DA-ID or user)."""
+	if not ctx.da_ids and not ctx.user:
+		return []
+	or_filters = [["user", "=", ctx.user]] if ctx.user else []
+	if ctx.da_ids:
+		or_filters.append(["da_id", "in", sorted(ctx.da_ids)])
+	rows = frappe.get_all(
+		"DA Kebele Assignment",
+		filters={"state": "Effective"},
+		or_filters=or_filters,
+		pluck="kebele",
+	)
+	return sorted({k for k in rows if k})
+
+
+def _kebele_recipients(kebele: str) -> list[str]:
+	"""Users with an active Development Agent grant and an Effective assignment to the Kebele."""
+	assigned = frappe.get_all(
+		"DA Kebele Assignment",
+		filters={"kebele": kebele, "state": "Effective"},
+		fields=["user", "da_id"],
+	)
+	users = {r.user for r in assigned if r.user}
+	da_ids = {r.da_id for r in assigned if r.da_id}
+	if not users and not da_ids:
+		return []
+	grants = frappe.get_all(
+		"DA RBAC Assignment",
+		filters={"role": C.ROLE_DA, "active": 1, "effective_from": ("<=", today())},
+		or_filters=[["effective_to", "is", "not set"], ["effective_to", ">=", today()]],
+		fields=["user", "da_id"],
+	)
+	return sorted({g.user for g in grants if g.user and (g.user in users or g.da_id in da_ids)})
+
+
 def _broadcast_recipients(scope: str, scope_value: str | None) -> list[str]:
 	"""Users holding an active Development Agent grant inside the scope, de-duplicated."""
+	if scope == "kebele":
+		return _kebele_recipients(scope_value)
 	filters: dict = {
 		"role": C.ROLE_DA,
 		"active": 1,
@@ -196,14 +234,21 @@ def _assert_broadcast_scope_allowed(ctx: ScopeContext, scope: str, scope_value: 
 
 	Admin is unrestricted. A Communications Officer whose grant carries no
 	Region / Zone / Woreda is the national comms desk and may target anything;
-	one with a scoped grant may only broadcast inside that scope.
+	one with a scoped grant may only broadcast inside that scope. A Development
+	Agent reaches only a Kebele they are posted to (an Effective Kebele assignment).
 	"""
 	if ctx.unrestricted:
 		return
-	# A Development Agent (who is not also a Communications Officer) reaches their own Woreda only.
 	if not ctx.has_any_role(C.ROLE_COMMS):
-		if scope != "woreda" or not ctx.woreda_scopes:
-			frappe.throw(_("You can only broadcast to your own Woreda."), frappe.PermissionError)
+		if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
+			# An officer who also holds the DA role keeps their own Woreda.
+			if scope != "woreda" or not ctx.woreda_scopes:
+				frappe.throw(_("You can only broadcast to your own Woreda."), frappe.PermissionError)
+		else:
+			# A Development Agent reaches their own Kebele only.
+			if scope != "kebele" or scope_value not in own_kebeles(ctx):
+				frappe.throw(_("You can only broadcast to your own Kebele."), frappe.PermissionError)
+			return
 	elif not (ctx.region_scopes or ctx.zone_scopes or ctx.woreda_scopes):
 		return
 	if scope == "all":
@@ -211,11 +256,16 @@ def _assert_broadcast_scope_allowed(ctx: ScopeContext, scope: str, scope_value: 
 			_("Your grant is limited to a Region / Zone / Woreda; choose a scope you cover."),
 			frappe.PermissionError,
 		)
-	covered = ctx.covers(
-		region=scope_value if scope == "region" else None,
-		zone=scope_value if scope == "zone" else None,
-		woreda=scope_value if scope == "woreda" else None,
-	)
+	if scope == "kebele":
+		# A scoped officer covers a Kebele through the Woreda it sits in.
+		woreda = frappe.db.get_value("DA Kebele", scope_value, "woreda")
+		covered = bool(woreda) and ctx.covers(woreda=woreda)
+	else:
+		covered = ctx.covers(
+			region=scope_value if scope == "region" else None,
+			zone=scope_value if scope == "zone" else None,
+			woreda=scope_value if scope == "woreda" else None,
+		)
 	if not covered:
 		frappe.throw(
 			_("{0} {1} is not in your scope.").format(scope.capitalize(), scope_value), frappe.PermissionError

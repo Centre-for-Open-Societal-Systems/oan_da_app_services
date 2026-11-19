@@ -15,6 +15,8 @@ DA_ET03 = "bc-da-et03@da.local"  # ET03 / ET03-W01
 COMMS_NATIONAL = "bc-comms@da.local"  # no scope on grant
 COMMS_W01 = "bc-comms-w01@da.local"  # woreda ET04-W01 only
 SUP = "bc-sup@da.local"
+KEBELE_W01 = "BC-K01"  # in ET04-W01; DA_W01 is posted here
+KEBELE_W02 = "BC-K02"  # in ET04-W02; DA_W02 is posted here
 
 ALL_USERS = (DA_W01, DA_W02, DA_ET03, COMMS_NATIONAL, COMMS_W01, SUP)
 
@@ -44,7 +46,31 @@ def _grant(user, role, **kw):
 	return doc
 
 
-SENDERS = (COMMS_NATIONAL, COMMS_W01, SUP, "Administrator")
+def _kebele(code, woreda):
+	if not frappe.db.exists("DA Kebele", code):
+		doc = frappe.get_doc(
+			{"doctype": "DA Kebele", "kebele_code": code, "kebele_name": f"Kebele {code}", "woreda": woreda}
+		)
+		doc.flags.ignore_validate = True
+		doc.insert(ignore_permissions=True, ignore_links=True)
+
+
+def _post(user, da_id, kebele, woreda, state="Effective"):
+	frappe.get_doc(
+		{
+			"doctype": "DA Kebele Assignment",
+			"user": user,
+			"da_id": da_id,
+			"kebele": kebele,
+			"state": state,
+			"mode": "Manual",
+			"effective_date": today(),
+			"woreda": woreda,
+		}
+	).insert(ignore_permissions=True, ignore_links=True)
+
+
+SENDERS = (COMMS_NATIONAL, COMMS_W01, SUP, "Administrator", DA_W01, DA_W02, DA_ET03)
 
 
 class TestBroadcast(IntegrationTestCase):
@@ -65,12 +91,19 @@ class TestBroadcast(IntegrationTestCase):
 		_grant(COMMS_NATIONAL, C.ROLE_COMMS)
 		_grant(COMMS_W01, C.ROLE_COMMS, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		frappe.db.delete("DA Kebele Assignment", {"kebele": ("in", (KEBELE_W01, KEBELE_W02))})
+		_kebele(KEBELE_W01, "ET04-W01")
+		_kebele(KEBELE_W02, "ET04-W02")
+		_post(DA_W01, "DA-BC0001", KEBELE_W01, "ET04-W01")
+		_post(DA_W02, "DA-BC0002", KEBELE_W02, "ET04-W02")
+		# DA_ET03 has no Kebele assignment.
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		frappe.db.delete("DA Notification", {"user": ("in", ALL_USERS)})
 		frappe.db.delete("DA Broadcast", {"sent_by": ("in", SENDERS)})
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
+		frappe.db.delete("DA Kebele Assignment", {"kebele": ("in", (KEBELE_W01, KEBELE_W02))})
 
 	def _rows(self, user):
 		return frappe.get_all(
@@ -138,21 +171,59 @@ class TestBroadcast(IntegrationTestCase):
 		out = svc.broadcast(ctx, title="own woreda", scope="woreda", scope_value="ET04-W01")
 		self.assertEqual(out["recipients"], 1)
 
-	def test_da_can_target_own_woreda(self):
-		ctx = get_scope_context(DA_W01)
-		out = svc.broadcast(ctx, title="own woreda", scope="woreda", scope_value="ET04-W01")
-		self.assertFalse(out["duplicate"])
+	def test_kebele_scope_reaches_only_the_das_posted_there(self):
+		ctx = get_scope_context(COMMS_NATIONAL)
+		out = svc.broadcast(ctx, title="K01 meeting", scope="kebele", scope_value=KEBELE_W01)
+		self.assertEqual(out["recipients"], 1)
+		self.assertEqual(len(self._rows(DA_W01)), 1)
+		self.assertEqual(self._rows(DA_W02), [])
+		self.assertEqual(self._rows(DA_ET03), [])
 
-	def test_da_cannot_target_other_woreda(self):
+	def test_superseded_assignment_is_not_a_recipient(self):
+		frappe.db.set_value(
+			"DA Kebele Assignment", {"user": DA_W02, "kebele": KEBELE_W02}, "state", "Superseded"
+		)
+		ctx = get_scope_context(COMMS_NATIONAL)
+		with self.assertRaises(frappe.ValidationError):
+			svc.broadcast(ctx, title="x", scope="kebele", scope_value=KEBELE_W02)
+
+	def test_scoped_comms_kebele_follows_its_woreda(self):
+		ctx = get_scope_context(COMMS_W01)
+		out = svc.broadcast(ctx, title="own kebele", scope="kebele", scope_value=KEBELE_W01)
+		self.assertEqual(out["recipients"], 1)
+		with self.assertRaises(frappe.PermissionError):
+			svc.broadcast(ctx, title="x", scope="kebele", scope_value=KEBELE_W02)
+
+	def test_da_can_target_own_kebele(self):
+		ctx = get_scope_context(DA_W01)
+		out = svc.broadcast(ctx, title="own kebele", scope="kebele", scope_value=KEBELE_W01)
+		self.assertFalse(out["duplicate"])
+		self.assertEqual(out["recipients"], 1)
+		self.assertEqual(self._rows(DA_W02), [])
+
+	def test_da_cannot_target_other_kebele(self):
 		ctx = get_scope_context(DA_W01)
 		with self.assertRaises(frappe.PermissionError):
-			svc.broadcast(ctx, title="x", scope="woreda", scope_value="ET04-W02")
+			svc.broadcast(ctx, title="x", scope="kebele", scope_value=KEBELE_W02)
 
-	def test_da_cannot_broadcast_wider_than_a_woreda(self):
+	def test_da_cannot_broadcast_wider_than_their_kebele(self):
 		ctx = get_scope_context(DA_W01)
-		for scope, value in (("all", None), ("region", "ET04")):
+		for scope, value in (("all", None), ("region", "ET04"), ("zone", "ET04-Z01"), ("woreda", "ET04-W01")):
 			with self.assertRaises(frappe.PermissionError):
 				svc.broadcast(ctx, title="x", scope=scope, scope_value=value)
+
+	def test_da_without_a_kebele_cannot_broadcast(self):
+		ctx = get_scope_context(DA_ET03)
+		with self.assertRaises(frappe.PermissionError):
+			svc.broadcast(ctx, title="x", scope="kebele", scope_value=KEBELE_W01)
+
+	def test_me_lists_the_das_kebeles(self):
+		from da_services.api.v1.me import profile_for
+
+		data = profile_for(get_scope_context(DA_W01), include_agent=False)
+		self.assertEqual(data["kebeles"], [{"code": KEBELE_W01, "name": f"Kebele {KEBELE_W01}"}])
+		self.assertEqual(profile_for(get_scope_context(DA_ET03), include_agent=False)["kebeles"], [])
+		self.assertNotIn("kebeles", profile_for(get_scope_context(COMMS_NATIONAL), include_agent=False))
 
 	def test_source_is_stored_on_the_notification(self):
 		ctx = get_scope_context(COMMS_NATIONAL)

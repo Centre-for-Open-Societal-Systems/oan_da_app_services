@@ -13,7 +13,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
-SCOPES = ("all", "region", "zone", "woreda")
+SCOPES = ("all", "region", "zone", "woreda", "kebele")
 
 
 class DABroadcast(Document):

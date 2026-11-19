@@ -57,15 +57,16 @@ def broadcast():
 	        "body": "Collect vouchers at the Woreda office.",   // optional
 	        "href": "/notifications",                           // optional deep link
 	        "source": "Weather",                                // optional: Knowledge | Emergency | Weather | Informational
-	        "scope": "all" | "region" | "zone" | "woreda",      // default "all"
+	        "scope": "all" | "region" | "zone" | "woreda" | "kebele",  // default "all"
 	        "scope_value": "ET04-W01",                          // required unless scope is "all"
 	        "client_op_id": "<uuid>"                            // optional idempotency key
 	    }
 
 	Scope rule: Admin may target anything; a Communications Officer with no
 	Region/Zone/Woreda on their grant is the national desk and may target
-	anything; one with a scoped grant may only target inside that scope. A
-	Development Agent may only target a Woreda of their own scope.
+	anything; one with a scoped grant may only target inside that scope (a Kebele
+	counts as inside its Woreda). A Development Agent may only target a Kebele
+	they are posted to (an Effective DA Kebele Assignment).
 
 	Returns:
 	    {"success": true, "data": {"broadcast_id", "scope", "scope_value", "recipients", "duplicate"}}
