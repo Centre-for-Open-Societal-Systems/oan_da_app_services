@@ -345,6 +345,7 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.set_user(DA1)
 		older = visits.plan_visit(
 			farmer_id="FR-ADV-1",
+			farmer_name="Advisory Farmer",
 			scheduled_at=self.tomorrow,
 			visit_type="Advisory",
 			advisory_qa=[
@@ -357,6 +358,7 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.db.set_value("DA Visit", older["name"], "physical_status", visits.COMPLETE)
 		newer = visits.plan_visit(
 			farmer_id="FR-ADV-1",
+			farmer_name="Advisory Farmer",
 			scheduled_at=add_days(self.tomorrow, 2),
 			visit_type="Advisory",
 			advisory_qa=[{"question": "Which seed rate?", "answer": "25 kg/ha"}],
@@ -365,10 +367,15 @@ class TestDAVisit(IntegrationTestCase):
 		frappe.db.set_value("DA Visit", newer["name"], "physical_status", visits.COMPLETE)
 		# This farmer's Advisory visit with no questions, and another farmer's Advisory visit.
 		empty = visits.plan_visit(
-			farmer_id="FR-ADV-1", scheduled_at=add_days(self.tomorrow, 4), visit_type="Advisory", user=DA1
+			farmer_id="FR-ADV-1",
+			farmer_name="Advisory Farmer",
+			scheduled_at=add_days(self.tomorrow, 4),
+			visit_type="Advisory",
+			user=DA1,
 		)
 		other = visits.plan_visit(
 			farmer_id="FR-ADV-2",
+			farmer_name="Other Farmer",
 			scheduled_at=self.tomorrow,
 			visit_type="Advisory",
 			advisory_qa=[{"question": "Not this farmer", "answer": ""}],
