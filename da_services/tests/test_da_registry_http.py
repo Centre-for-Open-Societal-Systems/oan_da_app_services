@@ -34,7 +34,10 @@ MASTER_DATA_VALUES = {
 	"DA_EDUCATION_LEVEL": {"DIPLOMA": "Diploma", "DEGREE": "Degree"},
 	"DA_SPECIALISATION": {"CROP_PRODUCTION": "Crop production"},
 	"DA_POSITION": {"DEVELOPMENT_AGENT": "Development agent", "SENIOR_DA": "Senior development agent"},
+	"DA_RELATIONSHIP": {"REL_SON": "Son"},
 }
+QUALIFICATION_REGISTER = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3fa0"
+DEPENDENT_REGISTER = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3fb0"
 GEO = {
 	"lowest_level_value_id": "ET04030101",
 	"hierarchy": [
@@ -89,11 +92,11 @@ def _ok(body):
 	return {"response_header": {"response_status": "SUCCESS"}, "response_body": body}
 
 
-def _err(message):
-	return {
-		"response_header": {"response_status": "ERROR", "response_error_message": message},
-		"response_body": {},
-	}
+def _err(message, code=None):
+	header = {"response_status": "ERROR", "response_error_message": message}
+	if code:
+		header["response_error_code"] = code
+	return {"response_header": header, "response_body": {}}
 
 
 class FakeRegistry:
@@ -108,6 +111,9 @@ class FakeRegistry:
 		self.change_answer = None
 		self.uploads = []
 		self.change_status = {}
+		self.lists = {}  # internal id -> {register id: rows} (list sections of the DA tab)
+		self.document_urls = {}  # document id -> presigned url
+		self.failing_attributes = set()
 
 	def __call__(self, url, json=None, data=None, headers=None, cookies=None, timeout=None, files=None):
 		if url == TOKEN_URL:
@@ -161,13 +167,20 @@ class FakeRegistry:
 		rec = self.records.get(body["request_payload"]["subject_record_id"])
 		if not rec:
 			return _err("Record not found")
-		return _ok(
-			{
-				"response_payload": [
-					{"section_register_id": DEFAULT_REGISTER_ID, "is_list": False, "records": [rec]}
-				]
-			}
-		)
+		sections = [{"section_register_id": DEFAULT_REGISTER_ID, "is_list": False, "records": [rec]}]
+		for register, rows in self.lists.get(rec["internal_record_id"], {}).items():
+			sections.append({"section_register_id": register, "is_list": True, "records": rows})
+		return _ok({"response_payload": sections})
+
+	def _get_documents(self, body):
+		ids = body["request_payload"]["document_ids"]
+		# As the registry answers it: response_payload.documents[] (da-registry answers C1)
+		rows = [
+			{"document_id": d, "bucket": "documents", "presigned_url": self.document_urls[d]}
+			for d in ids
+			if d in self.document_urls
+		]
+		return _ok({"response_payload": {"documents": rows}})
 
 	def _create_change_request(self, body):
 		return self.change_answer or _ok(
@@ -185,6 +198,8 @@ class FakeRegistry:
 
 	def _get_attribute_values(self, body):
 		attribute = body["request_payload"]["attribute_id"]
+		if attribute in self.failing_attributes:
+			return _err(f"Attribute {attribute} not found")
 		values = [{"value_id": k, "value_display": v} for k, v in MASTER_DATA_VALUES[attribute].items()]
 		return _ok({"response_payload": {"attribute_values": values}})
 
@@ -344,34 +359,122 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 			],
 		)
 
-	def test_qualification_labels_are_sent_as_master_data_codes(self):
+	def test_the_home_address_goes_with_the_contact_section(self):
+		self.client.push_profile_update(self._update({"home_address": "House 12, Kebele 03, Bako"}))
+		(sent,) = self._change_requests()
+		self.assertEqual(sent["section_id"], "da_contact_section_04")
+		self.assertEqual(sent["change_payload"][0]["address_line_1"], "House 12, Kebele 03, Bako")
+
+	def test_master_data_codes_are_sent_unchanged(self):
+		# The service has checked each code against its Master Data list; a code is an
+		# opaque id, whatever its spelling.
 		self.client.push_profile_update(
-			self._update({"education_tier": "Masters", "specialisation": "Natural resources"})
+			self._update({"position": "SENIOR_DA", "specialisation": "Agro-forestry.v2"})
 		)
 		(sent,) = self._change_requests()
 		self.assertEqual(sent["section_id"], "da_service_section_02")
-		self.assertEqual(sent["change_payload"][0]["education_level"], "MASTERS")
-		self.assertEqual(sent["change_payload"][0]["specialisation"], "NATURAL_RESOURCES")
+		self.assertEqual(sent["change_payload"][0]["position"], "SENIOR_DA")
+		self.assertEqual(sent["change_payload"][0]["specialisation"], "Agro-forestry.v2")
 
-	def test_identity_and_unknown_fields_never_reach_the_registry(self):
+	def test_reports_to_goes_with_position_and_reporting_and_education_never_does(self):
+		# Position and reporting (18 Nov 2026): reports_to is a DA-ID on da_service_section_02;
+		# the section refuses education_level, which follows the main education record.
+		self.client.push_profile_update(self._update({"reports_to": "DA-0007654321"}))
+		(sent,) = self._change_requests()
+		self.assertEqual(sent["section_id"], "da_service_section_02")
+		self.assertEqual(sent["change_payload"][0]["reports_to"], "DA-0007654321")
+		result = self.client.push_profile_update(self._update({"education_tier": "MASTERS"}))
+		self.assertFalse(result.accepted)
+
+	def test_identity_change_goes_to_the_identity_section(self):
+		self.client.push_profile_update(
+			self._update(
+				{
+					"fayda_id": "1234567890123456",
+					"father_name": "Alemu",
+					"birth_month_ec": "9",
+					"gender": "MALE",
+				}
+			)
+		)
+		(sent,) = self._change_requests()
+		self.assertEqual(sent["section_id"], "da_identity_section_01")
+		self.assertEqual(
+			sent["change_payload"],
+			[
+				{
+					"internal_record_id": "rec-1",
+					"edit_action": "UPDATE",
+					"foundational_id": "1234567890123456",
+					"middle_name": "Alemu",
+					"birth_month_ec": 9,
+					"gender": "MALE",
+				}
+			],
+		)
+
+	def test_service_section_carries_position_and_joined_date(self):
+		self.client.push_profile_update(self._update({"position": "SENIOR_DA", "joined_date": "2019-09-01"}))
+		(sent,) = self._change_requests()
+		self.assertEqual(sent["section_id"], "da_service_section_02")
+		self.assertEqual(
+			(sent["change_payload"][0]["position"], sent["change_payload"][0]["joined_date"]),
+			("SENIOR_DA", "2019-09-01"),
+		)
+
+	def test_location_change_sends_the_kebele_and_the_whole_chain(self):
+		chain = {
+			"hierarchy": [
+				{
+					"level": "country",
+					"level_id": "l0",
+					"level_mnemonic": "country",
+					"level_value_id": "ET",
+					"level_value_mnemonic": "Ethiopia",
+				},
+				{
+					"level": "kebele",
+					"level_id": "l4",
+					"level_mnemonic": "kebele",
+					"level_value_id": "ET03040301",
+					"level_value_mnemonic": "Kutaber",
+				},
+			],
+			"lowest_level_value_id": "ET03040301",
+		}
+		self.client.push_profile_update(
+			self._update({"kebele": "ET03040301", "geo_code_hierarchy_json": chain})
+		)
+		(sent,) = self._change_requests()
+		self.assertEqual(sent["section_id"], "da_location_section_03")
+		row = sent["change_payload"][0]
+		self.assertEqual(row["geo_lowest_level_value_id"], "ET03040301")
+		self.assertEqual(row["geo_code_hierarchy_json"], chain)
+		self.assertNotIn("region_name", row)  # the registry derives names and codes itself
+
+	def test_unknown_fields_and_mixed_sections_never_reach_the_registry(self):
 		for changes in (
-			{"first_name": "X"},
-			{"fayda_id": "1"},
 			{"language": "am"},
+			{"photo_url": "x"},
+			{"woreda_code": "ET01"},
 			{"phone": "1", "specialisation": "x"},
+			{"kebele": "ET03040301"},  # a location change without its chain
 		):
 			result = self.client.push_profile_update(self._update(changes))
 			self.assertFalse(result.accepted, changes)
 			self.assertFalse(result.retryable, changes)
 		self.assertEqual(self._change_requests(), [])
 
-	def test_registry_refusal_is_reported_not_raised(self):
+	def test_registry_refusal_keeps_the_error_code_and_is_logged(self):
 		self.registry.change_answer = _err(
-			"REQ-VAL-000 A pending change request already exists for this record and section"
+			"Fayda ID 1234567890123456 is already registered as DA-7485687914", code="REQ-VAL-000"
 		)
-		result = self.client.push_profile_update(self._update({"phone": "0914000777"}))
+		before = frappe.db.count("Error Log", {"method": "DA Registry refused request"})
+		result = self.client.push_profile_update(self._update({"fayda_id": "1234567890123456"}))
 		self.assertFalse(result.accepted)
-		self.assertIn("pending change request already exists", result.message)
+		self.assertEqual(result.error_code, "REQ-VAL-000")
+		self.assertIn("already registered as DA-7485687914", result.message)
+		self.assertEqual(frappe.db.count("Error Log", {"method": "DA Registry refused request"}), before + 1)
 
 	def test_a_change_request_without_an_id_is_not_accepted(self):
 		self.registry.change_answer = _ok({"response_payload": {"approval_status": "PENDING"}})
@@ -572,7 +675,7 @@ class TestProfileFieldsAndCaching(IntegrationTestCase):
 		self.client.get_da("DA-0001234567")
 		self.client.get_da("DA-0001234567")
 		label_reads = [c for c in self.registry.calls if c[0] == "/attributes/get_attribute_values"]
-		self.assertEqual(len(label_reads), 6)  # one per attribute, then cached
+		self.assertEqual(len(label_reads), 7)  # one per attribute, then cached
 
 	def test_without_master_data_codes_are_shown_as_words(self):
 		client = HttpDARegistryClient(
@@ -593,6 +696,96 @@ class TestProfileFieldsAndCaching(IntegrationTestCase):
 		before = len(self._tab_reads())
 		self.client.get_da("DA-0001234567")
 		self.assertEqual(len(self._tab_reads()), before + 1)
+
+	def test_the_record_carries_its_lists_photo_and_main_record(self):
+		self.registry.records["rec-1"].update(
+			record_image_document_id="doc-photo"  # get_tab_records carries no link
+		)
+		self.registry.lists["rec-1"] = {
+			QUALIFICATION_REGISTER: [
+				{
+					"internal_record_id": "q-old",
+					"link_internal_record_id": "rec-1",
+					"education_level": "DIPLOMA",
+					"specialisation": "CROP_PRODUCTION",
+					"position": "DEVELOPMENT_AGENT",
+					"passout_year": "2005",
+					"joined_date": "2010-09-11",
+					"certificates": '[{"document_id": "doc-a", "name": "diploma.pdf"}]',
+				},
+				{
+					"internal_record_id": "q-new",
+					"link_internal_record_id": "rec-1",
+					"education_level": "DEGREE",
+					"specialisation": "CROP_PRODUCTION",
+					"position": "SENIOR_DA",
+					"passout_year": 2012,
+					"certificates": [{"document_id": "doc-b", "name": "degree.pdf"}, {"name": "no id"}],
+				},
+				{"internal_record_id": "q-other", "link_internal_record_id": "rec-2", "passout_year": 2020},
+				{
+					"internal_record_id": "q-none",
+					"link_internal_record_id": "rec-1",
+					"passout_year": 2001,
+					"certificates": None,
+				},
+			],
+			DEPENDENT_REGISTER: [
+				{"internal_record_id": "d-1", "member_name": "Kebede Tadesse", "relationship": "REL_SON"},
+				{"internal_record_id": "d-2", "member_name": "X", "relationship": "REL_OTHER"},
+			],
+		}
+		ref = self.client.get_da("DA-0001234567")
+		self.assertEqual((ref.photo_url, ref.photo_document_id), (None, "doc-photo"))
+		self.assertEqual(
+			[q["id"] for q in ref.qualifications], ["q-new", "q-old", "q-none"]
+		)  # another DA's row left out
+		main, old, none = ref.qualifications
+		self.assertEqual(none["certificates"], [])  # the registry answers null for no file
+		self.assertTrue(main["is_main"])
+		self.assertFalse(old["is_main"])
+		self.assertEqual(
+			(
+				main["education_level"],
+				main["education_level_label"],
+				main["passout_year"],
+			),
+			("DEGREE", "Degree", 2012),
+		)
+		# A record holds the level, the passout year and its files; position, specialisation
+		# and joining date are the DA's own Position and reporting fields (18 Nov 2026).
+		self.assertNotIn("position", main)
+		self.assertNotIn("specialisation", main)
+		self.assertEqual(main["certificates"], [{"document_id": "doc-b", "name": "degree.pdf"}])
+		self.assertEqual(old["certificates"], [{"document_id": "doc-a", "name": "diploma.pdf"}])  # JSON text
+		self.assertEqual(old["passout_year"], 2005)
+		self.assertEqual(
+			[(d["name"], d["relationship"], d["relationship_label"]) for d in ref.dependents],
+			[("Kebede Tadesse", "REL_SON", "Son"), ("X", "REL_OTHER", "Other")],  # unknown code as words
+		)
+		self.assertEqual(self.client.get_da("DA-0001234568").qualifications, [])
+
+	def test_document_links(self):
+		self.registry.document_urls = {"doc-a": "https://minio/doc-a?sig"}
+		self.assertEqual(
+			self.client.document_links(["doc-a", "doc-a", "doc-x", ""]), {"doc-a": "https://minio/doc-a?sig"}
+		)
+		call = [c for c in self.registry.calls if c[0] == "/documents/get_documents"][-1]
+		self.assertEqual(call[1], {"document_ids": ["doc-a", "doc-x"]})
+		self.assertEqual(self.client.document_links([]), {})
+
+	def test_a_list_master_data_lacks_leaves_the_other_labels(self):
+		self.registry.failing_attributes = {"DA_RELATIONSHIP"}  # not seeded yet
+		self.assertEqual(self.client.get_da("DA-0001234567").position, "Development agent")
+		reads = len([c for c in self.registry.calls if c[0] == "/attributes/get_attribute_values"])
+		self.client.get_da("DA-0001234567")
+		again = len([c for c in self.registry.calls if c[0] == "/attributes/get_attribute_values"])
+		self.assertEqual(again, reads * 2)  # an incomplete set is not cached
+
+	def test_master_data_code_list(self):
+		self.assertEqual(self.client.attribute_values("GENDER"), {"MALE": "Male"})
+		with self.assertRaises(DARegistryUnavailable):
+			self.client.attribute_values("NOT_A_LIST")
 
 	def test_change_request_status(self):
 		self.registry.change_status = {"cr-1": "PENDING", "cr-2": "APPROVED", "cr-3": "REJECTED"}
@@ -679,6 +872,21 @@ class TestUserTokenPassthrough(IntegrationTestCase):
 			client.get_da("DA-3821981536")
 		self.assertEqual(ctx.exception.http_status_code, 403)
 		self.assertIn("Insufficient resource_access roles", str(ctx.exception))
+
+	def test_a_change_request_goes_with_the_signed_in_users_token(self):
+		# The Administrator who gives the second approval sends the change request.
+		self._request({"Authorization": f"Bearer {self.USER_TOKEN}", "X-CSRF-Token": "csrf-admin"})
+		result = self.client.push_profile_update(
+			ProfileUpdate(
+				da_id="DA-3821981536", changes={"phone": "0914000777"}, approver="admin", reference="PCR-1"
+			)
+		)
+		self.assertTrue(result.accepted, result)
+		creates = [c for c in self.registry.calls if c[0] == "/change-requests/create_change_request"]
+		self.assertEqual(len(creates), 1)
+		self.assertEqual(creates[0][3]["Authorization"], f"Bearer {self.USER_TOKEN}")
+		self.assertEqual(creates[0][4]["X-CSRF-Token"], "csrf-admin")
+		self.assertEqual(self.registry.token_calls, 0)
 
 	def test_user_mode_needs_no_service_account_config(self):
 		keys = {

@@ -26,11 +26,19 @@ from abc import ABC, abstractmethod
 
 import frappe
 
-from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
+from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate, SectionChange
 
 
 class DARegistryError(Exception):
-	"""Base class for registry integration failures."""
+	"""Base class for registry integration failures.
+
+	``code`` is the registry's ``response_error_code`` when it refused the call with an
+	OpenG2P ERROR envelope (HTTP 200), else None.
+	"""
+
+	def __init__(self, message: str = "", code: str | None = None):
+		super().__init__(message)
+		self.code = code or None
 
 
 class DANotFound(DARegistryError):
@@ -64,6 +72,10 @@ class DARegistryClient(ABC):
 	# ProfileUpdate.changes keys this backend can apply (the registry names in
 	# services/profile.py EDITABLE). None: every portal field.
 	editable_profile_fields: frozenset[str] | None = None
+	# How long a profile change request may wait, right after it is created, for the
+	# registry's own decision (seconds). The registry applies a change in a few seconds
+	# once its approval stage is off; until then the answer stays PENDING.
+	change_request_settle_seconds: float = 0
 
 	@abstractmethod
 	def get_da(self, da_id: str) -> DAReference:
@@ -119,6 +131,29 @@ class DARegistryClient(ABC):
 		``reference`` is the IntegrationResult.external_reference push_profile_update
 		returned. Raises DANotFound when the registry has no such change request.
 		"""
+
+	def attribute_values(self, attribute_id: str) -> dict[str, str]:
+		"""One Master Data code list, {value_id: label} (DA_POSITION, GENDER, ...).
+
+		Raises DARegistryUnavailable when the list cannot be read right now.
+		"""
+		raise DARegistryContractPending(f"Master Data list {attribute_id} is not available")
+
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""Store a file in the registry's document store; return its document_id."""
+		raise DARegistryContractPending("Registry documents are not available")
+
+	def push_section_change(self, change: SectionChange) -> IntegrationResult:
+		"""Open a registry change request on a list section or the photo (DA Registry #66)."""
+		raise DARegistryContractPending("Registry list sections are not available")
+
+	def document_links(self, document_ids: list[str]) -> dict[str, str]:
+		"""Short-lived links to registry documents (a photo, a certificate), {document_id: url}.
+
+		An id the registry has no link for is left out. Raises DARegistryUnavailable when
+		the registry cannot be asked right now.
+		"""
+		raise DARegistryContractPending("Registry documents are not available")
 
 	@abstractmethod
 	def geo_levels(self) -> list[dict]:

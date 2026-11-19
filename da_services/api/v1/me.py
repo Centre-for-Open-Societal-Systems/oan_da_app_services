@@ -55,7 +55,8 @@ NAV: tuple[tuple[str, tuple[str, ...]], ...] = (
 	("/agents", _OFFICERS),
 	("/visits", ("Supervisor",)),
 	("/assignments", ("Supervisor",)),
-	("/approvals", ("Admin",)),
+	# Level 1 (the Woreda's Supervisor) and level 2 (the OAN Administrator) of a profile change
+	("/approvals", ("Supervisor", "Admin")),
 	("/registry-sync", ("Admin",)),
 	("/feedback", ("DA", "Supervisor", "Admin")),
 	("/knowledge", _ALL),

@@ -35,6 +35,11 @@ class DAReference:
 	email: str | None = None
 	language: str | None = None  # en / am / om / ti
 	photo_url: str | None = None
+	photo_document_id: str | None = None  # the registry document behind photo_url
+	# The DA record's lists (DA Registry #66), shaped by mapper.qualification_rows and
+	# mapper.dependent_rows: Education & Professional records, family members.
+	qualifications: list[dict] = field(default_factory=list)
+	dependents: list[dict] = field(default_factory=list)
 	# Identity and posting detail for the My Profile screen: the DA register's
 	# da_details_tab, coded values shown with their Master Data labels and the
 	# location by name as well as by code.
@@ -50,7 +55,13 @@ class DAReference:
 	birth_year_ec: int | None = None
 	telegram_number: str | None = None
 	alternate_number: str | None = None
-	position: str | None = None
+	home_address: str | None = None  # where the DA lives (one line); the location is where they work
+	position: str | None = None  # label (Master Data DA_POSITION)
+	position_code: str | None = None  # DEVELOPMENT_AGENT, SENIOR_DA, SUPERVISOR, ADMIN, ...
+	# The DA-ID of the person this DA reports to (Position and reporting); none for ADMIN.
+	reports_to: str | None = None
+	# The main education record's passout year, copied onto the DA record by the registry.
+	passout_year: int | None = None
 	country: str | None = None
 	region_name: str | None = None
 	zone_name: str | None = None
@@ -83,12 +94,33 @@ class LifecycleOutcome:
 
 @dataclass(frozen=True)
 class ProfileUpdate:
-	"""A Supervisor-approved change to a DA's own profile fields (FSD 3.7)."""
+	"""A change to a DA's profile, approved in DA Services by the Supervisor and then the
+	Administrator (FSD 3.7). ``changes`` keys are mapper.PROFILE_FIELDS keys."""
 
 	da_id: str
 	changes: dict  # registry field name -> new value
 	approver: str
 	reference: str  # our DA Profile Change Request name, for idempotency and audit
+
+
+DA_PLACEHOLDER = "@DA"  # stands for the DA's internal record id in SectionChange.rows
+
+
+@dataclass(frozen=True)
+class SectionChange:
+	"""A change request on one section, rows as the registry takes them (DA Registry #66).
+
+	Used for the list sections (Education & Professional records with their certificates,
+	family members) and for the photo. ``rows`` are the ``change_payload`` items; the value
+	``DA_PLACEHOLDER`` is replaced by the DA's internal record id when the request is sent.
+	"""
+
+	da_id: str
+	section_id: str
+	section_register_id: str | None  # None: the DA register itself
+	rows: list[dict]
+	approver: str
+	reference: str  # our DA Profile Change Request name
 
 
 @dataclass(frozen=True)
@@ -100,3 +132,4 @@ class IntegrationResult:
 	message: str | None = None
 	retryable: bool = False
 	raw: dict = field(default_factory=dict)
+	error_code: str | None = None  # the registry's response_error_code on a refusal
