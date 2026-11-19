@@ -50,7 +50,7 @@ Prefix: `/api/v1/da-services`
 | `GET /profile/me` | Same, plus the read-back of pending change requests |
 | `POST /profile/change-requests`, `GET …`, `GET …/{id}`, `POST …/{id}/cancel` | DA Services only (a `DA Profile Change Request` row) |
 | `POST /profile/change-requests/{id}/decide` with `Approve` | `create_change_request` on `da_contact_section_04` or `da_service_section_02`, with the approver's token |
-| `GET /agents`, `GET /agents/{da_id}`, `GET /experts`, `GET /assignments` | Search filtered by `woreda_code` / `region_code`, then one `get_tab_records` per DA (8 workers, records cached 5 minutes; a single DA is always read live) |
+| `GET /agents`, `GET /agents/{da_id}`, `GET /experts`, `GET /my-team`, `GET /assignments` | Search filtered by `woreda_code` / `region_code`, then one `get_tab_records` per DA (8 workers, records cached 5 minutes; a single DA is always read live) |
 | `GET /agent-imports/template`, `POST /agent-imports/validate` | DA Services only |
 | `POST /agent-imports` | `upload_documents`, then `enqueue_import_file` |
 | `GET /agent-imports` | DA Services only (`DA Integration Event`, type `Agent Import`) |

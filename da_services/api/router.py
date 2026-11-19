@@ -85,6 +85,7 @@ def _register() -> None:
 		livestock,
 		master,
 		me,
+		my_team,
 		notifications,
 		profile_self,
 		rbac,
