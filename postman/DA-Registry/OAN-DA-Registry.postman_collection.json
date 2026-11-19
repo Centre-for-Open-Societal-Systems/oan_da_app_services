@@ -838,7 +838,7 @@
                 "my-team"
               ]
             },
-            "description": "My Teams screen, Development Agent only. The caller's own DA record first, then the other DAs posted in the same Kebele (by name), read from the DA Registry by posting (search by woreda_code, then each DA's record); no reporting hierarchy is used. Separated DAs are left out; a DA with no Kebele on record gets the DAs of the Woreda.\n\nRow: { da_id, full_name, specialisation, education_tier, phone, kebele, kebele_name, woreda, woreda_name, active_status, joined_at }. Meta: { total }.\n\n403 for other roles; 404 when the caller's DA-ID is not in the registry."
+            "description": "My Teams screen, Development Agent only. The caller's own DA record first, then the other DAs posted in the same Kebele (by name), read from the DA Registry by posting (search by the DA's Kebele, geo_lowest_level_value_id, then each DA's record); no reporting hierarchy is used. Separated DAs are left out; a DA with no Kebele on record gets the DAs of the Woreda.\n\nRow: { da_id, full_name, specialisation, education_tier, phone, kebele, kebele_name, woreda, woreda_name, active_status, joined_at }. Meta: { total }.\n\n403 for other roles; 404 when the caller's DA-ID is not in the registry."
           },
           "event": [
             {

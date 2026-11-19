@@ -133,9 +133,13 @@ class MockDARegistryClient(DARegistryClient):
 			raise DANotFound(da_id)
 		return to_da_reference(payload)
 
-	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
+	def list_das(
+		self, *, woreda: str | None = None, region: str | None = None, kebele: str | None = None
+	) -> list[DAReference]:
 		rows = []
 		for payload in self._records.values():
+			if kebele and (payload.get("assigned_kebele") or payload.get("kebele")) != kebele:
+				continue
 			if woreda and payload.get("woreda") != woreda:
 				continue
 			if region and payload.get("region") != region:

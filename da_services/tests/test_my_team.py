@@ -7,6 +7,8 @@ Uses the DA Registry mock fixtures:
   DA-000004 Hana Girma    Active     ET03-W02 / ET03-W02-K01
 """
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import today
@@ -73,6 +75,17 @@ class TestMyTeam(IntegrationTestCase):
 
 	def test_only_me_when_nobody_else_is_posted_in_my_kebele(self):
 		self.assertEqual(self._ids(), ["DA-000001"])  # DA-000002 is in another Kebele of the Woreda
+
+	def test_the_registry_is_searched_by_my_kebele_not_the_woreda(self):
+		with patch.object(MockDARegistryClient, "list_das", return_value=[]) as list_das:
+			self._ids()
+		list_das.assert_called_once_with(kebele=MY_KEBELE)
+
+	def test_without_a_kebele_the_registry_is_searched_by_my_woreda(self):
+		self.registry["DA-000001"]["assigned_kebele"] = None
+		with patch.object(MockDARegistryClient, "list_das", return_value=[]) as list_das:
+			self._ids()
+		list_das.assert_called_once_with(woreda="ET04-W01")
 
 	def test_same_kebele_das_follow_me_by_name_whatever_their_specialisation(self):
 		self.registry["DA-000002"]["assigned_kebele"] = MY_KEBELE  # On-leave, Livestock

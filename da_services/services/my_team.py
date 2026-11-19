@@ -1,8 +1,8 @@
 """My Team: the Development Agents posted with the signed-in DA.
 
-A DA's team is the other DAs of the same Kebele who have not separated, read from the
-DA Registry by posting (Woreda, then Kebele). It does not use a reporting hierarchy. A
-DA with no Kebele on record gets the DAs of the Woreda. The registry is the source of
+A DA's team is the other DAs of the same Kebele who have not separated. The DA Registry
+is searched by the Kebele the DA is posted in; a DA with no Kebele on record gets the
+DAs of the Woreda. It does not use a reporting hierarchy. The registry is the source of
 truth; nothing is stored here.
 """
 
@@ -44,18 +44,17 @@ def list_my_team(ctx: ScopeContext) -> list[dict]:
 	client = get_client()
 	try:
 		me = client.get_da(da_id)
-		posted = client.list_das(woreda=me.woreda) if me.woreda else []
+		if me.kebele:
+			posted = client.list_das(kebele=me.kebele)
+		elif me.woreda:
+			posted = client.list_das(woreda=me.woreda)
+		else:
+			posted = []
 	except DANotFound:
 		frappe.throw(_("DA {0} was not found in the registry.").format(da_id), frappe.DoesNotExistError)
 	except DARegistryUnavailable:
 		frappe.throw(_("The DA Registry is unavailable. Try again shortly."), frappe.ValidationError)
 
-	team = [
-		ref
-		for ref in posted
-		if ref.da_id != me.da_id
-		and ref.active_status != C.ACTIVE_STATUS_SEPARATED
-		and (not me.kebele or ref.kebele == me.kebele)
-	]
+	team = [ref for ref in posted if ref.da_id != me.da_id and ref.active_status != C.ACTIVE_STATUS_SEPARATED]
 	team.sort(key=lambda r: ((r.full_name or "").casefold(), r.da_id))
 	return [_to_row(me), *(_to_row(ref) for ref in team)]

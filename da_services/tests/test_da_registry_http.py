@@ -255,6 +255,15 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 		self.assertEqual([s[2]["current_page"] for s in searches], [1, 2])
 		self.assertEqual(json.loads(searches[0][2]["filter_by"]), {"woreda_code": {"eq": "ET010101"}})
 
+	def test_list_das_by_kebele_filters_on_the_lowest_geography_level(self):
+		self.registry.records["rec-7"] = _record("DA-4444444444", "rec-7", woreda="ET010102")
+		refs = self.client.list_das(kebele="ET01010201")
+		self.assertEqual([r.da_id for r in refs], ["DA-4444444444"])
+		searches = [c for c in self.registry.calls if c[0].endswith("/search_in_a_register")]
+		self.assertEqual(
+			json.loads(searches[-1][2]["filter_by"]), {"geo_lowest_level_value_id": {"eq": "ET01010201"}}
+		)
+
 	def test_list_das_by_region_skips_temporary_ids(self):
 		refs = self.client.list_das(region="ET01")
 		self.assertNotIn("TEMP-0001", {r.da_id for r in refs})

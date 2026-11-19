@@ -340,10 +340,11 @@ linkedAt}`; actions `link(farmerIds[], segmentId)` → `{added[], skipped[]}`, `
 
 | Element | API | Source |
 |---|---|---|
-| Team table: `full_name, da_id, kebele, kebele_name, woreda, woreda_name, specialisation, education_tier, active_status, phone, joined_at` (same Kebele, not Separated, me first, then by name) | `GET /my-team` → `data[]`, `meta.total` | DA Registry, by posting: search by `woreda_code`, then each DA's record |
+| Team table: `full_name, da_id, kebele, kebele_name, woreda, woreda_name, specialisation, education_tier, active_status, phone, joined_at` (same Kebele, not Separated, me first, then by name) | `GET /my-team` → `data[]`, `meta.total` | DA Registry, by posting: search by the DA's Kebele (`geo_lowest_level_value_id`), then each DA's record |
 
 Read-only; no row links. Development Agent only (403 for other roles). The team comes from the DA's
-posting, not from a reporting hierarchy: a DA with no Kebele on record gets the DAs of the Woreda. No
+posting, not from a reporting hierarchy: a DA with no Kebele on record gets the DAs of the Woreda
+(search by `woreda_code`). No
 supervisor card and no farmer count: the screen is a read view of the DAs' details, and the registry
 holds no farmer count. 404 when the caller's DA-ID is not in the registry.
 
