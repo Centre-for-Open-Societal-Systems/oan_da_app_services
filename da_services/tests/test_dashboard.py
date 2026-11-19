@@ -72,7 +72,12 @@ class TestDashboard(IntegrationTestCase):
 			("d-v3", f"{t} 23:30:00", False),  # late enough to stay "Upcoming" during a test run
 		):
 			v = visits.plan_visit(
-				farmer_id="FRM-1", scheduled_at=when, da_id="DA-000001", user=DA1, client_op_id=op
+				farmer_id="FRM-1",
+				farmer_name="Test Farmer",
+				scheduled_at=when,
+				da_id="DA-000001",
+				user=DA1,
+				client_op_id=op,
 			)
 			if complete:
 				visits.submit_outcome(v["name"], observed="ok")
@@ -273,6 +278,7 @@ class TestWoredaHealth(IntegrationTestCase):
 				"user": user,
 				"da_id": da_id,
 				"farmer_id": "FRM-1",
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"scheduled_at": scheduled_at,
 				"physical_status": PLANNED,

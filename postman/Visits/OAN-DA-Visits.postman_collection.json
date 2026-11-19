@@ -45,6 +45,10 @@
       "value": "FR-427495614351"
     },
     {
+      "key": "farmer_name",
+      "value": "Postman Visit Farmer"
+    },
+    {
       "key": "user",
       "value": ""
     },
@@ -428,7 +432,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"user\": \"{{user}}\",\n  \"scheduled_at\": \"{{scheduled_at}}\",\n  \"visit_type\": \"Crop Survey\",\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"duration_min\": 45,\n  \"priority\": \"Medium\",\n  \"priority_reason\": \"Routine seasonal follow-up\",\n  \"plot_ref\": \"BT-0472\",\n  \"location\": {\n    \"lat\": 9.0320,\n    \"lng\": 38.7469\n  },\n  \"notify_farmer_sms\": false,\n  \"da_id\": \"{{da_id}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"farmer_name\": \"{{farmer_name}}\",\n  \"user\": \"{{user}}\",\n  \"scheduled_at\": \"{{scheduled_at}}\",\n  \"visit_type\": \"Crop Survey\",\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"duration_min\": 45,\n  \"priority\": \"Medium\",\n  \"priority_reason\": \"Routine seasonal follow-up\",\n  \"plot_ref\": \"BT-0472\",\n  \"location\": {\n    \"lat\": 9.0320,\n    \"lng\": 38.7469\n  },\n  \"notify_farmer_sms\": false,\n  \"da_id\": \"{{da_id}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -436,9 +440,50 @@
               }
             },
             "url": "{{base_url}}/api/v1/da-services/visits",
-            "description": "POST /visits — plan a visit (201).\n\n### Body fields\n| Field | Required | Notes |\n| --- | --- | --- |\n| farmer_id | yes | FR-… or registry id; **not** verified against Farmer Registry today |\n| user | yes | Frappe User name (email) for the assigned DA; da_id is fetched from User.da_registry_id. No session-user fallback |\n| scheduled_at | yes* | Site-local datetime; *or* use date + time |\n| date, time | alt | Form style; time defaults to 09:00 |\n| visit_type | no | Crop Survey / Livestock Survey / Services / Advisory / Follow-up (default Crop Survey) |\n| purpose | no | |\n| duration_min | no | default 45 |\n| priority | no | Low / Medium / High (default Medium) |\n| priority_reason | no | |\n| plot_ref | no | |\n| location | no | { lat, lng } |\n| notify_farmer_sms | no | recorded; SMS gateway not yet wired |\n| advisory_qa | no | Advisory visits only: [{ question, answer }] |\n| da_id | Supervisor | when Supervisor plans for a DA; DA self-plans omit or own id |\n| client_op_id | no | idempotency — same key returns existing visit |\n\nCreate allowed by DA Visit DocType permissions (DA / Supervisor / Admin).\n\nSet `user` in the environment (often same as `usr` for DA self-plan). Omitting `user` → validation error.\n\nStores visit_id from response `data.name`."
+            "description": "POST /visits — plan a visit (201).\n\n### Body fields\n| Field | Required | Notes |\n| --- | --- | --- |\n| farmer_id | yes | FR-… or registry id; **not** verified against Farmer Registry today |\n| farmer_name | yes | FE display-name snapshot; required DocType field; no registry lookup |\n| user | yes | Frappe User name (email) for the assigned DA; da_id is fetched from User.da_registry_id. No session-user fallback |\n| scheduled_at | yes* | Site-local datetime; *or* use date + time |\n| date, time | alt | Form style; time defaults to 09:00 |\n| visit_type | no | Crop Survey / Livestock Survey / Services / Advisory / Follow-up (default Crop Survey) |\n| purpose | no | |\n| duration_min | no | default 45 |\n| priority | no | Low / Medium / High (default Medium) |\n| priority_reason | no | |\n| plot_ref | no | |\n| location | no | { lat, lng } |\n| notify_farmer_sms | no | recorded; SMS gateway not yet wired |\n| advisory_qa | no | Advisory visits only: [{ question, answer }] |\n| da_id | Supervisor | when Supervisor plans for a DA; DA self-plans omit or own id |\n| client_op_id | no | idempotency — same key returns existing visit |\n\nCreate allowed by DA Visit DocType permissions (DA / Supervisor / Admin).\n\nSet `user` in the environment (often same as `usr` for DA self-plan). Omitting `user` → validation error.\n\nStores visit_id from response `data.name`."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Plan success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{access_token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{base_url}}/api/v1/da-services/visits",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"farmer_id\": \"{{farmer_id}}\",\n  \"farmer_name\": \"{{farmer_name}}\",\n  \"user\": \"{{user}}\",\n  \"scheduled_at\": \"{{scheduled_at}}\",\n  \"visit_type\": \"Crop Survey\",\n  \"purpose\": \"Field check — crop stand and input uptake\",\n  \"duration_min\": 45,\n  \"priority\": \"Medium\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Visit planned\",\n  \"data\": {\n    \"name\": \"DA-VIS-2026-0000001\",\n    \"da_id\": \"DA-000001\",\n    \"farmer_id\": \"{{farmer_id}}\",\n    \"farmer_name\": \"{{farmer_name}}\",\n    \"visit_type\": \"Crop Survey\",\n    \"physical_status\": \"Planned\",\n    \"purpose\": \"Field check — crop stand and input uptake\",\n    \"scheduled_at\": \"2026-11-19T09:00:00\",\n    \"duration_min\": 45,\n    \"priority\": \"Medium\",\n    \"priority_reason\": \"Routine seasonal follow-up\",\n    \"source\": \"Planned\",\n    \"assigned_by\": null,\n    \"farmer_confirmation\": \"Unknown\",\n    \"confirmation_note\": null,\n    \"plot_ref\": \"BT-0472\",\n    \"location_lat\": 9.032,\n    \"location_lng\": 38.7469,\n    \"rescheduled_from\": null,\n    \"arrived_at\": null,\n    \"started_at\": null,\n    \"completed_at\": null,\n    \"outcome\": null,\n    \"next_action_type\": null,\n    \"next_action_date\": null,\n    \"follow_up_task\": null,\n    \"follow_up_visit\": null,\n    \"region\": null,\n    \"woreda\": null,\n    \"kebele\": null,\n    \"client_op_id\": \"{{client_op_id}}\",\n    \"modified\": \"2026-11-19T09:00:00\",\n    \"ui_status\": \"Planned\",\n    \"planner_status\": \"scheduled\",\n    \"creation\": \"2026-11-19T09:00:00\",\n    \"created_by_user\": \"{{user}}\",\n    \"modified_by\": \"{{user}}\",\n    \"advisory_qa\": [],\n    \"attachments\": [],\n    \"specializations\": [\n      \"Crop Production\"\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
         },
         {
           "name": "Plan a visit (date + time)",
@@ -484,7 +529,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"farmer_id\": \"{{adv_farmer_id}}\",\n  \"user\": \"{{user}}\",\n  \"date\": \"{{visit_date}}\",\n  \"time\": \"10:00\",\n  \"visit_type\": \"Advisory\",\n  \"purpose\": \"Advisory Q&A on fertilizer timing\",\n  \"duration_min\": 30,\n  \"priority\": \"High\",\n  \"priority_reason\": \"Overdue advisory\",\n  \"notify_farmer_sms\": true,\n  \"advisory_qa\": [\n    {\n      \"question\": \"When should top-dressing be applied?\",\n      \"answer\": \"At tillering, if moisture is adequate.\"\n    }\n  ],\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"farmer_id\": \"{{adv_farmer_id}}\",\n  \"farmer_name\": \"Advisory Postman Farmer\",\n  \"user\": \"{{user}}\",\n  \"date\": \"{{visit_date}}\",\n  \"time\": \"10:00\",\n  \"visit_type\": \"Advisory\",\n  \"purpose\": \"Advisory Q&A on fertilizer timing\",\n  \"duration_min\": 30,\n  \"priority\": \"High\",\n  \"priority_reason\": \"Overdue advisory\",\n  \"notify_farmer_sms\": true,\n  \"advisory_qa\": [\n    {\n      \"question\": \"When should top-dressing be applied?\",\n      \"answer\": \"At tillering, if moisture is adequate.\"\n    }\n  ],\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -542,7 +587,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"user\": \"{{user}}\",\n  \"visits\": [\n    {\n      \"farmer_id\": \"{{batch_farmer_id}}\",\n      \"date\": \"{{visit_date}}\",\n      \"time\": \"11:00\",\n      \"visit_type\": \"Crop Survey\",\n      \"purpose\": \"Batch plan item\",\n      \"duration_min\": 45,\n      \"priority\": \"Medium\",\n      \"client_op_id\": \"{{client_op_id}}-a\"\n    }\n  ]\n}",
+              "raw": "{\n  \"user\": \"{{user}}\",\n  \"visits\": [\n    {\n      \"farmer_id\": \"{{batch_farmer_id}}\",\n      \"farmer_name\": \"Batch Postman Farmer\",\n      \"date\": \"{{visit_date}}\",\n      \"time\": \"11:00\",\n      \"visit_type\": \"Crop Survey\",\n      \"purpose\": \"Batch plan item\",\n      \"duration_min\": 45,\n      \"priority\": \"Medium\",\n      \"client_op_id\": \"{{client_op_id}}-a\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -552,7 +597,48 @@
             "url": "{{base_url}}/api/v1/da-services/visits",
             "description": "Batch plan on the same POST /visits route (`visits: [...]`, length 1-5, unique farmer_id). Envelope `user` (required User Link) applies when an item omits `user`. Add more objects in `visits` for multi-farmer runs. Response: `{ created[], failed[], summary }`. Partial success: HTTP 201 if any created; 400 if none. No session-user fallback. Supervisors may also send envelope `da_id`."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Batch plan success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{access_token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{base_url}}/api/v1/da-services/visits",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"user\": \"{{user}}\",\n  \"visits\": [\n    {\n      \"farmer_id\": \"{{batch_farmer_id}}\",\n      \"farmer_name\": \"Batch Postman Farmer\",\n      \"date\": \"{{visit_date}}\",\n      \"time\": \"11:00\",\n      \"visit_type\": \"Crop Survey\",\n      \"purpose\": \"Batch plan item\",\n      \"client_op_id\": \"{{client_op_id}}-a\"\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Visits planned\",\n  \"data\": {\n    \"created\": [\n      {\n        \"name\": \"DA-VIS-2026-0000002\",\n        \"da_id\": \"DA-000001\",\n        \"farmer_id\": \"{{batch_farmer_id}}\",\n        \"farmer_name\": \"Batch Postman Farmer\",\n        \"visit_type\": \"Crop Survey\",\n        \"physical_status\": \"Planned\",\n        \"purpose\": \"Batch plan item\",\n        \"scheduled_at\": \"2026-11-19T11:00:00\",\n        \"ui_status\": \"Planned\",\n        \"planner_status\": \"scheduled\"\n      }\n    ],\n    \"failed\": [],\n    \"summary\": {\n      \"total\": 1,\n      \"created\": 1,\n      \"failed\": 0\n    }\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
         },
         {
           "name": "List visits",
@@ -646,7 +732,35 @@
             },
             "description": "GET /visits — visits the caller may see via Role DocPerm + User Permissions. Query args only narrow that set. Meta: { total, limit, start } (total is len of returned page).\n\nRead allowed by DA Visit DocType Role permissions + User Permissions."
           },
-          "response": []
+          "response": [
+            {
+              "name": "List success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{access_token}}"
+                  }
+                ],
+                "url": "{{base_url}}/api/v1/da-services/visits?from={{visit_date}}&to={{visit_date}}&farmer_id={{farmer_id}}&limit=50&start=0"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": [\n    {\n      \"name\": \"DA-VIS-2026-0000001\",\n      \"da_id\": \"DA-000001\",\n      \"farmer_id\": \"{{farmer_id}}\",\n      \"farmer_name\": \"{{farmer_name}}\",\n      \"visit_type\": \"Crop Survey\",\n      \"physical_status\": \"Planned\",\n      \"purpose\": \"Field check — crop stand and input uptake\",\n      \"scheduled_at\": \"2026-11-19 09:00:00\",\n      \"duration_min\": 45,\n      \"priority\": \"Medium\",\n      \"farmer_confirmation\": \"Unknown\",\n      \"plot_ref\": \"BT-0472\",\n      \"location_lat\": 9.032,\n      \"location_lng\": 38.7469,\n      \"kebele\": null\n    }\n  ],\n  \"meta\": {\n    \"total\": 1,\n    \"limit\": 50,\n    \"start\": 0,\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
         },
         {
           "name": "Get visit",
@@ -673,7 +787,35 @@
             },
             "description": "One visit + derived ui_status / planner_status + timeline[] built from visit timestamps."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Get success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{access_token}}"
+                  }
+                ],
+                "url": "{{base_url}}/api/v1/da-services/visits/{{visit_id}}"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"name\": \"DA-VIS-2026-0000001\",\n    \"da_id\": \"DA-000001\",\n    \"farmer_id\": \"{{farmer_id}}\",\n    \"farmer_name\": \"{{farmer_name}}\",\n    \"visit_type\": \"Crop Survey\",\n    \"physical_status\": \"Planned\",\n    \"purpose\": \"Field check — crop stand and input uptake\",\n    \"scheduled_at\": \"2026-11-19T09:00:00\",\n    \"duration_min\": 45,\n    \"priority\": \"Medium\",\n    \"priority_reason\": \"Routine seasonal follow-up\",\n    \"source\": \"Planned\",\n    \"assigned_by\": null,\n    \"farmer_confirmation\": \"Unknown\",\n    \"confirmation_note\": null,\n    \"plot_ref\": \"BT-0472\",\n    \"location_lat\": 9.032,\n    \"location_lng\": 38.7469,\n    \"rescheduled_from\": null,\n    \"arrived_at\": null,\n    \"started_at\": null,\n    \"completed_at\": null,\n    \"outcome\": null,\n    \"next_action_type\": null,\n    \"next_action_date\": null,\n    \"follow_up_task\": null,\n    \"follow_up_visit\": null,\n    \"region\": null,\n    \"woreda\": null,\n    \"kebele\": null,\n    \"client_op_id\": \"{{client_op_id}}\",\n    \"modified\": \"2026-11-19T09:00:00\",\n    \"ui_status\": \"Planned\",\n    \"planner_status\": \"scheduled\",\n    \"creation\": \"2026-11-19T09:00:00\",\n    \"created_by_user\": \"{{user}}\",\n    \"modified_by\": \"{{user}}\",\n    \"advisory_qa\": [],\n    \"attachments\": [],\n    \"specializations\": [\n      \"Crop Production\"\n    ],\n    \"timeline\": [\n      {\n        \"label\": \"Planned\",\n        \"by\": \"{{user}}\",\n        \"when\": \"2026-11-19T09:00:00\",\n        \"done\": true\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
         },
         {
           "name": "Reschedule visit",
@@ -796,7 +938,6 @@
                   "src": "postman/Visits/fixtures/plot.png",
                   "description": "Image/document file (required). Path relative to repo root for CLI; in the Desktop app pick any local image."
                 },
-
                 {
                   "key": "kind",
                   "value": "Crop",
@@ -891,6 +1032,7 @@
                   "const body = {",
                   "  user,",
                   "  farmer_id: \"FRM-POSTMAN-CANCEL-\" + Date.now(),",
+                  "  farmer_name: \"Cancel Postman Farmer\",",
                   "  date: day,",
                   "  time: \"16:00\",",
                   "  purpose: \"Disposable cancel sample\",",

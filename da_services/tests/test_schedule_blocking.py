@@ -53,6 +53,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		"""Test first visit has no conflict."""
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -67,6 +68,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Create first Crop visit
 		svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -77,6 +79,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
 				farmer_id=self.farmer_id,
+				farmer_name="Test Farmer",
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Crop Survey",
 				user=self.user_crop,
@@ -90,6 +93,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Create Crop visit
 		svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -99,6 +103,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Create Livestock visit (should succeed)
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=2),
 			visit_type="Livestock Survey",
 			user=self.user_livestock,
@@ -120,6 +125,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": status,
 				"scheduled_at": datetime.now() - timedelta(days=1),
@@ -137,6 +143,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Should be able to schedule new Crop visit
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -151,6 +158,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -165,6 +173,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -181,6 +190,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": "In progress",
 				"scheduled_at": datetime.now(),
@@ -192,6 +202,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
 				farmer_id=self.farmer_id,
+				farmer_name="Test Farmer",
 				scheduled_at=datetime.now() + timedelta(days=1),
 				visit_type="Crop Survey",
 				user=self.user_crop,
@@ -206,6 +217,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 
 		result = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -223,6 +235,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Services",
 				"physical_status": "Planned",
 				"scheduled_at": datetime.now() + timedelta(days=1),
@@ -235,6 +248,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
 				farmer_id=self.farmer_id,
+				farmer_name="Test Farmer",
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Crop Survey",
 				user=self.user_crop,
@@ -247,6 +261,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
 				farmer_id=self.farmer_id,
+				farmer_name="Test Farmer",
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Livestock Survey",
 				user=self.user_livestock,
@@ -262,6 +277,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Create first visit
 		result1 = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -272,6 +288,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Retry with same client_op_id (should return existing, not error)
 		result2 = svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=2),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -286,6 +303,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# DA-1 creates Crop visit
 		svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Crop Survey",
 			user=self.user_crop,
@@ -303,6 +321,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
 				farmer_id=self.farmer_id,
+				farmer_name="Test Farmer",
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Crop Survey",
 				user=other_user,
@@ -316,6 +335,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		# Create blocking visit
 		svc.plan_visit(
 			farmer_id=self.farmer_id,
+			farmer_name="Test Farmer",
 			scheduled_at=datetime.now() + timedelta(days=1),
 			visit_type="Livestock Survey",
 			user=self.user_livestock,
@@ -326,6 +346,7 @@ class TestScheduleBlocking(IntegrationTestCase):
 		with self.assertRaises(frappe.ValidationError) as cm:
 			svc.plan_visit(
 				farmer_id=self.farmer_id,
+				farmer_name="Test Farmer",
 				scheduled_at=datetime.now() + timedelta(days=2),
 				visit_type="Livestock Survey",
 				user=self.user_livestock,

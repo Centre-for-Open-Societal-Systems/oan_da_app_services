@@ -28,6 +28,7 @@ Required from the frontend:
 | --- | --- |
 | `user` | Frappe User Link for the assigned DA. **No** `ctx.user` / session fallback. `da_id` is `fetch_from: user.da_registry_id`. |
 | `farmer_id` | Farmer id |
+| `farmer_name` | Farmer display name snapshot from the FE (required DocType field; no registry lookup) |
 | `scheduled_at` **or** `date` (+ optional `time`, default `09:00`) | Site-local datetime |
 
 Optional: `visit_type`, `purpose`, `duration_min`, `priority`, `priority_reason`,
@@ -49,6 +50,7 @@ Body:
   "visits": [
     {
       "farmer_id": "FR-…",
+      "farmer_name": "Abebe Kebede",
       "date": "2026-11-10",
       "time": "09:00",
       "visit_type": "Crop Survey",

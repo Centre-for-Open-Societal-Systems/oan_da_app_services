@@ -137,7 +137,12 @@ class TestVisitAPI(IntegrationTestCase):
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def _plan(self, **kw):
-		base = {"farmer_id": "FRM-000101", "date": add_days(today(), 1), "time": "10:30"}
+		base = {
+			"farmer_id": "FRM-000101",
+			"farmer_name": "Test Farmer",
+			"date": add_days(today(), 1),
+			"time": "10:30",
+		}
 		# Frontend sends the DA User Link; map fixture da_id → user when omitted.
 		if "user" not in kw:
 			kw = {
@@ -172,6 +177,7 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual((v["location_lat"], v["location_lng"]), (9.1234, 37.5678))
 		self.assertEqual(v["advisory_qa"], [{"question": "Fertiliser timing?", "answer": ""}])
 		self.assertEqual(v["physical_status"], "Planned")
+		self.assertEqual(v["farmer_name"], "Test Farmer")
 		self.assertEqual(frappe.db.get_value("DA Visit", v["name"], "notify_farmer_sms"), 1)
 		self.assertIsNone(v["assigned_by"])
 
@@ -182,6 +188,15 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(frappe.response.get("http_status_code"), 400)
 		out = api.plan(farmer_id="FRM-000101")
 		self.assertEqual(out["status"], "error")
+		out = api.plan(
+			farmer_id="FRM-000101",
+			farmer_name="",
+			date=add_days(today(), 1),
+			time="10:30",
+			user=DA1,
+		)
+		self.assertEqual(out["status"], "error")
+		self.assertEqual(frappe.response.get("http_status_code"), 400)
 
 	def test_plan_is_idempotent_on_client_op_id(self):
 		frappe.set_user(DA1)
@@ -198,6 +213,7 @@ class TestVisitAPI(IntegrationTestCase):
 			visits=[
 				{
 					"farmer_id": "FRM-000201",
+					"farmer_name": "Test Farmer",
 					"date": day,
 					"time": "09:00",
 					"purpose": "Single via list",
@@ -219,9 +235,27 @@ class TestVisitAPI(IntegrationTestCase):
 		out = api.plan(
 			user=DA1,
 			visits=[
-				{"farmer_id": "FRM-000301", "date": day, "time": "09:00", "client_op_id": "op-b3-1"},
-				{"farmer_id": "FRM-000302", "date": day, "time": "10:00", "client_op_id": "op-b3-2"},
-				{"farmer_id": "FRM-000303", "date": day, "time": "11:00", "client_op_id": "op-b3-3"},
+				{
+					"farmer_id": "FRM-000301",
+					"farmer_name": "Test Farmer",
+					"date": day,
+					"time": "09:00",
+					"client_op_id": "op-b3-1",
+				},
+				{
+					"farmer_id": "FRM-000302",
+					"farmer_name": "Test Farmer",
+					"date": day,
+					"time": "10:00",
+					"client_op_id": "op-b3-2",
+				},
+				{
+					"farmer_id": "FRM-000303",
+					"farmer_name": "Test Farmer",
+					"date": day,
+					"time": "11:00",
+					"client_op_id": "op-b3-3",
+				},
 			],
 		)
 		self.assertEqual(out["status"], "success", out)
@@ -233,7 +267,10 @@ class TestVisitAPI(IntegrationTestCase):
 	def test_plan_visits_rejects_more_than_five(self):
 		frappe.set_user(DA1)
 		day = add_days(today(), 1)
-		visits = [{"farmer_id": f"FRM-00{i}", "date": day, "time": "09:00"} for i in range(100, 106)]
+		visits = [
+			{"farmer_id": f"FRM-00{i}", "farmer_name": "Test Farmer", "date": day, "time": "09:00"}
+			for i in range(100, 106)
+		]
 		out = api.plan(user=DA1, visits=visits)
 		self.assertEqual(out["status"], "error")
 		self.assertEqual(frappe.response.get("http_status_code"), 400)
@@ -245,8 +282,8 @@ class TestVisitAPI(IntegrationTestCase):
 		out = api.plan(
 			user=DA1,
 			visits=[
-				{"farmer_id": "FRM-000401", "date": day, "time": "09:00"},
-				{"farmer_id": "FRM-000401", "date": day, "time": "10:00"},
+				{"farmer_id": "FRM-000401", "farmer_name": "Test Farmer", "date": day, "time": "09:00"},
+				{"farmer_id": "FRM-000401", "farmer_name": "Test Farmer", "date": day, "time": "10:00"},
 			],
 		)
 		self.assertEqual(out["status"], "error")
@@ -267,6 +304,7 @@ class TestVisitAPI(IntegrationTestCase):
 
 		failing_item = {
 			"farmer_id": "FRM-000501",
+			"farmer_name": "Test Farmer",
 			"date": day,
 			"time": "14:00",
 			"visit_type": "Crop Survey",
@@ -275,6 +313,7 @@ class TestVisitAPI(IntegrationTestCase):
 		}
 		ok_item = {
 			"farmer_id": "FRM-000502",
+			"farmer_name": "Test Farmer",
 			"date": day,
 			"time": "15:00",
 			"visit_type": "Crop Survey",
@@ -299,6 +338,7 @@ class TestVisitAPI(IntegrationTestCase):
 		day = add_days(today(), 4)
 		item = {
 			"farmer_id": "FRM-000601",
+			"farmer_name": "Test Farmer",
 			"date": day,
 			"time": "09:00",
 			"client_op_id": "op-batch-idem",
@@ -312,7 +352,10 @@ class TestVisitAPI(IntegrationTestCase):
 
 	def test_plan_visits_all_failed_returns_400(self):
 		frappe.set_user(DA1)
-		out = api.plan(user=DA1, visits=[{"farmer_id": "FRM-000701", "purpose": "missing schedule"}])
+		out = api.plan(
+			user=DA1,
+			visits=[{"farmer_id": "FRM-000701", "farmer_name": "Test Farmer", "purpose": "missing schedule"}],
+		)
 		self.assertEqual(out["status"], "success", out)
 		self.assertEqual(frappe.response.get("http_status_code"), 400)
 		data = out["data"]

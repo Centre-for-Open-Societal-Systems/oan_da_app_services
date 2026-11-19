@@ -51,6 +51,7 @@ from da_services.utils.ratelimit import rate_limited
 
 PLAN_FIELDS = (
 	"farmer_id",
+	"farmer_name",
 	"scheduled_at",
 	"date",
 	"time",
@@ -164,6 +165,7 @@ def plan(**kwargs):
 	b = _body(kwargs, *PLAN_FIELDS)
 	out = svc.plan_visit(
 		farmer_id=(b.get("farmer_id") or "").strip(),
+		farmer_name=(b.get("farmer_name") or "").strip(),
 		scheduled_at=_scheduled_at(b),
 		visit_type=b.get("visit_type") or "Crop Survey",
 		purpose=b.get("purpose"),
