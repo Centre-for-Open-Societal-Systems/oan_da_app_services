@@ -154,6 +154,7 @@ The API returns the Farmer Registry's own state and the UI maps it.
 | Holdings | `Plot {code, crop, areaHa, soil, zone, lat, lng, tenure}` | `GET /farmers/{id}/plots` | Farmer Registry (Land Registry later) |
 | Crop history | Crop Sown rows (`source` split); GPS in section/tabs when staff returns it | `GET /farmers/{id}/crops?source=submission\|register` (required); `?submission_id=` for one draft; `?internal_record_id=&tab_id=` for one register tab; intake via `GET /crop-sown/intake-form?form=` (required) | Crop Sown staff |
 | Visit history | `Visit {title, summary, date, time}` | `GET /visits?farmer_id=&status=Completed` | ours: DA Visit |
+| Advisory (questions and answers) | one row per question `{question, answer, creation, modified}`, newest first | `GET /farmers/{id}/advisory?limit&start` (all of the farmer's Advisory Q&A, no permission filter; saved by `POST /visits`, answered by `POST /visits/{id}/submit`) | ours: DA Visit + `DA Visit Advisory QA` |
 | Documents | `FarmerDocument {name, uploadedAt, size}` + download | `GET /farmers/{id}/documents`, file URL | Farmer Registry (files) |
 | Advisory notes | `AdvisoryNote {date, author, text}`; Add note modal | `GET/POST /farmers/{id}/advisory-notes` | ours: new child of DA Farmer Link (`DA Advisory Note`, see §3) |
 | Action strip: Plan visit | §2.6 | | |

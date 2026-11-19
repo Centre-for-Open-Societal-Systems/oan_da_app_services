@@ -11,6 +11,7 @@ from PIL import Image
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
+from da_services.api.v1 import farmers as farmers_api
 from da_services.api.v1 import visits as api
 from da_services.services import constants as C
 from da_services.services import visits as svc
@@ -399,6 +400,39 @@ class TestVisitAPI(IntegrationTestCase):
 		self.assertEqual(out["meta"]["total"], 3)
 		out = api.list_visits(farmer_id="FRM-000102")
 		self.assertEqual(out["meta"]["total"], 1)
+
+	def test_farmer_advisory_returns_all_questions_of_the_farmer(self):
+		frappe.set_user(DA1)
+		self._plan(
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Fertiliser timing?", "answer": "At tillering"}],
+		)
+		self._plan(date=add_days(today(), 2), farmer_id="FRM-000102")
+
+		out = farmers_api.get_farmer_advisory("FRM-000101")
+		self.assertEqual(out["status"], "success", out)
+		self.assertEqual((out["meta"]["total"], out["meta"]["limit"], out["meta"]["start"]), (1, 50, 0))
+		row = out["data"][0]
+		self.assertEqual((row["question"], row["answer"]), ("Fertiliser timing?", "At tillering"))
+		self.assertEqual(set(row), {"question", "answer", "creation", "modified"})
+		self.assertEqual(farmers_api.get_farmer_advisory("FRM-000102")["data"], [])
+
+		# A visit planned in another DA's geography is still part of the farmer's Advisory, and
+		# any signed-in role gets it: the endpoint has no permission or scope filter.
+		frappe.set_user("Administrator")
+		self._plan(
+			da_id="DA-000003",
+			farmer_id="FRM-000199",
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Other kebele?", "answer": ""}],
+		)
+		frappe.set_user(DA1)
+		self.assertEqual(
+			[r["question"] for r in farmers_api.get_farmer_advisory("FRM-000199")["data"]], ["Other kebele?"]
+		)
+		frappe.set_user(COMMS)
+		self.assertEqual(len(farmers_api.get_farmer_advisory("FRM-000101")["data"]), 1)
+		self.assertEqual(farmers_api.get_farmer_advisory(" ")["status"], "error")
 
 	def test_executive_reads_region_but_not_other_region(self):
 		frappe.set_user(DA1)

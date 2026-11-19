@@ -660,6 +660,32 @@ def list_visits(
 	return rows, len(rows)
 
 
+def list_farmer_advisory(farmer_id: str, *, limit: int = 50, start: int = 0) -> list[dict]:
+	"""Every Advisory question and answer of a farmer: one row per question, newest first.
+
+	Each row is ``question``, ``answer``, ``creation`` and ``modified`` of the Q&A row. All of
+	the farmer's Advisory visits are read, whoever planned them: no DocPerm, User Permission
+	or role filter. Visits with no questions give no row.
+	"""
+	return frappe.get_all(
+		"DA Visit",
+		filters=[
+			["DA Visit", "farmer_id", "=", farmer_id],
+			["DA Visit", "visit_type", "=", "Advisory"],
+			["DA Visit Advisory QA", "question", "is", "set"],
+		],
+		fields=[
+			"advisory_qa.question",
+			"advisory_qa.answer",
+			"advisory_qa.creation",
+			"advisory_qa.modified",
+		],
+		order_by="`tabDA Visit Advisory QA`.creation desc, `tabDA Visit Advisory QA`.idx asc",
+		limit_page_length=max(1, min(int(limit), 500)),
+		limit_start=max(0, int(start)),
+	)
+
+
 def dashboard_counts(da_id: str, from_date, to_date) -> dict:
 	"""Farm visits tile: planned vs completed (one read, counted in Python)."""
 	rng = ("between", [f"{getdate(from_date)} 00:00:00", f"{getdate(to_date)} 23:59:59"])
