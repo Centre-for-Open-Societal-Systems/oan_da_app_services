@@ -102,10 +102,6 @@ STANDARD_PARAMS = (
 # -- small helpers --------------------------------------------------------------------
 
 
-def _clean(value) -> str | None:
-	return (str(value).strip() if value is not None else "") or None
-
-
 def format_survey_date(value) -> str:
 	"""Frontend display form: '08 Sep 2026'."""
 	return getdate(value).strftime("%d %b %Y")
@@ -333,18 +329,18 @@ def _parameter_rows(questions) -> list[dict]:
 	"""The standard p1-p3 rows, then one row per question the Supervisor wrote."""
 	rows = [dict(p) for p in STANDARD_PARAMS]
 	for i, q in enumerate(questions or [], start=len(STANDARD_PARAMS) + 1):
-		qtype = _clean(q.get("type"))
+		qtype = (q.get("type") or "").strip() or None
 		row = {
 			"parameter_id": f"p{i}",
 			"sort_order": i,
-			"prompt": _clean(q.get("prompt")),
+			"prompt": (q.get("prompt") or "").strip() or None,
 			"response_type": qtype,
 			"required": 1 if q.get("required", True) else 0,
 			**dict(zip(OPTION_FIELDS, _options_of(q.get("options")), strict=False)),
 			**{
 				TRANSLATION_FIELDS[lang]: text
 				for lang, text in (q.get("translations") or {}).items()
-				if lang in TRANSLATION_FIELDS and _clean(text)
+				if lang in TRANSLATION_FIELDS and str(text or "").strip()
 			},
 		}
 		if qtype == "rating":
@@ -374,15 +370,15 @@ def create_template(
 	client_op_id=None,
 ) -> str:
 	"""Insert one template (create = publish). Returns its id."""
-	woreda = _clean(woreda) or _default_woreda()
+	woreda = (woreda or "").strip() or _default_woreda()
 	area = ancestors_of(woreda) if woreda else {}
 	params = _parameter_rows(questions)
 	doc = frappe.get_doc(
 		{
 			"doctype": TEMPLATE_DOCTYPE,
-			"title": _clean(name),
-			"survey_type": _clean(type),
-			"template_version": _next_template_version(_clean(type)),
+			"title": (name or "").strip() or None,
+			"survey_type": (type or "").strip() or None,
+			"template_version": _next_template_version((type or "").strip()),
 			"status": "Open",
 			"window_open": open or None,
 			"window_close": close or None,
@@ -393,7 +389,7 @@ def create_template(
 			"region": area.get("region"),
 			"zone": area.get("zone"),
 			"woreda": woreda,
-			"client_op_id": _clean(client_op_id),
+			"client_op_id": (client_op_id or "").strip() or None,
 			"parameters": params,
 		}
 	).insert()
@@ -513,8 +509,8 @@ def _answer_rows(parameters, answers: dict) -> list[dict]:
 	for p in sorted(parameters, key=lambda p: int(p.sort_order or 0)):
 		value = answers.get(p.parameter_id)
 		for item in value if isinstance(value, list) else [value]:
-			text = _clean(item)
-			if text is None:
+			text = str(item).strip() if item is not None else ""
+			if not text:
 				continue
 			rows.append(
 				{
@@ -550,18 +546,18 @@ def create_response(
 			"doctype": RESPONSE_DOCTYPE,
 			"survey": survey_id,
 			"template_version": survey.template_version,
-			"da_id": _clean(da_id) or _own_da_id(),
-			"farmer_id": _clean(farmer_id),
-			"consent": _clean(consent),
-			"sync_state": _clean(sync_state) or "Synced",
+			"da_id": (da_id or "").strip() or _own_da_id(),
+			"farmer_id": (farmer_id or "").strip() or None,
+			"consent": (consent or "").strip() or None,
+			"sync_state": (sync_state or "").strip() or "Synced",
 			"started_at": started_at or None,
 			"completed_at": completed_at or None,
-			"client_op_id": _clean(client_op_id),
+			"client_op_id": (client_op_id or "").strip() or None,
 			"answers": _answer_rows(survey.parameters, answers if isinstance(answers, dict) else {}),
 			"region": survey.region,
 			"zone": survey.zone,
 			"woreda": survey.woreda,
-			"kebele": _clean(kebele),
+			"kebele": (kebele or "").strip() or None,
 		}
 	).insert()
 

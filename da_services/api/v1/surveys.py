@@ -53,7 +53,20 @@ def create_template(**kwargs):
 	"""Body: name, type, open, close, languages[], targetFarmers, questions[], woreda?,
 	assignmentMode?, assignedDaIds?, client_op_id?. Returns the new template id."""
 	b = request_fields(kwargs, *TEMPLATE_KEYS, "client_op_id", json_keys=JSON_KEYS)
-	return success_response(data={"id": svc.create_template(**b)}, message="Survey template published")
+	survey_id = svc.create_template(
+		name=b.get("name"),
+		type=b.get("type"),
+		open=b.get("open"),
+		close=b.get("close"),
+		languages=b.get("languages"),
+		targetFarmers=b.get("targetFarmers"),
+		questions=b.get("questions"),
+		woreda=b.get("woreda"),
+		assignmentMode=b.get("assignmentMode"),
+		assignedDaIds=b.get("assignedDaIds"),
+		client_op_id=b.get("client_op_id"),
+	)
+	return success_response(data={"id": survey_id}, message="Survey template published")
 
 
 @route("/surveys/templates", methods=("GET",), summary="Survey templates")
@@ -138,7 +151,18 @@ def submit_response(survey_id: str, **kwargs):
 		"da_id",
 		json_keys=("answers",),
 	)
-	svc.create_response(survey_id, **b)
+	svc.create_response(
+		survey_id,
+		farmer_id=b.get("farmer_id"),
+		consent=b.get("consent"),
+		answers=b.get("answers"),
+		kebele=b.get("kebele"),
+		started_at=b.get("started_at"),
+		completed_at=b.get("completed_at"),
+		sync_state=b.get("sync_state"),
+		client_op_id=b.get("client_op_id"),
+		da_id=b.get("da_id"),
+	)
 	return success_response(message="Survey response saved")
 
 
@@ -148,8 +172,17 @@ def submit_response(survey_id: str, **kwargs):
 def list_responses(survey_id: str, **kwargs):
 	q = request_fields(kwargs, "farmer_id", "da_id", "region", "zone", "woreda", "kebele", "limit", "start")
 	limit, start = _page(q)
-	filters = {k: q.get(k) for k in ("farmer_id", "da_id", "region", "zone", "woreda", "kebele")}
-	rows, total = svc.list_responses(survey_id, **filters, limit=limit, start=start)
+	rows, total = svc.list_responses(
+		survey_id,
+		farmer_id=q.get("farmer_id"),
+		da_id=q.get("da_id"),
+		region=q.get("region"),
+		zone=q.get("zone"),
+		woreda=q.get("woreda"),
+		kebele=q.get("kebele"),
+		limit=limit,
+		start=start,
+	)
 	return success_response(data=rows, meta={"total": total, "limit": limit, "start": start})
 
 
