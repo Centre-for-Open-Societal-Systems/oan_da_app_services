@@ -106,60 +106,36 @@ On selection, prefill the standard questions locally:
 | `p2` Farmer ID | selected farmer's `reg_id` (`FR-…`) |
 | `p3` Kebele | selected farmer's `kebele` |
 
-The server overwrites `p2` / `p3` with the resolved farmer's values, so a stale prefill
-cannot corrupt the response. If the farmer list returns no Kebele for a row, do not offer
-that farmer: capture requires a Kebele.
+Send `p2` / `p3` in `answers` with the selected farmer's values, and the farmer's Kebele as
+`kebele`; the server stores what it is sent.
 
 ## Field map — Capture → API
 
 | Capture UI | `POST /surveys/{id}/responses` |
 | --- | --- |
-| Selected farmer | `farmer_id` (internal id or `FR-…`) |
+| Selected farmer | `farmer_id` |
+| Farmer's Kebele | `kebele` |
 | Consent granted / declined | `consent`: `granted` \| `declined` |
 | Answers by parameter id | `answers`: `{ [parameterId]: string \| string[] }` |
 | Submit online | omit `sync_state` or send `Synced` |
 | Submit offline | `sync_state`: `Queued` |
-| Declined consent | send `consent: "declined"`; the server stores `Declined` regardless of `sync_state` |
-| Idempotency | `client_op_id` |
+| Declined consent | `consent: "declined"` with `sync_state: "Declined"` |
+| Collector (Supervisor / Admin on behalf of a DA) | `da_id` |
 
-Only `Queued` and `Synced` are client-settable. `Draft` is rejected with **400**: there is no
-saved-draft or draft-update flow. Do **not** send `Rejected`, `Conflict`, or `Declined` with
-granted consent: those are also **400**. A declined response must send
-`consent: "declined"`; the server forces `sync_state: Declined`. A survey can be captured
-only from its `window_open` date through `window_close` (both inclusive). Before opening or
-after closing the capture screen should be read-only; the API rejects it with 400 even if
-the UI allows the request.
-
-Rating values are strings `"1"` … `"5"`. Free text ≤ 500 characters. Multi-select is a JSON array of option strings.
-
-`started_at` / `completed_at` are optional site-local datetimes. If supplied, completion
-cannot precede start, both must be inside the window, and neither may be in the future; the
-API returns 400 otherwise (no clock-skew tolerance is applied).
+The endpoint only saves: the response is `{ "message": "Survey response saved" }` with no
+data. Region / Zone / Woreda are copied from the survey; `da_id` defaults to the signed-in
+DA. There is no farmer scope check, survey-window check, duplicate guard, idempotent replay
+or answer validation in the API; the UI keeps the capture screen read-only outside the window
+and refreshes `answered[]` after a save.
 
 ### Status codes to handle
 
 | Status | Meaning | UI |
 | --- | --- | --- |
 | 201 | Response stored | Show success / next farmer |
-| 400 | Invalid answers, unknown parameter id, capture before `window_open` / after close, invalid timestamps, invalid `sync_state`, unknown/mismatched area codes | Show the validation message |
-| 403 | Farmer outside the DA's Kebele / Woreda, survey outside the caller's scope, or an expired/missing officer assignment | “This farmer is not in your assigned Kebele for this survey.” |
-| 404 | Farmer not found | Ask the user to search again |
-| 409 | Duplicate farmer/template or unsafe `client_op_id` replay | Show “A response for this farmer already exists for this survey.” Do **not** retry with a new id |
-
-The 409 duplicate rule is **across all DAs**. If another DA has already submitted this
-farmer for the same template, the second DA gets 409 as well. Refresh the task so
-`answered[]` and `collected` are up to date.
-
-A `client_op_id` retry must reuse the exact same survey, collector, farmer, consent, sync
-state and answers. The API returns the original response id for an identical retry; any
-changed field is 409. Do not generate a new operation id for a retry.
-
-Declined consent does not lock the farmer; allow another attempt. Submitted responses are
-immutable, and there is no correction workflow. Historical `Draft` rows may still appear in
-response lists/exports but cannot be created through the API.
-
-Supervisor or Admin collecting on behalf of a DA must send `da_id`; the target DA's Kebele
-and Woreda are enforced.
+| 400 | A DocType rule failed (missing farmer, bad `consent` / `sync_state`) | Show the validation message |
+| 403 | Not allowed by DocPerm / scope: a DA saving for another DA or outside their area, a Supervisor outside theirs | Show the server message |
+| 404 | Unknown survey | Ask the user to reload |
 
 ## Excel export (Supervisor / Executive / Admin)
 
@@ -174,14 +150,11 @@ build the survey workbook in the browser.
 
 - 200 → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
   filename `survey-{id}-responses.xlsx`
-- 403 → DA / Communications Officer, no live officer assignment, or a survey outside the
-  caller's scope
+- 403 → survey outside the caller's scope
 - 404 → unknown survey
 
-The export is gated by a **live** Supervisor / Executive assignment, not merely the role
-string. A DA who also holds an expired officer role is treated as a DA and cannot export.
-The workbook contains farmer identifiers and location; keep it within the officer scope
-until the PII decision is confirmed.
+The workbook holds the responses the caller may read (permission query): an officer gets
+their scope, a DA only the rows they collected. It contains farmer identifiers and location.
 
 Columns are listed in [surveys-integration.md](surveys-integration.md#excel-export-get-surveysidresponsesexport).
 
@@ -213,13 +186,13 @@ sequenceDiagram
   DA-->>Page: SurveyTask[]
   User->>Page: Create template (Supervisor)
   Page->>DA: POST /surveys/templates
-  DA-->>Page: SurveyTask
+  DA-->>Page: { id }
   User->>Page: Collect response
   Page->>DA: GET /surveys/{id}
   DA-->>Page: parameters + answered
   User->>Page: Submit
   Page->>DA: POST /surveys/{id}/responses
-  DA-->>Page: sync_state Synced or Queued
+  DA-->>Page: message only
 ```
 
 ## Optional supervisor APIs (no UI yet)
@@ -257,7 +230,7 @@ repository (`src/features/surveys/*`, `src/app/(dashboard)/surveys/*`, `lib/rbac
 1. Wire `features/surveys` to these routes; remove the `SURVEY_TASKS` seed data and Zustand store.
 2. Farmer picker calls `GET /farmers`; remove `FARMERS` mock slugs.
 3. Prefill `p2` / `p3` from the selected farmer, not a hardcoded Kebele.
-4. Handle 400 / 403 / 404 / 409 as described above.
+4. Handle 400 / 403 / 404 as described above.
 5. Add the server XLSX download button for Supervisor / Executive / Admin.
 6. Add `/surveys` to the Executive nav in `lib/rbac.ts` if it is hard-coded there; the backend
    `GET /me` menu already includes it.

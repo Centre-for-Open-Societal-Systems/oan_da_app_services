@@ -139,10 +139,10 @@
    "reqd": 1
   },
   {
+   "description": "Stamped from the creator's RBAC grant; DAs in this Woreda see the survey.",
    "fieldname": "sec_scope",
    "fieldtype": "Section Break",
-   "label": "Scope",
-   "description": "Stamped from the creator's RBAC grant; DAs in this Woreda see the survey."
+   "label": "Scope"
   },
   {
    "fieldname": "region",
@@ -181,7 +181,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-16 13:00:00.000000",
+ "modified": "2026-11-19 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Template",
@@ -213,9 +213,11 @@
    "write": 1
   },
   {
+   "create": 1,
    "read": 1,
    "report": 1,
-   "role": "Supervisor"
+   "role": "Supervisor",
+   "write": 1
   },
   {
    "read": 1,
