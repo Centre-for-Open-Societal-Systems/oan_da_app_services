@@ -401,8 +401,6 @@ services:
       tier: da-read
       auth: bearer
     uris:
-    - /v1/da-services/advisors
-    - /v1/da-services/advisors/:advisor_id
     - /v1/da-services/agent-imports
     - /v1/da-services/agent-imports/exceptions
     - /v1/da-services/agent-imports/template
@@ -411,13 +409,11 @@ services:
     - /v1/da-services/assignments
     - /v1/da-services/assignments/coverage
     - /v1/da-services/assignments/me
-    - /v1/da-services/beneficiary-segments
     - /v1/da-services/crop-sown/geo-level-values
     - /v1/da-services/crop-sown/intake-form
     - /v1/da-services/dashboard/summary
     - /v1/da-services/dashboard/today
     - /v1/da-services/experts
-    - /v1/da-services/farmer-beneficiaries
     - /v1/da-services/farmer-links
     - /v1/da-services/farmers
     - /v1/da-services/farmers/:farmer_id/change-requests
@@ -430,8 +426,6 @@ services:
     - /v1/da-services/farmers/:farmer_id/update-status
     - /v1/da-services/farmers/:farmer_id/visits
     - /v1/da-services/farmers/registrations/:submission_id
-    - /v1/da-services/gatherings
-    - /v1/da-services/gatherings/:gathering_id
     - /v1/da-services/get_master_data
     - /v1/da-services/grievances
     - /v1/da-services/grievances/:ticket_id
@@ -447,7 +441,6 @@ services:
     - /v1/da-services/master/areas
     - /v1/da-services/master/kebeles
     - /v1/da-services/me
-    - /v1/da-services/my-team
     - /v1/da-services/notifications
     - /v1/da-services/profile/change-requests
     - /v1/da-services/profile/change-requests/:request_id
@@ -519,11 +512,9 @@ services:
       tier: da-write
       auth: bearer
     uris:
-    - /v1/da-services/advisors
     - /v1/da-services/agent-imports
     - /v1/da-services/agent-imports/validate
     - /v1/da-services/assignments
-    - /v1/da-services/farmer-beneficiaries
     - /v1/da-services/farmer-links
     - /v1/da-services/farmers
     - /v1/da-services/farmers/:farmer_id/crops
@@ -532,8 +523,6 @@ services:
     - /v1/da-services/farmers/:farmer_id/livestock/:submission_id/finalize
     - /v1/da-services/farmers/registrations/documents
     - /v1/da-services/farmers/updates/:event_id/retry
-    - /v1/da-services/gatherings
-    - /v1/da-services/gatherings/:gathering_id/cancel
     - /v1/da-services/grievances
     - /v1/da-services/grievances/:ticket_id/attachments
     - /v1/da-services/grievances/sync/retry
