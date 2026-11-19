@@ -1,8 +1,8 @@
 """Advisor directory: MoA subject-matter experts DAs reference for specialist advice.
 
 A reference list, not an HR record. The Administrator maintains it; every DA Services
-role that can read DA data can read it. A Development Agent sees only the advisors of
-their own Woreda(s); officers and the Administrator see the whole directory.
+role that can read DA data can read it, and every reader (Development Agents included)
+sees the whole directory.
 """
 
 from __future__ import annotations
@@ -32,26 +32,6 @@ FIELDS = (
 	"availability",
 	"modified",
 )
-
-
-def da_woredas(ctx) -> list[str] | None:
-	"""The Woredas a DA may see advisors of, or None when the caller sees the whole directory.
-
-	A DA's scope holds Woreda codes (ET04-W01) while the directory stores the Woreda as the
-	Add Advisor form saves it (the master-data name, e.g. Bako Tibe), so both are returned.
-	An officer who is also a DA keeps the officer view.
-	"""
-	if ctx is None or ctx.unrestricted:
-		return None
-	if not ctx.has_any_role(C.ROLE_DA) or ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		return None
-	codes = sorted(ctx.woreda_scopes)
-	if not codes:
-		return []
-	names = frappe.get_all(
-		"DA Administrative Area", filters={"name": ("in", codes), "level": "Woreda"}, pluck="name_en"
-	)
-	return sorted({*codes, *(n for n in names if n)})
 
 
 def int_param(name: str, value, default: int) -> int:
@@ -140,7 +120,6 @@ def create_advisor(
 
 
 def list_advisors(
-	ctx=None,
 	*,
 	q=None,
 	expertise=None,
@@ -150,10 +129,7 @@ def list_advisors(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Advisors, newest change first. Filters are exact; ``q`` searches name, id, unit and location.
-
-	With a DA's ``ctx`` only the advisors of the DA's Woreda(s) are returned.
-	"""
+	"""Advisors, newest change first. Filters are exact; ``q`` searches name, id, unit and location."""
 	if limit < 1 or limit > MAX_LIMIT:
 		frappe.throw(_("Limit must be between 1 and {0}.").format(MAX_LIMIT), frappe.ValidationError)
 	if start < 0:
@@ -172,13 +148,6 @@ def list_advisors(
 		filters["region"] = region
 	if woreda:
 		filters["woreda"] = woreda
-	scope = da_woredas(ctx)
-	if scope is not None:
-		# A requested Woreda may only narrow the DA's scope, never widen it.
-		allowed = [w for w in scope if not woreda or w == woreda]
-		if not allowed:
-			return [], 0
-		filters["woreda"] = ("in", allowed)
 	if status:
 		filters["status"] = status
 
@@ -204,10 +173,9 @@ def list_advisors(
 	return [serialize(r) for r in rows], total
 
 
-def get_advisor(advisor_id: str, ctx=None) -> dict:
-	"""One advisor. A DA gets "not found" for an advisor outside their Woreda(s)."""
+def get_advisor(advisor_id: str) -> dict:
+	"""One advisor."""
 	row = frappe.db.get_value(DOCTYPE, advisor_id, list(FIELDS), as_dict=True)
-	scope = da_woredas(ctx)
-	if not row or (scope is not None and row.woreda not in scope):
+	if not row:
 		frappe.throw(_("Advisor {0} not found.").format(advisor_id), frappe.DoesNotExistError)
 	return serialize(row)

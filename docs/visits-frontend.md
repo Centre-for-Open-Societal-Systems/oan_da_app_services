@@ -20,6 +20,7 @@ client role flag or invent Woreda/DA mapping in the FE beyond optional equality 
 - `user` — Frappe User of the DA who owns the visit (usually the signed-in DA; Supervisor
   sends the target DA's User). Do not omit and expect the backend to use the session user.
 - `farmer_id`
+- `farmer_name` — display name from the selected farmer (required FE snapshot; no registry lookup)
 - `scheduled_at` **or** `date` + `time`
 
 Map UI fields → API as in §2.6 of the screen contract. Store `name` from the response as
@@ -30,7 +31,7 @@ Map UI fields → API as in §2.6 of the screen contract. Store `name` from the 
 One `POST /visits` with:
 
 ```json
-{ "user": "<da user>", "visits": [ /* 1–5 items, unique farmer_id */ ] }
+{ "user": "<da user>", "visits": [ /* 1–5 items, unique farmer_id, each with farmer_name */ ] }
 ```
 
 No `/visits/batch`. Render `created` and `failed` separately; for each failed row show

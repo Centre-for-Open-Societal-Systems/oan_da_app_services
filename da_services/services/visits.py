@@ -36,6 +36,7 @@ FIELDS = [
 	"name",
 	"da_id",
 	"farmer_id",
+	"farmer_name",
 	"visit_type",
 	"physical_status",
 	"purpose",
@@ -179,6 +180,7 @@ def _check_specialization_conflict(farmer_id: str, new_specializations: list[str
 def plan_visit(
 	*,
 	farmer_id: str,
+	farmer_name: str,
 	scheduled_at,
 	visit_type: str = "Crop Survey",
 	purpose: str | None = None,
@@ -198,9 +200,13 @@ def plan_visit(
 	No role / scope / permission helpers here — Frappe DocType Role permissions + User Permissions own access.
 	``da_id`` on the request is ignored for the row (fetch_from); it is only accepted for
 	backward-compatible callers and unused. Specialization uses ``User.da_registry_id``.
+	``farmer_name`` is an FE snapshot (required DocType field); no registry lookup.
 	"""
 	if not farmer_id:
 		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
+	farmer_name = (farmer_name or "").strip()
+	if not farmer_name:
+		frappe.throw(_("farmer_name is required."), frappe.ValidationError)
 	if not scheduled_at:
 		frappe.throw(_("scheduled_at is required."), frappe.ValidationError)
 	user = (user or "").strip()
@@ -236,6 +242,7 @@ def plan_visit(
 			# Same value as fetch_from; set so DocType create permission sees da_id.
 			"da_id": registry_da,
 			"farmer_id": farmer_id,
+			"farmer_name": farmer_name,
 			"visit_type": visit_type or "Crop Survey",
 			"purpose": purpose,
 			"scheduled_at": get_datetime(scheduled_at),
@@ -311,6 +318,7 @@ def plan_visits_batch(
 			created.append(
 				plan_visit(
 					farmer_id=(item.get("farmer_id") or "").strip(),
+					farmer_name=(item.get("farmer_name") or "").strip(),
 					scheduled_at=scheduled_at,
 					visit_type=item.get("visit_type") or "Crop Survey",
 					purpose=item.get("purpose"),
@@ -527,6 +535,7 @@ def activity_report(*, week: str | None = None, da_id: str | None = None) -> dic
 		fields=[
 			"name",
 			"farmer_id",
+			"farmer_name",
 			"kebele",
 			"visit_type",
 			"purpose",
@@ -571,6 +580,7 @@ def activity_report(*, week: str | None = None, da_id: str | None = None) -> dic
 			{
 				"visit_id": r.name,
 				"farmer_id": r.farmer_id,
+				"farmer_name": r.farmer_name,
 				"kebele": r.kebele,
 				"purpose": r.purpose or r.visit_type,
 				"summary": r.outcome,
@@ -688,6 +698,7 @@ def today_items(da_id: str, date=None) -> list[dict]:
 		fields=[
 			"name",
 			"farmer_id",
+			"farmer_name",
 			"kebele",
 			"visit_type",
 			"purpose",
@@ -700,12 +711,13 @@ def today_items(da_id: str, date=None) -> list[dict]:
 	items = []
 	for r in rows:
 		d_ = _derived(r)
+		label = r.farmer_name or r.farmer_id
 		items.append(
 			{
 				"kind": "visit",
 				"id": r.name,
 				"time": get_datetime(r.scheduled_at).strftime("%H:%M") if r.scheduled_at else None,
-				"title": f"Farm visit: {r.farmer_id}" + (f", {r.kebele}" if r.kebele else ""),
+				"title": f"Farm visit: {label}" + (f", {r.kebele}" if r.kebele else ""),
 				"subtitle": r.purpose or r.visit_type,
 				"status": "Done"
 				if d_["ui_status"] == "Completed"

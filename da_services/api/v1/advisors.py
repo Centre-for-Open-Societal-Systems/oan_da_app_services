@@ -34,13 +34,12 @@ def create_advisor(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def list_advisors(**kwargs):
-	"""A Development Agent gets the advisors of their own Woreda(s); other roles get the whole directory."""
-	ctx = require_roles(*svc.READ_ROLES)
+	"""The whole directory, for every role that can read DA data (Development Agents included)."""
+	require_roles(*svc.READ_ROLES)
 	q = request_fields(kwargs, "q", "expertise", "region", "woreda", "status", "limit", "start")
 	limit = svc.int_param("limit", q.get("limit"), 50)
 	start = svc.int_param("start", q.get("start"), 0)
 	rows, total = svc.list_advisors(
-		ctx,
 		q=q.get("q"),
 		expertise=q.get("expertise"),
 		region=q.get("region"),
@@ -56,5 +55,5 @@ def list_advisors(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_advisor(advisor_id: str):
-	ctx = require_roles(*svc.READ_ROLES)
-	return success_response(data=svc.get_advisor(advisor_id, ctx))
+	require_roles(*svc.READ_ROLES)
+	return success_response(data=svc.get_advisor(advisor_id))

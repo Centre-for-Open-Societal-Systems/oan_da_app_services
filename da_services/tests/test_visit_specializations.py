@@ -87,6 +87,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 				"doctype": "DA Visit",
 				"da_id": self.da_crop,
 				"farmer_id": "FARMER-001",
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"scheduled_at": "2026-10-20 10:00:00",
 			}
@@ -106,6 +107,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 				"doctype": "DA Visit",
 				"da_id": self.da_crop,
 				"farmer_id": "FARMER-001",
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"scheduled_at": "2026-10-20 10:00:00",
 			}
@@ -126,6 +128,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 				"doctype": "DA Visit",
 				"da_id": self.da_crop,
 				"farmer_id": "FARMER-001",
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"scheduled_at": "2026-10-20 10:00:00",
 			}
@@ -163,6 +166,7 @@ class TestVisitSpecializations(IntegrationTestCase):
 				"user": self.user_crop,
 				"da_id": self.da_crop,
 				"farmer_id": "FARMER-001",
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"scheduled_at": "2026-10-20 10:00:00",
 			}

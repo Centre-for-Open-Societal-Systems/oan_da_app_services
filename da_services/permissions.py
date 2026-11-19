@@ -243,10 +243,19 @@ def da_survey_template_query_conditions(user: str | None = None) -> str:
 
 
 def has_da_survey_template_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
-	"""Writes go through services/surveys.py; Desk/REST stays read-only in scope."""
+	"""Read in scope; a live Supervisor creates / edits templates of their own scope."""
 	user = user or frappe.session.user
-	if ptype != "read" and not _is_unrestricted(user):
-		return False
+	if ptype != "read":
+		if _is_unrestricted(user):
+			return True
+		if ptype not in ("create", "write"):
+			return False
+		officer = get_officer_scope_context(user)
+		return bool(
+			officer
+			and officer.has_any_role(C.ROLE_SUPERVISOR)
+			and officer.covers(doc.region, doc.woreda, doc.zone)
+		)
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return True
@@ -280,10 +289,18 @@ def da_survey_response_query_conditions(user: str | None = None) -> str:
 
 
 def has_da_survey_response_permission(doc, ptype: str = "read", user: str | None = None) -> bool:
-	"""Single-document mirror of ``da_survey_response_query_conditions``."""
+	"""Single-document mirror of ``da_survey_response_query_conditions``.
+
+	Create follows the same rule: a DA saves responses they collect, a live Supervisor
+	saves them inside their scope. Saved responses are never edited.
+	"""
 	user = user or frappe.session.user
-	if ptype != "read" and not _is_unrestricted(user):
+	if ptype not in ("read", "create") and not _is_unrestricted(user):
 		return False
+	if ptype == "create" and not _is_unrestricted(user):
+		officer = get_officer_scope_context(user)
+		if officer is not None and not officer.has_any_role(C.ROLE_SUPERVISOR):
+			return False
 	ctx = get_scope_context(user)
 	if ctx.unrestricted:
 		return True
@@ -291,5 +308,7 @@ def has_da_survey_response_permission(doc, ptype: str = "read", user: str | None
 	if officer is not None:
 		return officer.covers(doc.region, doc.woreda, doc.zone)
 	if ctx.has_any_role(C.ROLE_DA):
-		return ctx.owns_da(doc.da_id)
+		owns = ctx.owns_da(doc.da_id)
+		# A new response must also be for a survey of the DA's own area.
+		return owns and (ptype != "create" or ctx.covers(doc.region, doc.woreda, doc.zone))
 	return False

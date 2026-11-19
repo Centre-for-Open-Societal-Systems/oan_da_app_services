@@ -165,6 +165,7 @@ class TestCrossDAVisitVisibility(IntegrationTestCase):
 				"user": self._user_for(da_id),
 				"da_id": da_id,
 				"farmer_id": farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": visit_type,
 				"physical_status": status,
 				"scheduled_at": datetime.now() + timedelta(days=days),

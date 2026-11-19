@@ -140,10 +140,18 @@ def kebele_chain(kebele: str) -> dict:
 
 
 def live_geo() -> dict:
-	"""Active master chain for this site (do not invent Admin Area / dummy codes)."""
-	row = frappe.get_all(
+	"""Active master chain for this site (do not invent Admin Area / dummy codes).
+
+	Seeds/reactivates the shared test masters first so callers stay green after
+	``test_geo_master_sync`` clears tables (or on a fresh CI site with no kebeles).
+	"""
+	ensure_geo_masters()
+	rows = frappe.get_all(
 		"DA Kebele", filters={"is_active": 1}, fields=["name", "woreda"], order_by="name asc", limit=1
-	)[0]
+	)
+	if not rows:
+		frappe.throw("ensure_geo_masters left no active DA Kebele for live_geo()")
+	row = rows[0]
 	primary = kebele_chain(row.name)
 	siblings = frappe.get_all(
 		"DA Kebele",
@@ -175,8 +183,10 @@ def live_geo() -> dict:
 			pluck="name",
 			order_by="name asc",
 			limit=1,
-		)[0]
-		foreign = kebele_chain(cand)
+		)
+		if not cand:
+			frappe.throw("ensure_geo_masters left no foreign DA Kebele for live_geo()")
+		foreign = kebele_chain(cand[0])
 	return {
 		**primary,
 		"other_kebele": siblings[0] if siblings else primary["kebele"],
