@@ -38,7 +38,7 @@ def execute():
 	frappe.db.sql(f"update {t} set status = 'Pending Supervisor' where status = 'Pending'")
 	frappe.db.sql(
 		f"""update {t} set status = 'Registry failed',
-			registry_sync_state = if(registry_error like 'DARegistryUnavailable%%', 'Unavailable', 'Refused')
+			registry_sync_state = case when registry_error like 'DARegistryUnavailable%%' then 'Unavailable' else 'Refused' end
 		where status = 'Approved'"""
 	)
 	frappe.db.sql(
@@ -51,7 +51,7 @@ def execute():
 		where status = 'Applied' and registry_approval = 'Rejected'"""
 	)
 	frappe.db.sql(
-		f"""update {t} set registry_sync_state = if(registry_error like 'DARegistryUnavailable%%', 'Unavailable', 'Refused')
+		f"""update {t} set registry_sync_state = case when registry_error like 'DARegistryUnavailable%%' then 'Unavailable' else 'Refused' end
 		where registry_sync_state = 'Failed'"""
 	)
 	# applied_at used to be the push time; keep it as the last push.
