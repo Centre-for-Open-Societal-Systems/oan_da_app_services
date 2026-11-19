@@ -179,6 +179,7 @@ class TestFarmersAPI(IntegrationTestCase):
 				"user": ensure_da_user(da_id),
 				"da_id": da_id,
 				"farmer_id": farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": initial_status,
 				"scheduled_at": now_datetime(),

@@ -10,6 +10,7 @@
   "user",
   "da_id",
   "farmer_id",
+  "farmer_name",
   "visit_type",
   "physical_status",
   "col_head",
@@ -91,6 +92,14 @@
    "in_standard_filter": 1,
    "label": "Farmer ID",
    "search_index": 1
+  },
+  {
+   "description": "Farmer display name snapshot from the FE at plan time (no registry lookup).",
+   "fieldname": "farmer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Farmer Name",
+   "reqd": 1
   },
   {
    "default": "Crop Survey",

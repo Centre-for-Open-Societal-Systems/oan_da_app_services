@@ -6,6 +6,9 @@
  "engine": "InnoDB",
  "field_order": [
   "master_data_domain",
+  "column_break_cciq",
+  "da_registry_domain",
+  "da_registry_form_register_id",
   "sec_master_sync",
   "master_sync_username",
   "master_sync_password",
@@ -19,10 +22,10 @@
    "label": "Master Data Domain"
   },
   {
+   "description": "Account the daily geo master sync (DA Country / Region / Zone / Woreda / Kebele) logs in with through SSO. Its access token and CSRF token are sent to Master Data.",
    "fieldname": "sec_master_sync",
    "fieldtype": "Section Break",
-   "label": "Master Data Sync",
-   "description": "Account the daily geo master sync (DA Country / Region / Zone / Woreda / Kebele) logs in with through SSO. Its access token and CSRF token are sent to Master Data."
+   "label": "Master Data Sync"
   },
   {
    "fieldname": "master_sync_username",
@@ -43,13 +46,27 @@
    "fieldname": "master_sync_login_key",
    "fieldtype": "Data",
    "label": "Login Key"
+  },
+  {
+   "fieldname": "column_break_cciq",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "da_registry_domain",
+   "fieldtype": "Data",
+   "label": "DA Registry Domain"
+  },
+  {
+   "fieldname": "da_registry_form_register_id",
+   "fieldtype": "Data",
+   "label": "DA Registry Form Register ID"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-14 12:00:00.000000",
+ "modified": "2026-11-18 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",

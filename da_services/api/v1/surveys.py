@@ -1,72 +1,81 @@
-"""v1 surveys: templates, assigned tasks, responses, results (docs/api-da-screens.md §2.16).
+"""v1 surveys: templates, assigned surveys, responses, results.
 
-POST /api/v1/da-services/surveys/templates
-GET  /api/v1/da-services/surveys/templates
-GET  /api/v1/da-services/surveys/templates/<id>
+POST  /api/v1/da-services/surveys/templates
+GET   /api/v1/da-services/surveys/templates
+GET   /api/v1/da-services/surveys/templates/<id>
 PATCH /api/v1/da-services/surveys/templates/<id>
-GET  /api/v1/da-services/surveys
-GET  /api/v1/da-services/surveys/<id>
-POST /api/v1/da-services/surveys/<id>/responses
-GET  /api/v1/da-services/surveys/<id>/responses
-GET  /api/v1/da-services/surveys/<id>/responses/export
-GET  /api/v1/da-services/surveys/<id>/results
+GET   /api/v1/da-services/surveys
+GET   /api/v1/da-services/surveys/<id>
+POST  /api/v1/da-services/surveys/<id>/responses
+GET   /api/v1/da-services/surveys/<id>/responses
+GET   /api/v1/da-services/surveys/<id>/responses/export
+GET   /api/v1/da-services/surveys/<id>/results
+
+Thin: parse the request, call the service, wrap the envelope. Access comes from the
+DocType Role DocPerm and the permission hooks (da_services/permissions.py).
 """
 
 from __future__ import annotations
 
 import frappe
+from frappe.utils import cint
 from frappe.utils.response import build_response
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
 from da_services.api.v1.common import request_fields
 from da_services.services import surveys as svc
-from da_services.utils.permissions import require_roles
 
-
-@route(
-	"/surveys/templates", methods=("POST",), status=201, summary="Supervisor/Admin: publish a survey template"
+TEMPLATE_KEYS = (
+	"name",
+	"type",
+	"open",
+	"close",
+	"languages",
+	"targetFarmers",
+	"questions",
+	"woreda",
+	"assignmentMode",
+	"assignedDaIds",
 )
+JSON_KEYS = ("languages", "questions", "assignedDaIds")
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _page(q: dict) -> tuple[int, int]:
+	return cint(q.get("limit")) or 50, cint(q.get("start"))
+
+
+@route("/surveys/templates", methods=("POST",), status=201, summary="Publish a survey template")
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def create_template(**kwargs):
-	"""Body: TemplateInput — name, type, open, close, languages[], targetFarmers, questions[]."""
-	ctx = require_roles(*svc.CREATE_ROLES)
-	b = request_fields(
-		kwargs,
-		"name",
-		"type",
-		"survey_type",
-		"open",
-		"close",
-		"languages",
-		"targetFarmers",
-		"target_farmers",
-		"questions",
-		"region",
-		"zone",
-		"woreda",
-		"assignmentMode",
-		"assignment_mode",
-		"assignedDaIds",
-		"assigned_da_ids",
-		"client_op_id",
-		json_keys=("languages", "questions", "assignedDaIds", "assigned_da_ids"),
+	"""Body: name, type, open, close, languages[], targetFarmers, questions[], woreda?,
+	assignmentMode?, assignedDaIds?, client_op_id?. Returns the new template id."""
+	b = request_fields(kwargs, *TEMPLATE_KEYS, "client_op_id", json_keys=JSON_KEYS)
+	survey_id = svc.create_template(
+		name=b.get("name"),
+		type=b.get("type"),
+		open=b.get("open"),
+		close=b.get("close"),
+		languages=b.get("languages"),
+		targetFarmers=b.get("targetFarmers"),
+		questions=b.get("questions"),
+		woreda=b.get("woreda"),
+		assignmentMode=b.get("assignmentMode"),
+		assignedDaIds=b.get("assignedDaIds"),
+		client_op_id=b.get("client_op_id"),
 	)
-	out = svc.create_template(ctx=ctx, **b)
-	return success_response(data=out, message="Survey template published")
+	return success_response(data={"id": survey_id}, message="Survey template published")
 
 
-@route("/surveys/templates", methods=("GET",), summary="List survey templates in scope")
+@route("/surveys/templates", methods=("GET",), summary="Survey templates")
 @frappe.whitelist()
 @handle_api_errors
 def list_templates(**kwargs):
-	ctx = require_roles(*svc.RESULTS_ROLES)
 	q = request_fields(kwargs, "status", "type", "woreda", "q", "limit", "start")
-	limit = int(q.get("limit") or 50)
-	start = int(q.get("start") or 0)
+	limit, start = _page(q)
 	rows, total = svc.list_templates(
-		ctx,
 		status=q.get("status"),
 		type=q.get("type"),
 		woreda=q.get("woreda"),
@@ -81,55 +90,30 @@ def list_templates(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_template(survey_id: str):
-	ctx = require_roles(*svc.RESULTS_ROLES)
-	return success_response(data=svc.get_template(survey_id, ctx))
+	return success_response(data=svc.get_template(survey_id))
 
 
-@route(
-	"/surveys/templates/<survey_id>", methods=("PATCH",), summary="Supervisor/Admin: update a survey template"
-)
+@route("/surveys/templates/<survey_id>", methods=("PATCH",), summary="Update a survey template")
 @frappe.whitelist(methods=["PATCH", "POST"])
 @handle_api_errors
 def patch_template(survey_id: str, **kwargs):
-	ctx = require_roles(*svc.CREATE_ROLES)
-	keys = (
-		"name",
-		"status",
-		"open",
-		"close",
-		"window_open",
-		"window_close",
-		"languages",
-		"targetFarmers",
-		"target_farmers",
-		"questions",
-		"assignmentMode",
-		"assignment_mode",
-		"assignedDaIds",
-		"assigned_da_ids",
+	"""Body: only the keys to change (name, status, open, close, languages, targetFarmers,
+	questions, assignmentMode, assignedDaIds). Returns the id saved to (a new version
+	when questions change after responses were collected)."""
+	b = request_fields(kwargs, *TEMPLATE_KEYS, "status", json_keys=JSON_KEYS)
+	body = {k: v for k, v in b.items() if v is not None}
+	return success_response(
+		data={"id": svc.patch_template(survey_id, body)}, message="Survey template updated"
 	)
-	b = request_fields(
-		kwargs,
-		*keys,
-		json_keys=("languages", "questions", "assignedDaIds", "assigned_da_ids"),
-	)
-	request = getattr(frappe.local, "request", None)
-	data = (request.get_json(silent=True) if request is not None else None) or {}
-	body = {k: b[k] for k in keys if k in data or k in kwargs}
-	out = svc.patch_template(survey_id, body, ctx=ctx)
-	return success_response(data=out, message="Survey template updated")
 
 
 @route("/surveys", methods=("GET",), summary="Assigned surveys for the caller")
 @frappe.whitelist()
 @handle_api_errors
 def list_surveys(**kwargs):
-	ctx = require_roles(*svc.LIST_ROLES)
 	q = request_fields(kwargs, "status", "type", "language", "woreda", "q", "limit", "start")
-	limit = int(q.get("limit") or 50)
-	start = int(q.get("start") or 0)
+	limit, start = _page(q)
 	rows, total = svc.list_surveys(
-		ctx,
 		status=q.get("status"),
 		type=q.get("type"),
 		language=q.get("language"),
@@ -145,26 +129,21 @@ def list_surveys(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_survey(survey_id: str):
-	ctx = require_roles(*svc.LIST_ROLES)
-	return success_response(data=svc.get_survey(survey_id, ctx))
+	return success_response(data=svc.get_survey(survey_id))
 
 
-@route(
-	"/surveys/<survey_id>/responses",
-	methods=("POST",),
-	status=201,
-	summary="Capture a survey response",
-)
+@route("/surveys/<survey_id>/responses", methods=("POST",), status=201, summary="Save a survey response")
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def submit_response(survey_id: str, **kwargs):
-	"""Body: farmer_id, consent, answers, started_at?, completed_at?, sync_state?, client_op_id?, da_id?."""
-	ctx = require_roles(*svc.CAPTURE_ROLES)
+	"""Body: farmer_id, consent, answers, kebele?, started_at?, completed_at?, sync_state?,
+	client_op_id?, da_id?. Response is message-only."""
 	b = request_fields(
 		kwargs,
 		"farmer_id",
 		"consent",
 		"answers",
+		"kebele",
 		"started_at",
 		"completed_at",
 		"sync_state",
@@ -172,31 +151,29 @@ def submit_response(survey_id: str, **kwargs):
 		"da_id",
 		json_keys=("answers",),
 	)
-	out = svc.submit_response(survey_id, ctx=ctx, **b)
-	return success_response(data=out, message="Survey response saved")
+	svc.create_response(
+		survey_id,
+		farmer_id=b.get("farmer_id"),
+		consent=b.get("consent"),
+		answers=b.get("answers"),
+		kebele=b.get("kebele"),
+		started_at=b.get("started_at"),
+		completed_at=b.get("completed_at"),
+		sync_state=b.get("sync_state"),
+		client_op_id=b.get("client_op_id"),
+		da_id=b.get("da_id"),
+	)
+	return success_response(message="Survey response saved")
 
 
-@route("/surveys/<survey_id>/responses", methods=("GET",), summary="List responses for a survey")
+@route("/surveys/<survey_id>/responses", methods=("GET",), summary="Responses for a survey")
 @frappe.whitelist()
 @handle_api_errors
 def list_responses(survey_id: str, **kwargs):
-	ctx = require_roles(*svc.LIST_ROLES)
-	q = request_fields(
-		kwargs,
-		"farmer_id",
-		"da_id",
-		"region",
-		"zone",
-		"woreda",
-		"kebele",
-		"limit",
-		"start",
-	)
-	limit = int(q.get("limit") or 50)
-	start = int(q.get("start") or 0)
+	q = request_fields(kwargs, "farmer_id", "da_id", "region", "zone", "woreda", "kebele", "limit", "start")
+	limit, start = _page(q)
 	rows, total = svc.list_responses(
 		survey_id,
-		ctx,
 		farmer_id=q.get("farmer_id"),
 		da_id=q.get("da_id"),
 		region=q.get("region"),
@@ -209,26 +186,12 @@ def list_responses(survey_id: str, **kwargs):
 	return success_response(data=rows, meta={"total": total, "limit": limit, "start": start})
 
 
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-
-@route(
-	"/surveys/<survey_id>/responses/export",
-	methods=("GET",),
-	summary="Supervisor/Executive/Admin: download responses as XLSX",
-)
+@route("/surveys/<survey_id>/responses/export", methods=("GET",), summary="Download responses as XLSX")
 @frappe.whitelist()
 @handle_api_errors
 def export_responses(survey_id: str):
-	"""XLSX download as a raw Werkzeug response, not a JSON envelope.
-
-	The custom router only leaves a ``Response`` untouched; returning ``None`` after
-	setting ``frappe.response`` would be serialised as JSON. ``build_response`` is
-	Frappe's own download builder, so the mimetype, filename and bytes stay in step
-	with the rest of the framework.
-	"""
-	ctx = require_roles(*svc.RESULTS_ROLES)
-	filename, content = svc.export_responses(survey_id, ctx)
+	"""XLSX download as a raw response (the router leaves a ``Response`` untouched)."""
+	filename, content = svc.export_responses(survey_id)
 	frappe.response["type"] = "download"
 	frappe.response["filename"] = filename
 	frappe.response["filecontent"] = content
@@ -236,9 +199,8 @@ def export_responses(survey_id: str):
 	return build_response("download")
 
 
-@route("/surveys/<survey_id>/results", methods=("GET",), summary="Basic survey result aggregates")
+@route("/surveys/<survey_id>/results", methods=("GET",), summary="Survey result aggregates")
 @frappe.whitelist()
 @handle_api_errors
 def survey_results(survey_id: str):
-	ctx = require_roles(*svc.RESULTS_ROLES)
-	return success_response(data=svc.survey_results(survey_id, ctx))
+	return success_response(data=svc.survey_results(survey_id))

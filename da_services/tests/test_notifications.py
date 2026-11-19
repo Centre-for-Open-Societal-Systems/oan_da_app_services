@@ -169,7 +169,9 @@ class TestDANotification(IntegrationTestCase):
 
 	def test_visit_follow_up_notifies_the_da(self):
 		frappe.set_user(DA1)
-		v = visits.plan_visit(farmer_id="FR-88466", scheduled_at=f"{today()} 08:30:00", user=DA1)
+		v = visits.plan_visit(
+			farmer_id="FR-88466", farmer_name="Test Farmer", scheduled_at=f"{today()} 08:30:00", user=DA1
+		)
 		visits.submit_outcome(
 			v["name"],
 			observed="ok",
