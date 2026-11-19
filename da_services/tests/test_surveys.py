@@ -244,7 +244,9 @@ class TestSurveys(IntegrationTestCase):
 		survey_id = self._create()
 		row = self._respond(survey_id)
 		self.assertEqual((row.da_id, row.farmer_id, row.sync_state), ("DA-000001", "FR-000101", "Synced"))
-		self.assertEqual((row.region, row.zone, row.woreda, row.kebele), ("ET04", "ET04-Z01", "ET04-W01", "Bako 01"))
+		self.assertEqual(
+			(row.region, row.zone, row.woreda, row.kebele), ("ET04", "ET04-Z01", "ET04-W01", "Bako 01")
+		)
 		self.assertEqual(
 			[(a.parameter_id, a.answer_text, a.answer_rating) for a in row.answers],
 			[("p4", "4", 4), ("p5", "Yes, fully", 0), ("p6", "Teff", 0), ("p6", "Maize", 0)],
@@ -293,7 +295,9 @@ class TestSurveys(IntegrationTestCase):
 		survey_id = self._create()
 		self._respond(survey_id, user=DA1, farmer_id="FR-000101")
 		self._respond(survey_id, user=DA2, farmer_id="FR-000102", answers={"p4": "2", "p5": "No"})
-		self._respond(survey_id, user=DA2, farmer_id="FR-000103", consent="declined", answers={}, sync_state="Declined")
+		self._respond(
+			survey_id, user=DA2, farmer_id="FR-000103", consent="declined", answers={}, sync_state="Declined"
+		)
 		with _as(EXEC):
 			out = svc.survey_results(survey_id)
 		self.assertEqual((out["collected"], out["by_status"]), (2, {"Synced": 2, "Declined": 1}))
