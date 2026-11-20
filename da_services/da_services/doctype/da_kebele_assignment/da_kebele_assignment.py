@@ -48,8 +48,8 @@ class DAKebeleAssignment(Document):
 		An Effective decision replaces every live row of the DA. A pending one (Flagged /
 		Proposed / Validated) replaces only earlier pending rows, so the posting in force
 		stays Effective until a Supervisor overrides the flag. The rows being replaced are
-		locked (SELECT ... FOR UPDATE) for the rest of the transaction, so two decisions
-		for the same DA at the same moment are applied one after the other.
+		read without a row lock; POST /assignments serialises decisions for one DA with
+		its own per-DA lock (services/assignments.py).
 		"""
 		prior = self._supersede_prior()
 		# User Permission on the Kebele; the superseded rows fire no hooks, so their users too.
@@ -74,12 +74,11 @@ class DAKebeleAssignment(Document):
 		if self.state not in LIVE_STATES:
 			return []
 		replace = LIVE_STATES if self.state == "Effective" else PENDING_STATES
-		prior = frappe.db.sql(
-			"""select name from `tabDA Kebele Assignment`
-			where da_id = %s and state in %s and name != %s
-			order by creation for update""",
-			(self.da_id, tuple(replace), self.name),
-			pluck=True,
+		prior = frappe.get_all(
+			"DA Kebele Assignment",
+			filters={"da_id": self.da_id, "state": ("in", replace), "name": ("!=", self.name)},
+			order_by="creation asc",
+			pluck="name",
 		)
 		for name in prior:
 			frappe.db.set_value(
