@@ -125,23 +125,22 @@ def _check_specialization_conflict(farmer_id: str, new_specializations: list[str
 	if not farmer_id or not new_specializations:
 		return None
 
-	rows = frappe.db.sql(
-		"""
-		SELECT
-			v.name,
-			v.visit_type,
-			v.physical_status,
-			s.specialization
-		FROM `tabDA Visit` v
-		LEFT JOIN `tabDA Visit Specialization` s
-			ON s.parent = v.name AND s.parenttype = 'DA Visit'
-		WHERE
-			v.farmer_id = %(farmer_id)s
-			AND v.physical_status IN %(blocking_statuses)s
-		FOR UPDATE
-		""",
-		{"farmer_id": farmer_id, "blocking_statuses": BLOCKING_STATUSES},
-		as_dict=True,
+	Visit = frappe.qb.DocType("DA Visit")
+	Spec = frappe.qb.DocType("DA Visit Specialization")
+	open_for_farmer = (Visit.farmer_id == farmer_id) & (
+		Visit.physical_status.isin(BLOCKING_STATUSES)
+	)
+
+	# Lock parent rows alone: Postgres rejects FOR UPDATE on the nullable side of a LEFT JOIN.
+	frappe.qb.from_(Visit).select(Visit.name).where(open_for_farmer).for_update().run()
+
+	rows = (
+		frappe.qb.from_(Visit)
+		.left_join(Spec)
+		.on((Spec.parent == Visit.name) & (Spec.parenttype == "DA Visit"))
+		.select(Visit.name, Visit.visit_type, Visit.physical_status, Spec.specialization)
+		.where(open_for_farmer)
+		.run(as_dict=True)
 	)
 	if not rows:
 		return None
