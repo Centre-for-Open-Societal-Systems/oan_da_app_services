@@ -1,11 +1,3 @@
 {
-  "grievance_backend": "http",
-  "grievance_base_url": "https://grievance.example.com/api",
-  "grievance_timeout_seconds": 20,
-  "grievance_iam": {
-    "login_key": "agent",
-    "return_url": "https://grievance.example.com/api",
-    "username": "<service account>",
-    "password": "<secret>"
-  }
+  "_comment": "Grievance base URL is set on DA Services Settings (grievance_base_url), not site_config. Example value: https://grievance-service.development.oanstaging.com"
 }

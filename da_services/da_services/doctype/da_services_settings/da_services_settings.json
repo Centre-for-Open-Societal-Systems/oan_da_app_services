@@ -9,6 +9,7 @@
   "column_break_cciq",
   "da_registry_domain",
   "da_registry_form_register_id",
+  "grievance_base_url",
   "sec_master_sync",
   "master_sync_username",
   "master_sync_password",
@@ -60,13 +61,19 @@
    "fieldname": "da_registry_form_register_id",
    "fieldtype": "Data",
    "label": "DA Registry Form Register ID"
+  },
+  {
+   "description": "Grievance APISIX gateway host only (e.g. https://grievance-service.development.oanstaging.com). Public paths are /v1/... rewritten to /api/v1/... . Do not use the Desk hostname and do not append /api.",
+   "fieldname": "grievance_base_url",
+   "fieldtype": "Data",
+   "label": "Grievance Base URL"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-18 18:00:00.000000",
+ "modified": "2026-11-20 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",

@@ -1,7 +1,6 @@
-"""In-memory Grievance Service for development and tests.
+"""In-memory Grievance Service fixtures for unit and API tests only.
 
-Fixture grievances cover the states the Grievances page has to handle: open, in-progress,
-resolved, and escalated.
+Not used in production — ``get_client()`` always builds ``HttpGrievanceClient``.
 """
 
 from __future__ import annotations

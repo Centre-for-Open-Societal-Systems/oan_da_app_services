@@ -43,8 +43,11 @@ services:
       auth: bearer
     uris:
     - /v1/admin/permissions
+    - /v1/admin/roles/:role
+    - /v1/admin/users/:user_id
     - /v1/admin/users/:user_id/roles/:role
     - /v1/admin/users/:user_id/sessions
+    - /v1/admin/users/:user_id/user-permissions/:name
     methods:
     - DELETE
     plugins:
@@ -71,10 +74,13 @@ services:
       auth: bearer
     uris:
     - /v1/admin/permissions
+    - /v1/admin/permissions/catalogue
     - /v1/admin/roles
+    - /v1/admin/roles/:role
     - /v1/admin/users
     - /v1/admin/users/:user_id
     - /v1/admin/users/:user_id/roles
+    - /v1/admin/users/:user_id/user-permissions
     methods:
     - GET
     plugins:
@@ -100,6 +106,7 @@ services:
       tier: auth-admin
       auth: bearer
     uris:
+    - /v1/admin/roles/:role
     - /v1/admin/users/:user_id
     methods:
     - PATCH
@@ -127,9 +134,11 @@ services:
       auth: bearer
     uris:
     - /v1/admin/permissions/reset
+    - /v1/admin/roles
     - /v1/admin/users
     - /v1/admin/users/:user_id/roles
     - /v1/admin/users/:user_id/temporary-password
+    - /v1/admin/users/:user_id/user-permissions
     methods:
     - POST
     plugins:
@@ -401,6 +410,8 @@ services:
       tier: da-read
       auth: bearer
     uris:
+    - /v1/da-services/advisors
+    - /v1/da-services/advisors/:advisor_id
     - /v1/da-services/agent-imports
     - /v1/da-services/agent-imports/exceptions
     - /v1/da-services/agent-imports/template
@@ -409,13 +420,17 @@ services:
     - /v1/da-services/assignments
     - /v1/da-services/assignments/coverage
     - /v1/da-services/assignments/me
+    - /v1/da-services/attendance-punches/today
+    - /v1/da-services/beneficiary-segments
     - /v1/da-services/crop-sown/geo-level-values
     - /v1/da-services/crop-sown/intake-form
     - /v1/da-services/dashboard/summary
     - /v1/da-services/dashboard/today
     - /v1/da-services/experts
+    - /v1/da-services/farmer-beneficiaries
     - /v1/da-services/farmer-links
     - /v1/da-services/farmers
+    - /v1/da-services/farmers/:farmer_id/advisory
     - /v1/da-services/farmers/:farmer_id/change-requests
     - /v1/da-services/farmers/:farmer_id/crops
     - /v1/da-services/farmers/:farmer_id/livestock
@@ -426,6 +441,8 @@ services:
     - /v1/da-services/farmers/:farmer_id/update-status
     - /v1/da-services/farmers/:farmer_id/visits
     - /v1/da-services/farmers/registrations/:submission_id
+    - /v1/da-services/gatherings
+    - /v1/da-services/gatherings/:gathering_id
     - /v1/da-services/get_master_data
     - /v1/da-services/grievances
     - /v1/da-services/grievances/:ticket_id
@@ -434,16 +451,18 @@ services:
     - /v1/da-services/grievances/:ticket_id/timeline
     - /v1/da-services/grievances/options
     - /v1/da-services/grievances/summary
-    - /v1/da-services/leave-requests
-    - /v1/da-services/leave-requests/:request_id
     - /v1/da-services/livestock/geo-level-values
     - /v1/da-services/livestock/intake-form
     - /v1/da-services/master/areas
     - /v1/da-services/master/kebeles
     - /v1/da-services/me
     - /v1/da-services/notifications
+    - /v1/da-services/profile/agents/:da_id
+    - /v1/da-services/profile/certificates
     - /v1/da-services/profile/change-requests
     - /v1/da-services/profile/change-requests/:request_id
+    - /v1/da-services/profile/change-requests/:request_id/file
+    - /v1/da-services/profile/documents/:document_id
     - /v1/da-services/profile/me
     - /v1/da-services/rbac-assignments
     - /v1/da-services/rbac-assignments/:assignment_id
@@ -512,9 +531,12 @@ services:
       tier: da-write
       auth: bearer
     uris:
+    - /v1/da-services/advisors
     - /v1/da-services/agent-imports
     - /v1/da-services/agent-imports/validate
     - /v1/da-services/assignments
+    - /v1/da-services/attendance-punches
+    - /v1/da-services/farmer-beneficiaries
     - /v1/da-services/farmer-links
     - /v1/da-services/farmers
     - /v1/da-services/farmers/:farmer_id/crops
@@ -523,18 +545,27 @@ services:
     - /v1/da-services/farmers/:farmer_id/livestock/:submission_id/finalize
     - /v1/da-services/farmers/registrations/documents
     - /v1/da-services/farmers/updates/:event_id/retry
+    - /v1/da-services/gatherings
+    - /v1/da-services/gatherings/:gathering_id/cancel
     - /v1/da-services/grievances
     - /v1/da-services/grievances/:ticket_id/attachments
     - /v1/da-services/grievances/sync/retry
-    - /v1/da-services/leave-requests
-    - /v1/da-services/leave-requests/:request_id/cancel
-    - /v1/da-services/leave-requests/:request_id/decide
     - /v1/da-services/notifications/:notification_id/read
     - /v1/da-services/notifications/broadcast
     - /v1/da-services/notifications/read-all
+    - /v1/da-services/profile/certificates
+    - /v1/da-services/profile/certificates/remove
     - /v1/da-services/profile/change-requests
     - /v1/da-services/profile/change-requests/:request_id/cancel
+    - /v1/da-services/profile/change-requests/:request_id/close
     - /v1/da-services/profile/change-requests/:request_id/decide
+    - /v1/da-services/profile/change-requests/:request_id/retry
+    - /v1/da-services/profile/change-requests/:request_id/sync-local
+    - /v1/da-services/profile/change-requests/bulk-decide
+    - /v1/da-services/profile/family-members
+    - /v1/da-services/profile/photo
+    - /v1/da-services/profile/photo/remove
+    - /v1/da-services/profile/qualifications
     - /v1/da-services/rbac-assignments
     - /v1/da-services/rbac-assignments/:assignment_id/revoke
     - /v1/da-services/surveys/:survey_id/responses

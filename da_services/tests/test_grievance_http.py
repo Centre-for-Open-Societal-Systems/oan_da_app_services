@@ -1,4 +1,4 @@
-"""HTTP grievance client: Development Agent login chain and collection mapping.
+"""HTTP grievance client: FE bearer forwarding and collection mapping.
 
 These tests do not call the live service. They check that each step's response
 is what the next step sends.
@@ -8,14 +8,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from da_services.integrations.grievance.auth import (
-	AgentTokenProvider,
-	access_token_from_cookies,
-	login_agent,
-	login_form_action,
-	login_local,
-)
 from da_services.integrations.grievance.client import (
+	GrievanceNotFound,
 	GrievanceRejected,
 	GrievanceServiceError,
 	GrievanceServiceUnavailable,
@@ -31,12 +25,7 @@ from da_services.integrations.grievance.mapper import (
 from da_services.integrations.grievance.mock import MockGrievanceClient
 from da_services.integrations.grievance.schemas import GrievanceSubmission
 
-_LOGIN_HTML = """
-<html><body>
-<form id="kc-form-login" action="https://keycloak.example/login?client_id=iam&amp;tab=1">
-</form>
-</body></html>
-"""
+BASE = "https://grievance.example"
 
 
 class _Response:
@@ -52,20 +41,6 @@ class _Response:
 		if isinstance(self._body, Exception):
 			raise self._body
 		return self._body
-
-
-class _Session:
-	def __init__(self, responses):
-		self._responses = list(responses)
-		self.calls = []
-
-	def post(self, url, **kwargs):
-		self.calls.append(("POST", url, kwargs))
-		return self._responses.pop(0)
-
-	def get(self, url, **kwargs):
-		self.calls.append(("GET", url, kwargs))
-		return self._responses.pop(0)
 
 
 def _submission(**overrides) -> GrievanceSubmission:
@@ -86,82 +61,6 @@ def _submission(**overrides) -> GrievanceSubmission:
 	)
 	fields.update(overrides)
 	return GrievanceSubmission(**fields)
-
-
-class TestLoginChain(unittest.TestCase):
-	def test_form_action_unescapes_and_joins(self):
-		action = login_form_action(_LOGIN_HTML, "https://keycloak.example/start")
-		self.assertEqual(action, "https://keycloak.example/login?client_id=iam&tab=1")
-
-	def test_prefixed_cookie_wins(self):
-		headers = [
-			"other=1",
-			"agent-X-Access-Token=agent-token; Path=/; HttpOnly",
-		]
-		self.assertEqual(access_token_from_cookies(headers, "agent-"), "agent-token")
-
-	def test_k1_through_k5_pass_values_forward(self):
-		session = _Session(
-			[
-				_Response(
-					200,
-					{
-						"status": "success",
-						"data": {
-							"redirect_url": "https://kc.example/auth",
-							"cookie_prefix": "agent-",
-							"iam": "agent",
-						},
-					},
-				),
-				_Response(200, text=_LOGIN_HTML, url="https://kc.example/auth"),
-				_Response(302, headers={"Location": "https://grievance.example/iam/callback?code=abc"}),
-				_Response(302, set_cookies=["agent-X-Access-Token=live-token; Path=/; HttpOnly"]),
-				_Response(200, {"data": {"roles": ["Grievance Assisted Submitter"]}}),
-			]
-		)
-		token = login_agent(
-			session,
-			base_url="https://grievance.example/api",
-			timeout=5,
-			login_key="agent",
-			return_url="http://localhost:3000",
-			username="da-agent@services.com",
-			password="secret",
-		)
-		self.assertEqual(token, "live-token")
-		self.assertEqual(session.calls[0][0], "POST")
-		self.assertEqual(session.calls[0][1], "https://grievance.example/api/v1/auth/iam/login")
-		self.assertEqual(session.calls[0][2]["json"]["key"], "agent")
-		self.assertEqual(session.calls[0][2]["json"]["return_url"], "http://localhost:3000")
-		self.assertNotIn("password", json.dumps(session.calls[0][2]))
-		self.assertEqual(session.calls[1][1], "https://kc.example/auth")
-		self.assertTrue(session.calls[1][2]["allow_redirects"])
-		self.assertEqual(session.calls[2][1], "https://keycloak.example/login?client_id=iam&tab=1")
-		self.assertEqual(session.calls[2][2]["data"]["username"], "da-agent@services.com")
-		self.assertFalse(session.calls[2][2]["allow_redirects"])
-		self.assertEqual(session.calls[3][1], "https://grievance.example/iam/callback?code=abc")
-		self.assertFalse(session.calls[3][2]["allow_redirects"])
-		self.assertEqual(session.calls[4][2]["headers"]["Authorization"], "Bearer live-token")
-
-	def test_local_login_posts_credentials_and_checks_the_role(self):
-		session = _Session(
-			[
-				_Response(200, {"status": "success", "data": {"access_token": "local-token"}}),
-				_Response(200, {"data": {"roles": ["Grievance Assisted Submitter"]}}),
-			]
-		)
-		token = login_local(
-			session,
-			base_url="https://grievance.example/api",
-			timeout=5,
-			username="da-agent@services.com",
-			password="secret",
-		)
-		self.assertEqual(token, "local-token")
-		self.assertEqual(session.calls[0][1], "https://grievance.example/api/v1/auth/login")
-		self.assertEqual(session.calls[0][2]["json"], {"usr": "da-agent@services.com", "pwd": "secret"})
-		self.assertEqual(session.calls[1][2]["headers"]["Authorization"], "Bearer local-token")
 
 
 class TestUpstreamMapping(unittest.TestCase):
@@ -218,9 +117,35 @@ class TestUpstreamMapping(unittest.TestCase):
 
 
 class TestHttpClient(unittest.TestCase):
+	def setUp(self):
+		self._auth = patch(
+			"da_services.integrations.grievance.client.frappe.get_request_header",
+			side_effect=lambda name: "Bearer fe-sso-token" if name == "Authorization" else None,
+		)
+		self._auth.start()
+		self.addCleanup(self._auth.stop)
+
 	def _client(self):
-		tokens = AgentTokenProvider(base_url="https://grievance.example/api", static_token="static-token")
-		return HttpGrievanceClient("https://grievance.example/api", timeout=5, tokens=tokens)
+		return HttpGrievanceClient(BASE, timeout=5)
+
+	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_forwards_fe_authorization_bearer(self, request):
+		request.return_value = _Response(
+			200, {"status": "success", "data": {"ticket_number": "B-1", "status": "Submitted"}}
+		)
+		with patch(
+			"da_services.integrations.grievance.client.frappe.get_request_header",
+			side_effect=lambda name: "Bearer from-request" if name == "Authorization" else None,
+		):
+			HttpGrievanceClient(BASE, timeout=5).submit_grievance(_submission())
+		headers = request.call_args.kwargs["headers"]
+		self.assertEqual(headers["Authorization"], "Bearer from-request")
+
+	@patch("da_services.integrations.grievance.client.requests.request")
+	def test_404_is_not_found(self, request):
+		request.return_value = _Response(404, {"status": "error", "message": "Not found"})
+		with self.assertRaises(GrievanceNotFound):
+			self._client().get_grievance("missing")
 
 	@patch("da_services.integrations.grievance.client.requests.request")
 	def test_submit_list_detail_and_timeline_use_the_token_and_ticket(self, request):
@@ -302,8 +227,8 @@ class TestHttpClient(unittest.TestCase):
 		self.assertEqual(created.ticket_number, ticket)
 		sent = request.call_args_list[0]
 		self.assertEqual(sent.args[0], "POST")
-		self.assertEqual(sent.args[1], "https://grievance.example/api/v1/grievances")
-		self.assertEqual(sent.kwargs["headers"]["Authorization"], "Bearer static-token")
+		self.assertEqual(sent.args[1], f"{BASE}/v1/grievances")
+		self.assertEqual(sent.kwargs["headers"]["Authorization"], "Bearer fe-sso-token")
 		self.assertEqual(sent.kwargs["json"]["client_submission_uuid"], "uuid-1")
 		self.assertNotIn("X-CSRF-Token", sent.kwargs["headers"])
 
@@ -329,13 +254,13 @@ class TestHttpClient(unittest.TestCase):
 		self.assertNotIn("priority", detail.to_dict())
 		self.assertEqual(
 			request.call_args_list[2].args[1],
-			f"https://grievance.example/api/v1/grievances/{ticket}/timeline",
+			f"{BASE}/v1/grievances/{ticket}/timeline",
 		)
 
 		timeline = client.get_timeline(ticket)
 		self.assertEqual(
 			request.call_args_list[3].args[1],
-			f"https://grievance.example/api/v1/grievances/{ticket}/timeline",
+			f"{BASE}/v1/grievances/{ticket}/timeline",
 		)
 		self.assertEqual(timeline[0]["action"], "submission")
 		self.assertEqual(timeline[0]["detail"], "filed")
@@ -460,8 +385,8 @@ class TestHttpClient(unittest.TestCase):
 		summary = self._client().get_summary()
 		self.assertEqual(summary, cards)
 		self.assertEqual(request.call_args.args[0], "GET")
-		self.assertEqual(request.call_args.args[1], "https://grievance.example/api/v1/grievances/summary")
-		self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer static-token")
+		self.assertEqual(request.call_args.args[1], f"{BASE}/v1/grievances/summary")
+		self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer fe-sso-token")
 
 	@patch("da_services.integrations.grievance.client.requests.request")
 	def test_summary_upstream_http_failure(self, request):
@@ -538,7 +463,7 @@ class TestHttpClient(unittest.TestCase):
 		self.assertNotIn("Authorization", intake.kwargs["headers"])
 		self.assertEqual(intake.kwargs["params"]["service_category"], "Inputs")
 		self.assertTrue(staff.args[1].endswith("/v1/grievances/options"))
-		self.assertEqual(staff.kwargs["headers"]["Authorization"], "Bearer static-token")
+		self.assertEqual(staff.kwargs["headers"]["Authorization"], "Bearer fe-sso-token")
 		self.assertEqual(staff.kwargs["params"]["service_category"], "Inputs")
 
 

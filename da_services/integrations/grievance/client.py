@@ -1,22 +1,20 @@
 """OAN Grievance Service client boundary.
 
-DA Services never owns grievance data. It talks to the Grievance Service through this
-interface only. Two implementations exist:
+DA Services never owns grievance data. It talks to the Grievance Service through
+``HttpGrievanceClient`` only: live calls that forward the caller's ``Authorization``
+bearer. Public gateway URLs are ``/v1/...`` (no ``/api``); APISIX rewrites to Frappe.
 
-- ``MockGrievanceClient`` (mock.py): in-memory fixtures for local development and tests.
-- ``HttpGrievanceClient``: the Development Agent flow in the grievance Postman collection.
-  Login is K1-K5 (agent realm). Reads and the walk-in submit use that bearer token only.
-
-Select the backend per site in ``site_config.json``. See ``docs/grievance-da-http.md``.
+The base URL is ``grievance_base_url`` on DA Services Settings. See
+``docs/grievance-da-http.md``.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+import frappe
 import requests
 
-from .auth import AgentLoginError, AgentTokenProvider
 from .mapper import (
 	error_text,
 	normalize_case,
@@ -30,7 +28,6 @@ from .mapper import (
 	to_options,
 	to_timeline_entry,
 	to_upstream_submission,
-	unwrap_data,
 )
 from .schemas import (
 	EvidenceFile,
@@ -157,13 +154,9 @@ def _query_param(value) -> str | None:
 class HttpGrievanceClient(GrievanceClient):
 	"""Live client. Paths and the walk-in body follow the grievance collection."""
 
-	def __init__(self, base_url: str, timeout: int = 20, tokens: AgentTokenProvider | None = None):
+	def __init__(self, base_url: str, timeout: int = 20):
 		self.base_url = base_url.rstrip("/")
 		self.timeout = timeout
-		self.tokens = tokens or AgentTokenProvider(base_url=self.base_url, timeout=timeout)
-
-	def _url(self, path: str) -> str:
-		return f"{self.base_url}{path}"
 
 	def _request(self, method: str, path: str, *, params=None, json_body=None, auth: bool = True):
 		return self._handle_response(self._send(method, path, params=params, json_body=json_body, auth=auth))
@@ -189,16 +182,14 @@ class HttpGrievanceClient(GrievanceClient):
 		if json_body is not None:
 			headers["Content-Type"] = "application/json"
 		if auth:
-			try:
-				headers["Authorization"] = f"Bearer {self.tokens.get_token()}"
-			except AgentLoginError as exc:
-				if exc.unavailable:
-					raise GrievanceServiceUnavailable(str(exc)) from exc
-				raise GrievanceServiceError(str(exc)) from exc
+			raw = (frappe.get_request_header("Authorization") or "").strip()
+			if raw:
+				headers["Authorization"] = raw
+
 		try:
 			return requests.request(
 				method,
-				self._url(path),
+				f"{self.base_url}{path}",
 				params=params,
 				json=json_body,
 				files=files,
@@ -216,7 +207,7 @@ class HttpGrievanceClient(GrievanceClient):
 		except ValueError:
 			body = {}
 		if response.status_code == 404:
-			raise GrievanceNotFound(text)
+			raise GrievanceNotFound(error_text(body, text) or "Not found")
 		if response.status_code >= 500:
 			raise GrievanceServiceUnavailable(f"HTTP {response.status_code}")
 		duplicate = ticket_from_duplicate(error_text(body, text))
@@ -226,7 +217,10 @@ class HttpGrievanceClient(GrievanceClient):
 			raise GrievanceAlreadyFiled(duplicate)
 		if response.status_code >= 400 or (isinstance(body, dict) and body.get("status") == "error"):
 			raise GrievanceRejected(error_text(body, text) or f"HTTP {response.status_code}")
-		data = unwrap_data(body)
+		if isinstance(body, dict) and "data" in body:
+			data = body["data"]
+		else:
+			data = body
 		return data if data is not None else {}
 
 	def submit_grievance(self, submission: GrievanceSubmission) -> GrievanceResult:
@@ -262,7 +256,7 @@ class HttpGrievanceClient(GrievanceClient):
 		to_date: str | None = None,
 		**filters,
 	) -> tuple[list[GrievanceSummary], int]:
-		# complainant_id is a DA Registry id. The agent token's own scope is the list.
+		# complainant_id is a DA Registry id. The FE bearer scopes the upstream list.
 		del complainant_id
 		params: dict = {"page": page, "page_size": page_size}
 		named = {
@@ -391,36 +385,17 @@ class HttpGrievanceClient(GrievanceClient):
 		return response.content
 
 
+def _base_url_from_settings() -> str:
+	"""Bare host or full URL from DA Services Settings → normalized base URL."""
+	domain = frappe.db.get_single_value("DA Services Settings", "grievance_base_url")
+	domain = (domain or "").strip().rstrip("/")
+	if not domain:
+		raise GrievanceServiceError("Grievance Base URL is not set in DA Services Settings")
+	if not domain.startswith(("http://", "https://")):
+		domain = f"https://{domain}"
+	return domain
+
+
 def get_client() -> GrievanceClient:
-	"""Build the configured client. Defaults to mock outside production."""
-	import frappe
-
-	backend = (frappe.conf.get("grievance_backend") or "mock").lower()
-	if backend == "mock":
-		from .mock import MockGrievanceClient
-
-		return MockGrievanceClient.shared()
-	if backend == "http":
-		base_url = frappe.conf.get("grievance_base_url")
-		if not base_url:
-			raise GrievanceServiceError("grievance_base_url is not set in site_config.json")
-		iam = frappe.conf.get("grievance_iam") or {}
-		timeout = int(frappe.conf.get("grievance_timeout_seconds") or 20)
-		static = frappe.conf.get("grievance_api_token") or ""
-		if isinstance(static, str) and static.startswith("Bearer "):
-			static = static.removeprefix("Bearer ").strip()
-		return HttpGrievanceClient(
-			base_url,
-			timeout,
-			AgentTokenProvider(
-				base_url=base_url,
-				timeout=timeout,
-				login_key=iam.get("login_key") or "agent",
-				# K1 sends the grievance base URL as return_url, not the Keycloak hint in the environment.
-				return_url=iam.get("return_url") or base_url,
-				username=iam.get("username") or "",
-				password=iam.get("password") or "",
-				static_token=static,
-			),
-		)
-	raise GrievanceServiceError(f"Unknown grievance_backend: {backend!r}")
+	"""HTTP client against ``grievance_base_url`` on DA Services Settings."""
+	return HttpGrievanceClient(_base_url_from_settings())

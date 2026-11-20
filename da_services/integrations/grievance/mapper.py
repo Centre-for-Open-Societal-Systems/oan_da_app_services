@@ -11,25 +11,8 @@ import re
 from .schemas import GrievanceDetail, GrievanceResult, GrievanceSubmission, GrievanceSummary, TimelineEntry
 
 SUBMISSION_CHANNEL = "Development Agent Assisted"
-ASSISTED_ROLE = "Grievance Assisted Submitter"
 _ALREADY_FILED = re.compile(r"already been filed as\s+([A-Za-z0-9][A-Za-z0-9-]*)", re.IGNORECASE)
 _TAGS = re.compile(r"<[^>]+>")
-
-
-def unwrap_data(body):
-	"""Return the payload inside the grievance service envelope.
-
-	Success bodies are ``{"status": "success", "data": ...}``. A few collection
-	scripts also accept ``message.data``.
-	"""
-	if not isinstance(body, dict):
-		return body
-	message = body.get("message")
-	if isinstance(message, dict) and "data" in message:
-		return message["data"]
-	if "data" in body:
-		return body["data"]
-	return body
 
 
 def error_text(body, fallback: str = "") -> str:
@@ -220,27 +203,42 @@ def to_options(payload: dict) -> dict:
 	categories: dict[str, dict] = {}
 	raw_categories = payload.get("service_categories") or []
 	for item in raw_categories:
-		value = _option_value(item)
+		value = _label(item, "value", "category_name", "type_name", "name")
 		if not value:
 			continue
-		entry = {"value": value, "label": _option_label(item) or value, "subcategories": []}
+		label = _label(item, "label", "category_name", "type_name", "name", "value") or value
+		entry = {"value": value, "label": label, "subcategories": []}
 		code = item.get("code") if isinstance(item, dict) else None
 		if code:
 			entry["code"] = code
 		categories[value] = entry
 	for item in payload.get("grievance_types") or []:
-		type_name = item if isinstance(item, str) else _option_value(item)
+		type_name = (
+			item if isinstance(item, str) else _label(item, "value", "category_name", "type_name", "name")
+		)
 		if not type_name:
 			continue
-		parent = _category_parent(item)
+		parent = ""
+		if isinstance(item, dict):
+			raw_parent = item.get("service_category")
+			if isinstance(raw_parent, dict):
+				parent = _label(raw_parent, "value", "label", "category_name", "name")
+			elif isinstance(raw_parent, str) and raw_parent.strip():
+				parent = raw_parent.strip()
 		if not parent:
 			continue
 		bucket = categories.setdefault(parent, {"value": parent, "label": parent, "subcategories": []})
 		if type_name not in bucket["subcategories"]:
 			bucket["subcategories"].append(type_name)
+	statuses = []
+	for item in payload.get("statuses") or []:
+		if isinstance(item, str) and item:
+			statuses.append(item)
+		elif isinstance(item, dict) and (item.get("status") or item.get("label") or item.get("value")):
+			statuses.append(item)
 	options = {
 		"categories": list(categories.values()),
-		"statuses": _statuses(payload.get("statuses")),
+		"statuses": statuses,
 		"service_categories": raw_categories,
 		"grievance_types": payload.get("grievance_types") or [],
 		"submitter_types": payload.get("submitter_types") or [],
@@ -250,35 +248,6 @@ def to_options(payload: dict) -> dict:
 		if key in payload:
 			options[key] = payload[key]
 	return options
-
-
-def _option_value(item) -> str:
-	return _label(item, "value", "category_name", "type_name", "name")
-
-
-def _option_label(item) -> str:
-	return _label(item, "label", "category_name", "type_name", "name", "value")
-
-
-def _category_parent(item) -> str:
-	if not isinstance(item, dict):
-		return ""
-	parent = item.get("service_category")
-	if isinstance(parent, dict):
-		return _label(parent, "value", "label", "category_name", "name")
-	if isinstance(parent, str) and parent.strip():
-		return parent.strip()
-	return ""
-
-
-def _statuses(raw) -> list:
-	statuses = []
-	for item in raw or []:
-		if isinstance(item, str) and item:
-			statuses.append(item)
-		elif isinstance(item, dict) and (item.get("status") or item.get("label") or item.get("value")):
-			statuses.append(item)
-	return statuses
 
 
 def _label(item, *keys: str) -> str:
