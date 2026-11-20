@@ -684,7 +684,8 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual((d["status"], d["registry_sync_state"]), ("Applied", "Accepted"))
 		self.assertEqual(len(self.writers), 1)  # the record already holds the values: no duplicate
 		actions = frappe.get_all("DA Audit Event", filters={"entity_name": r["name"]}, pluck="details")
-		self.assertTrue(any("already_applied" in (a or "") for a in actions))
+		# details is JSON: text on MariaDB, already parsed on PostgreSQL
+		self.assertTrue(any("already_applied" in frappe.as_json(a) for a in actions))
 
 	def test_the_approval_survives_once_the_registry_was_asked(self):
 		# The decision is committed before the request ends (the registry write cannot be

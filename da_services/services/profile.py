@@ -768,17 +768,32 @@ def _push_list_change(doc, ctx: ScopeContext, client):
 
 
 def _lock(key: str, busy: str) -> str | None:
-	"""Take a MariaDB named lock across workers, or answer 400 with ``busy`` after a few seconds.
+	"""Take a named lock across workers, or answer 400 with ``busy`` after a few seconds.
 
-	Released by ``_unlock`` in the caller's finally block, and by MariaDB itself if the
-	connection drops.
+	MariaDB: a named lock. PostgreSQL: a session advisory lock on the key's hash. Released
+	by ``_unlock`` in the caller's finally block, and by the database itself when the
+	connection closes.
 	"""
-	if frappe.db.db_type != "mariadb":
-		return None  # no named locks on other engines; the request transaction still applies
 	key = f"da_services:profile_change:{key}"
-	if not frappe.db.sql("select get_lock(%s, %s)", (key, LOCK_TIMEOUT_SECONDS))[0][0]:
+	if not _take_lock(key, LOCK_TIMEOUT_SECONDS):
 		frappe.throw(busy, frappe.ValidationError)
 	return key
+
+
+def _take_lock(key: str, wait_seconds: float) -> bool:
+	"""True when this connection now holds the lock ``key`` (after waiting at most so long)."""
+	if frappe.db.db_type == "mariadb":
+		return bool(frappe.db.sql("select get_lock(%s, %s)", (key, wait_seconds))[0][0])
+	if frappe.db.db_type == "postgres":
+		# PostgreSQL has no named lock with a timeout: ask without waiting, a few times.
+		deadline = time.monotonic() + wait_seconds
+		while True:
+			if frappe.db.sql("select pg_try_advisory_lock(hashtext(%s))", (key,))[0][0]:
+				return True
+			if time.monotonic() >= deadline:
+				return False
+			time.sleep(0.1)
+	return True  # another engine: the request transaction still applies
 
 
 def _lock_da(da_id: str) -> str | None:
@@ -817,8 +832,19 @@ def _one_at_a_time(action):
 
 
 def _unlock(key: str | None) -> None:
-	if key:
+	if not key:
+		return
+	if frappe.db.db_type == "mariadb":
 		frappe.db.sql("select release_lock(%s)", (key,))
+	elif frappe.db.db_type == "postgres":
+		release = "select pg_advisory_unlock(hashtext(%s))"
+		try:
+			frappe.db.sql(release, (key,))
+		except Exception:
+			# After a failed statement PostgreSQL refuses everything until a rollback; the
+			# request is failing anyway, and the lock must not outlive it.
+			frappe.db.rollback()
+			frappe.db.sql(release, (key,))
 
 
 def _create_request(
@@ -1466,12 +1492,10 @@ def _read_back(doc, client, *, notify_outcome: bool) -> str | None:
 	request's lock records it; the others skip. What is recorded is committed here,
 	because the read-back mostly runs inside GET requests, whose writes Frappe discards.
 	"""
-	held = None
-	if frappe.db.db_type == "mariadb":
-		held = f"da_services:profile_change:request:{doc.name}"
-		# No waiting: whoever holds it (another read-back, a decision) is dealing with it.
-		if not frappe.db.sql("select get_lock(%s, 0)", (held,))[0][0]:
-			return None
+	held = f"da_services:profile_change:request:{doc.name}"
+	# No waiting: whoever holds it (another read-back, a decision) is dealing with it.
+	if not _take_lock(held, 0):
+		return None
 	try:
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 		doc.reload()
