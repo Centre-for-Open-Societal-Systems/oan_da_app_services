@@ -82,7 +82,6 @@ def _register() -> None:
 		farmers,
 		farmers_update,
 		gatherings,
-		leave,
 		livestock,
 		master,
 		me,

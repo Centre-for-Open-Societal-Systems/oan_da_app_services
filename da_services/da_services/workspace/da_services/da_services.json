@@ -133,7 +133,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Others",
-   "link_count": 13,
+   "link_count": 12,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -203,16 +203,6 @@
    "label": "DA Kebele Assignment",
    "link_count": 0,
    "link_to": "DA Kebele Assignment",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "DA Leave Request",
-   "link_count": 0,
-   "link_to": "DA Leave Request",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
