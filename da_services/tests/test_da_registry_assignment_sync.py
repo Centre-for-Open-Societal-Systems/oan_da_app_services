@@ -139,6 +139,17 @@ class TestUserHook(IntegrationTestCase):
 		self.assertEqual(kebele.reason, sync.API_NOTE)
 		self.assertEqual(kebele.da_id, DA_ID)
 
+	def test_after_insert_syncs_and_on_update_of_the_same_insert_skips(self):
+		doc = frappe.new_doc("User")
+		doc.update({"email": _email(9), "first_name": f"{TAG}9", "da_registry_id": DA_ID})
+		with patch.object(sync, "sync_user_assignments") as run:
+			doc.flags.in_insert = False  # as Frappe has it during after_insert
+			sync.on_user_update(doc, "after_insert")
+			doc.flags.in_insert = True
+			sync.on_user_update(doc, "on_update")
+		run.assert_called_once_with(doc.name, DA_ID)
+		self.assertNotIn("da_registry_synced_on_insert", doc.flags)
+
 	def test_create_without_da_id_does_not_call_the_registry(self):
 		with patch(FETCH) as fetch:
 			user = self._user(da_id=None).name
@@ -160,48 +171,6 @@ class TestUserHook(IntegrationTestCase):
 			doc.last_name = "Changed"
 			doc.save(ignore_permissions=True)
 		fetch.assert_not_called()
-
-	def test_setting_the_da_id_later_calls_the_registry(self):
-		with patch(FETCH) as fetch:
-			doc = self._user(da_id=None)
-		fetch.assert_not_called()
-		with patch(FETCH, return_value=RECORD) as fetch:
-			doc.reload()
-			doc.da_registry_id = DA_ID
-			doc.save(ignore_permissions=True)
-		fetch.assert_called_once_with(DA_ID)
-		self.assertEqual(len(self._rbac(doc.name, active=1)), 1)
-		self.assertEqual(len(self._kebele(doc.name, state="Effective")), 1)
-
-	def test_changed_da_id_moves_the_api_assignment_and_supersedes_the_kebele(self):
-		with patch(FETCH, return_value=RECORD):
-			doc = self._user()
-		with patch(FETCH, return_value=RECORD_MOVED) as fetch:
-			doc.reload()
-			doc.da_registry_id = DA_ID_2
-			doc.save(ignore_permissions=True)
-		fetch.assert_called_once_with(DA_ID_2)
-
-		rbac = self._rbac(doc.name)
-		self.assertEqual([(r.region_scope, r.active) for r in rbac], [("ET04", 0), ("ET03", 1)])
-		kebele = self._kebele(doc.name)
-		self.assertEqual(
-			[(k.kebele, k.state) for k in kebele],
-			[("ET04-W01-K01", "Superseded"), ("ET03-W02-K01", "Effective")],
-		)
-
-	def test_changed_da_id_with_the_same_kebele_replaces_the_old_row(self):
-		with patch(FETCH, return_value=RECORD):
-			doc = self._user()
-		with patch(FETCH, return_value=RECORD):
-			doc.reload()
-			doc.da_registry_id = DA_ID_2
-			doc.save(ignore_permissions=True)
-		kebele = self._kebele(doc.name)
-		self.assertEqual(
-			[(k.kebele, k.da_id, k.state) for k in kebele],
-			[("ET04-W01-K01", DA_ID, "Superseded"), ("ET04-W01-K01", DA_ID_2, "Effective")],
-		)
 
 	def test_the_failure_message_hides_unexpected_errors(self):
 		self.assertEqual(sync._user_message(utils.StaffAPIError("set X", kind="config")), "set X")

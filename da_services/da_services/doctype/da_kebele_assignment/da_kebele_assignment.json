@@ -235,7 +235,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-14 11:21:02.447003",
+ "modified": "2026-11-19 03:08:43.547377",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Kebele Assignment",
@@ -244,6 +244,7 @@
  "permissions": [
   {
    "create": 1,
+   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,
@@ -255,6 +256,7 @@
   },
   {
    "create": 1,
+   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,

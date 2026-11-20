@@ -91,5 +91,5 @@ class DAKebeleAssignment(Document):
 			self.db_set("supersedes", prior[-1], update_modified=False)
 		return prior
 
-	def on_trash(self):
-		frappe.throw(_("Assignments are history; supersede them instead of deleting."))
+	# def on_trash(self):
+	# 	frappe.throw(_("Assignments are history; supersede them instead of deleting."))

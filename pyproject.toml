@@ -49,6 +49,7 @@ select = [
     "UP",
     "B",
     "RUF",
+    "TID251", # banned-api: see [tool.ruff.lint.flake8-tidy-imports.banned-api]
 ]
 ignore = [
     "B017", # assertRaises(Exception) - should be more specific
@@ -71,6 +72,14 @@ ignore = [
     "UP040", # Use type aliases instead of type annotations
 ]
 typing-modules = ["frappe.types.DF"]
+
+# Raw SQL ties the code to one database engine (CI runs PostgreSQL) and bypasses
+# permissions. Use frappe.qb, frappe.get_all / get_list or frappe.db.get_value etc.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"frappe.db.sql".msg = "Raw SQL is not allowed; use frappe.qb or frappe.get_all / frappe.db.get_value."
+"frappe.db.sql_list".msg = "Raw SQL is not allowed; use frappe.qb or frappe.get_all(..., pluck=...)."
+"frappe.db.multisql".msg = "Raw SQL is not allowed; use frappe.qb."
+"frappe.db.sql_ddl".msg = "Raw SQL is not allowed; use frappe.qb or a schema API."
 
 [tool.ruff.format]
 quote-style = "double"

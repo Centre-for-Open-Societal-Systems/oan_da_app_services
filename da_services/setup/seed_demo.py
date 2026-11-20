@@ -71,10 +71,12 @@ def _user(email: str, first_name: str, role: str, grant: dict) -> None:
 	if grant.get("da_id") and u.get("da_registry_id") != grant["da_id"]:
 		# The grant's DA-ID is fetched from the user's DA Registry ID (unique): the demo
 		# user takes it over from any other user on this developer site.
-		frappe.db.sql(
-			"update `tabUser` set da_registry_id = null where da_registry_id = %s and name != %s",
-			(grant["da_id"], email),
-		)
+		User = frappe.qb.DocType("User")
+		(
+			frappe.qb.update(User)
+			.set(User.da_registry_id, None)
+			.where((User.da_registry_id == grant["da_id"]) & (User.name != email))
+		).run()
 		frappe.db.set_value("User", email, "da_registry_id", grant["da_id"])
 	if not frappe.db.exists("DA RBAC Assignment", {"user": email, "role": role, "active": 1}):
 		doc = frappe.new_doc("DA RBAC Assignment")
