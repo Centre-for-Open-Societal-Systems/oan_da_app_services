@@ -224,7 +224,7 @@ def process_farmer_update(event_name: str) -> None:
 
 	try:
 		# Parse payload
-		payload = json.loads(event.payload)
+		payload = frappe.parse_json(event.payload)  # text on MariaDB, a dict on PostgreSQL
 		farmer_id = payload["farmer_id"]
 		updates = payload["updates"]
 		expected_version = payload.get("expected_version")
@@ -293,7 +293,7 @@ def get_pending_updates(farmer_id: str) -> list[dict]:
 	farmer_events = []
 	for e in events:
 		try:
-			payload = json.loads(e.payload)
+			payload = frappe.parse_json(e.payload)  # text on MariaDB, a dict on PostgreSQL
 			if payload.get("farmer_id") == farmer_id:
 				farmer_events.append(
 					{

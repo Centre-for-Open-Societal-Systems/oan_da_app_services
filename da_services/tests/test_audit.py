@@ -63,7 +63,8 @@ class TestAudit(IntegrationTestCase):
 		doc.save()
 		updated = _events(action=audit.RBAC_UPDATED, entity_name=doc.name)
 		self.assertEqual(len(updated), 1)
-		self.assertIn("ET04-W02", updated[0].details)
+		# A JSON column reads back as a string on MariaDB and as a dict on PostgreSQL.
+		self.assertIn("ET04-W02", frappe.as_json(updated[0].details))
 
 		doc.active = 0
 		doc.save()

@@ -329,7 +329,8 @@ class TestBroadcast(IntegrationTestCase):
 		self.assertEqual(len(rows), 1)
 		self.assertEqual(rows[0].user, COMMS_NATIONAL)
 		self.assertEqual(rows[0].decision, "allowed")
-		self.assertIn('"recipients": 1', rows[0].details)
+		# A JSON column reads back as a string on MariaDB and as a dict on PostgreSQL.
+		self.assertEqual(frappe.parse_json(rows[0].details)["recipients"], 1)
 
 	# -- API ------------------------------------------------------------------
 

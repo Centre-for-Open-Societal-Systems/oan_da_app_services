@@ -23,7 +23,6 @@ from da_services.services import constants as C
 from da_services.utils.permissions import ScopeContext, require_roles
 
 WRITE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
-LOCK_TIMEOUT_SECONDS = 5
 
 
 def create_farmer_link(
