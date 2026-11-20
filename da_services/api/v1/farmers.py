@@ -3,6 +3,7 @@
 GET /api/v1/da-services/farmers                (?search_text= searches the live registry, DA-272)
 GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
+GET /api/v1/da-services/farmers/{id}/advisory       (questions and answers of Advisory visits)
 GET /api/v1/da-services/farmers/{id}/permissions
 GET /api/v1/da-services/farmers/{id}/plots
 GET /api/v1/da-services/farmers/{id}/photo          (signed link, read fresh)
@@ -39,6 +40,7 @@ from da_services.integrations.farmer_registry.client import (
 from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
 from da_services.services import constants as C
 from da_services.services import farmers
+from da_services.services import visits as visit_svc
 from da_services.utils.permissions import require_roles
 
 # Roles that may read farmers
@@ -385,6 +387,25 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 			"total": total,
 		}
 	)
+
+
+@route("/farmers/<farmer_id>/advisory", methods=("GET",), summary="Get farmer advisory questions and answers")
+@frappe.whitelist()
+@handle_api_errors
+def get_farmer_advisory(farmer_id: str, limit=None, start=None):
+	"""Questions and answers of a farmer's Advisory visits (farmer profile, Advisory tab).
+
+	One row per question, newest first; each row carries ``question``, ``answer``,
+	``creation`` and ``modified``. Every Advisory Q&A of the farmer is returned, with no
+	permission or scope filter.
+	"""
+	farmer_id = (farmer_id or "").strip()
+	if not farmer_id:
+		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
+	limit = cint(limit or 50)
+	start = cint(start or 0)
+	rows = visit_svc.list_farmer_advisory(farmer_id, limit=limit, start=start)
+	return success_response(data=rows, meta={"total": len(rows), "limit": limit, "start": start})
 
 
 @route("/farmers/<farmer_id>/permissions", methods=("GET",), summary="Check farmer edit permissions")

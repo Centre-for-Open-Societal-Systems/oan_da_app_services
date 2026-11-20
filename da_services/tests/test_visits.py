@@ -341,6 +341,66 @@ class TestDAVisit(IntegrationTestCase):
 		rows, total = visits.list_visits(status="Completed")
 		self.assertEqual(total, 0)
 
+	def test_farmer_advisory_lists_all_questions_newest_first(self):
+		frappe.set_user(DA1)
+		older = visits.plan_visit(
+			farmer_id="FR-ADV-1",
+			farmer_name="Advisory Farmer",
+			scheduled_at=self.tomorrow,
+			visit_type="Advisory",
+			advisory_qa=[
+				{"question": "Rust on teff?", "answer": "Spray within 3 days"},
+				{"question": "When to top-dress?", "answer": ""},
+			],
+			user=DA1,
+		)
+		# A farmer has one open Advisory visit at a time, so each is closed before the next is planned.
+		frappe.db.set_value("DA Visit", older["name"], "physical_status", visits.COMPLETE)
+		newer = visits.plan_visit(
+			farmer_id="FR-ADV-1",
+			farmer_name="Advisory Farmer",
+			scheduled_at=add_days(self.tomorrow, 2),
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Which seed rate?", "answer": "25 kg/ha"}],
+			user=DA1,
+		)
+		frappe.db.set_value("DA Visit", newer["name"], "physical_status", visits.COMPLETE)
+		# This farmer's Advisory visit with no questions, and another farmer's Advisory visit.
+		empty = visits.plan_visit(
+			farmer_id="FR-ADV-1",
+			farmer_name="Advisory Farmer",
+			scheduled_at=add_days(self.tomorrow, 4),
+			visit_type="Advisory",
+			user=DA1,
+		)
+		other = visits.plan_visit(
+			farmer_id="FR-ADV-2",
+			farmer_name="Other Farmer",
+			scheduled_at=self.tomorrow,
+			visit_type="Advisory",
+			advisory_qa=[{"question": "Not this farmer", "answer": ""}],
+			user=DA1,
+		)
+		for visit in (older, newer, empty, other):
+			stamp_visit_geo(visit["name"], self.geo)
+
+		rows = visits.list_farmer_advisory("FR-ADV-1")
+		self.assertEqual(
+			[(row.question, row.answer) for row in rows],
+			[
+				("Which seed rate?", "25 kg/ha"),
+				("Rust on teff?", "Spray within 3 days"),
+				("When to top-dress?", ""),
+			],
+		)
+		self.assertEqual(set(rows[0]), {"question", "answer", "creation", "modified"})
+		self.assertTrue(all(row.creation and row.modified for row in rows))
+		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1", limit=1, start=1)), 1)
+
+		# Every caller gets all of the farmer's questions, whatever their kebele or role.
+		frappe.set_user(DA3)
+		self.assertEqual(len(visits.list_farmer_advisory("FR-ADV-1")), 3)
+
 	def test_list_area_filters_use_user_permissions(self):
 		# Out-of-scope geography filters no longer throw; get_list + User Permissions return empty.
 		frappe.set_user(SUP)

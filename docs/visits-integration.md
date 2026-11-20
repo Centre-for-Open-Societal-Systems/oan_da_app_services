@@ -92,6 +92,27 @@ returned page length unless a cross-page total is added later).
 | POST | `/visits/<id>/submit` | Outcome |
 | POST | `/visits/<id>/attachments` | Multipart evidence |
 | GET | `/reports/activity` | Weekly report (`week`, optional `da_id`) |
+| GET | `/farmers/<farmer_id>/advisory` | A farmer's Advisory questions and answers (below) |
+
+## `GET /farmers/<farmer_id>/advisory`
+
+Farmer profile, Advisory tab. One row per question of the farmer's Advisory visits, newest
+first, in the order the questions were saved:
+
+```json
+{ "question": "Which fertiliser for teff?", "answer": "",
+  "creation": "2026-11-17 15:29:29.432267", "modified": "2026-11-18 10:02:11.120345" }
+```
+
+`creation` and `modified` are the Q&A row's own Frappe timestamps (a row takes the visit's
+creation when it is first saved, and the visit's modified on every save of the visit).
+
+Query: `limit` (default 50, max 500), `start`. Meta: `{ total, limit, start }` (`total` is
+the returned page length). Every Advisory Q&A of the farmer is returned, whoever planned the
+visit and whatever the caller's kebele or role: this endpoint applies no DA Visit Role DocPerm,
+User Permissions or role check. Rows are found by the parent `DA Visit.farmer_id`. An Advisory
+visit with no questions gives no row. A blank `farmer_id` is a validation error.
+`GET /visits` does not carry the questions; `GET /visits/<id>` does (`advisory_qa[]`).
 
 ## Related
 

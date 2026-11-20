@@ -154,6 +154,7 @@ The API returns the Farmer Registry's own state and the UI maps it.
 | Holdings | `Plot {code, crop, areaHa, soil, zone, lat, lng, tenure}` | `GET /farmers/{id}/plots` | Farmer Registry (Land Registry later) |
 | Crop history | Crop Sown rows (`source` split); GPS in section/tabs when staff returns it | `GET /farmers/{id}/crops?source=submission\|register` (required); `?submission_id=` for one draft; `?internal_record_id=&tab_id=` for one register tab; intake via `GET /crop-sown/intake-form?form=` (required) | Crop Sown staff |
 | Visit history | `Visit {title, summary, date, time}` | `GET /visits?farmer_id=&status=Completed` | ours: DA Visit |
+| Advisory (questions and answers) | one row per question `{question, answer, creation, modified}`, newest first | `GET /farmers/{id}/advisory?limit&start` (all of the farmer's Advisory Q&A, no permission filter; saved by `POST /visits`, answered by `POST /visits/{id}/submit`) | ours: DA Visit + `DA Visit Advisory QA` |
 | Documents | `FarmerDocument {name, uploadedAt, size}` + download | `GET /farmers/{id}/documents`, file URL | Farmer Registry (files) |
 | Advisory notes | `AdvisoryNote {date, author, text}`; Add note modal | `GET/POST /farmers/{id}/advisory-notes` | ours: new child of DA Farmer Link (`DA Advisory Note`, see §3) |
 | Action strip: Plan visit | §2.6 | | |
@@ -481,16 +482,32 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 | Element | API | Source |
 |---|---|---|
 | Header, stats, learning summary | `GET /profile/me` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
-| Edit demographics | `POST /profile/change-requests {changes {mobile, email, language, photo}}` → Supervisor approval | ours: DA Profile Change Request (data-model 4.4) |
+| Photo, Education & Professional records (certificates), family members | `GET /profile/me` (`photo`, `qualifications[]`, `dependents[]`); a certificate: `GET /profile/documents/{document_id}` | DA Registry (#66) |
+| Change photo, education records, certificates, family members | `POST /profile/photo`, `/profile/photo/remove`, `/profile/qualifications`, `/profile/certificates`, `/profile/certificates/remove`, `/profile/family-members`; pending and verified certificates: `GET /profile/certificates` → same two approvals → DA Registry | ours: DA Profile Change Request, DA Certificate |
+| Edit profile (Contact incl. home address, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`) | ours: DA Profile Change Request (data-model 4.4) |
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
+| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only | ours: DA Attendance Punch |
 
 Supervisor-side approvals for all of the above are the `ApprovalRequest` queue (`/approvals`): `kind
 (Onboarding | Profile change | Assignment | Specialization)`, `data[] {label, value, verified}`, `trail[]`,
 decisions approve / changes / reject with a note (min 5 chars). Onboarding is Registry; the other three are
 ours → `GET /approvals?kind&status&kebele`, `POST /approvals/{id}/decide {decision, note}` using the approval
 workflow pattern (data-model 6.1).
+
+### Attendance punches
+
+DA / Supervisor / Executive punch-in and punch-out. One `DA Attendance Punch` row per action.
+GET returns `next_action` for the button; POST does not enforce alternation (message-only response).
+Contract: [attendance-punches-integration.md](attendance-punches-integration.md),
+[attendance-punches-frontend.md](attendance-punches-frontend.md).
+Postman: `postman/AttendancePunches/`.
+
+| Element | API | Source |
+|---|---|---|
+| Today status / button | `GET /attendance-punches/today` → `next_action` | ours |
+| Punch In / Punch Out | `POST /attendance-punches {action, punched_date, punched_time, geo?, lat?, lng?}` | ours |
 
 ### 2.19 Notifications
 

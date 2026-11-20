@@ -48,18 +48,28 @@ from .client import (
 )
 from .mapper import (
 	DA_TAB,
+	DEPENDENT_REGISTER,
 	LABEL_ATTRIBUTES,
 	PROFILE_FIELDS,
+	QUALIFICATION_REGISTER,
 	profile_changes_to_change_request,
 	registry_record_to_da_reference,
 )
-from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate
+from .schemas import (
+	DA_PLACEHOLDER,
+	DAReference,
+	IntegrationResult,
+	LifecycleOutcome,
+	ProfileUpdate,
+	SectionChange,
+)
 
 # Fixed on every environment (registry seed data)
 DEFAULT_REGISTER_ID = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3f90"
 DEFAULT_INTAKE_FORM_ID = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3f91"
 DEFAULT_IMPORT_DATA_MODEL_ID = "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3fb2"
 IMPORT_BUCKET = "import-files"
+DOCUMENT_BUCKET = "documents"  # photos and certificates (DA Registry #66)
 PAGE_SIZE = 100
 
 # Lists (My Teams, assignments, Region views) read each DA's record once more; those
@@ -141,6 +151,8 @@ class HttpDARegistryClient(DARegistryClient):
 		self.import_data_model_id = import_data_model_id
 		self.timeout = timeout
 		self.sender_app = sender_app
+		settle = frappe.conf.get("da_registry_cr_readback_seconds")
+		self.change_request_settle_seconds = float(6 if settle is None else settle)
 
 	@classmethod
 	def from_conf(cls, auth_mode: str | None = None) -> HttpDARegistryClient:
@@ -294,7 +306,9 @@ class HttpDARegistryClient(DARegistryClient):
 		"""Master Data labels of the DA's coded fields, {attribute_id: {value_id: label}}.
 
 		Without da_registry_master_data_url, or while Master Data is down, codes are shown
-		as words instead ("SENIOR_DA" -> "Senior da").
+		as words instead ("SENIOR_DA" -> "Senior da"). A list that cannot be read (one not
+		seeded yet, such as DA_RELATIONSHIP) leaves only its own codes as words; the set is
+		cached only when every list was read.
 		"""
 		if not self.master_data_url:
 			return {}
@@ -302,9 +316,9 @@ class HttpDARegistryClient(DARegistryClient):
 		labels = frappe.cache.get_value(key)
 		if labels is not None:
 			return labels
-		labels = {}
-		try:
-			for attribute_id in LABEL_ATTRIBUTES.values():
+		labels, complete = {}, True
+		for attribute_id in LABEL_ATTRIBUTES.values():
+			try:
 				body = self._post(
 					"/attributes/get_attribute_values",
 					{"attribute_id": attribute_id},
@@ -318,13 +332,13 @@ class HttpDARegistryClient(DARegistryClient):
 					},
 					base=self.master_data_url,
 				)
-				values = (body.get("response_payload") or {}).get("attribute_values") or []
-				labels[attribute_id] = {
-					v["value_id"]: v.get("value_display") or v["value_id"] for v in values
-				}
-		except DARegistryError:
-			return {}  # not cached: try again on the next read
-		frappe.cache.set_value(key, labels, expires_in_sec=LABEL_CACHE_SECONDS)
+			except DARegistryError:
+				complete = False  # not cached: try again on the next read
+				continue
+			values = (body.get("response_payload") or {}).get("attribute_values") or []
+			labels[attribute_id] = {v["value_id"]: v.get("value_display") or v["value_id"] for v in values}
+		if complete:
+			frappe.cache.set_value(key, labels, expires_in_sec=LABEL_CACHE_SECONDS)
 		return labels
 
 	def _find_internal_id(self, da_id: str) -> str | None:
@@ -384,18 +398,36 @@ class HttpDARegistryClient(DARegistryClient):
 			action="read DA record",
 			not_found=da_id,
 		)
+		# The tab answers the DA register's section with the DA's own row, and the list
+		# sections (DA Registry #66) with rows of their own registers linked to the DA.
+		record, lists = None, {QUALIFICATION_REGISTER: [], DEPENDENT_REGISTER: []}
 		for section in body.get("response_payload") or []:
-			if section.get("section_register_id") == self.register_id and section.get("records"):
-				return section["records"][0]
-		raise DANotFound(da_id or internal_id)
+			register = section.get("section_register_id")
+			rows = section.get("records") or []
+			if register == self.register_id:
+				if rows and record is None:
+					record = dict(rows[0])
+			elif register in lists:
+				lists[register].extend(
+					r for r in rows if r.get("link_internal_record_id") in (None, "", internal_id)
+				)
+		if record is None:
+			raise DANotFound(da_id or internal_id)
+		record["_qualifications"] = lists[QUALIFICATION_REGISTER]
+		record["_dependents"] = lists[DEPENDENT_REGISTER]
+		return record
 
 	# ------------------------------------------------------------------ commands
 
 	def push_profile_update(self, update: ProfileUpdate) -> IntegrationResult:
-		"""Open a registry change request; it applies after the registry's two-stage approval.
+		"""Open a registry change request for one section of the DA record.
 
-		The registry allows one pending change per DA and section, which also stops a
-		replay of the same update from opening a second request.
+		DA Services has already approved the change at both of its levels. Once the
+		registry's own approval stage is switched off it applies the change a few seconds
+		later; until then it waits there. The create answer says PENDING either way, so
+		the outcome is read back with change_request_status. The registry allows one
+		pending change per DA and section, which also stops a replay from opening a
+		second request.
 		"""
 		try:
 			section_id, fields = profile_changes_to_change_request(update.changes)
@@ -424,7 +456,9 @@ class HttpDARegistryClient(DARegistryClient):
 		except DARegistryUnavailable:
 			raise
 		except DARegistryError as exc:
-			return IntegrationResult(accepted=False, message=str(exc), retryable=False)
+			return IntegrationResult(
+				accepted=False, message=str(exc), retryable=False, error_code=getattr(exc, "code", None)
+			)
 
 		payload = body.get("response_payload") or {}
 		if not payload.get("change_request_id"):
@@ -438,6 +472,70 @@ class HttpDARegistryClient(DARegistryClient):
 			message=f"Registry approval {payload.get('approval_status') or 'PENDING'}",
 			raw=payload,
 		)
+
+	def push_section_change(self, change: SectionChange) -> IntegrationResult:
+		"""Open a change request on a list section (an Education & Professional record and
+		its certificates, a family member) or on the photo.
+
+		The registry applies it at once now that its own approval is off; the outcome is
+		read back with change_request_status, as for push_profile_update. It allows one
+		pending change request per DA and section.
+		"""
+		internal_id = self._find_internal_id(change.da_id)
+		if not internal_id:
+			return IntegrationResult(accepted=False, message=f"DA {change.da_id} is not in the DA Registry")
+		rows = [
+			{k: (internal_id if v == DA_PLACEHOLDER else v) for k, v in row.items()} for row in change.rows
+		]
+		try:
+			body = self._post(
+				"/change-requests/create_change_request",
+				{
+					"register_id": self.register_id,
+					"tab_id": DA_TAB,
+					"section_id": change.section_id,
+					"section_register_id": change.section_register_id or self.register_id,
+					"internal_record_id": internal_id,
+					"change_payload": rows,
+				},
+				action="create change request",
+			)
+		except DARegistryUnavailable:
+			raise
+		except DARegistryError as exc:
+			return IntegrationResult(
+				accepted=False, message=str(exc), retryable=False, error_code=getattr(exc, "code", None)
+			)
+		payload = body.get("response_payload") or {}
+		if not payload.get("change_request_id"):
+			return IntegrationResult(
+				accepted=False, message="DA Registry gave no change_request_id", retryable=False, raw=payload
+			)
+		return IntegrationResult(
+			accepted=True,
+			external_reference=payload["change_request_id"],
+			message=f"Registry approval {payload.get('approval_status') or 'PENDING'}",
+			raw=payload,
+		)
+
+	def upload_document(self, filename: str, content: bytes, content_type: str) -> str:
+		"""Store a photo or a certificate in the registry's document store; its document_id.
+
+		Only the id this call returns is ever sent in a change request: the registry does
+		not check that a document_id it is given exists.
+		"""
+		body = self._post(
+			"/documents/upload_documents",
+			{},
+			action="upload a document",
+			files={"documents": (filename, content, content_type)},
+			form={"bucket": DOCUMENT_BUCKET},
+		)
+		documents = (body.get("response_payload") or {}).get("documents") or []
+		document_id = documents[0].get("document_id") if documents else None
+		if not document_id:
+			raise DARegistryUnavailable("DA Registry stored the file but returned no document id")
+		return str(document_id)
 
 	def push_lifecycle_outcome(self, outcome: LifecycleOutcome) -> IntegrationResult:
 		# The registry has no record-status API and no leave / retirement / separation
@@ -496,6 +594,38 @@ class HttpDARegistryClient(DARegistryClient):
 			"items": body.get("response_payload") or [],
 			"total": (body.get("pagination_response") or {}).get("number_of_items") or 0,
 		}
+
+	def attribute_values(self, attribute_id: str) -> dict[str, str]:
+		"""A Master Data code list, read with the labels the profile already uses."""
+		if not self.master_data_url:
+			raise DARegistryError("da_registry_master_data_url is not set in site_config.json")
+		values = self._labels().get(attribute_id)
+		if values is None:
+			raise DARegistryUnavailable(f"Master Data list {attribute_id} could not be read")
+		return values
+
+	def document_links(self, document_ids: list[str]) -> dict[str, str]:
+		"""Short-lived links to registry documents, {document_id: url}.
+
+		The staff portal opens a saved file the same way: ``get_documents`` with the ids,
+		each answer row carrying a ``presigned_url`` (DA Registry #66, FileListCellWidget).
+		Not yet exercised against a live registry.
+		"""
+		ids = [d for d in dict.fromkeys(document_ids) if d]
+		if not ids:
+			return {}
+		body = self._post("/documents/get_documents", {"document_ids": ids}, action="read document links")
+		payload = body.get("response_payload")
+		rows = payload if isinstance(payload, list) else (payload or {}).get("documents") or []
+		links = {}
+		for i, row in enumerate(rows):
+			if not isinstance(row, dict):
+				continue
+			url = row.get("presigned_url") or row.get("url")
+			doc = row.get("document_id") or (ids[i] if i < len(ids) else None)
+			if doc and url:
+				links[str(doc)] = url
+		return links
 
 	def change_request_status(self, reference: str) -> str:
 		body = self._post(
@@ -600,7 +730,15 @@ class HttpDARegistryClient(DARegistryClient):
 		if header.get("response_status") != "SUCCESS":
 			if not_found and any(m in message.lower() for m in _NOT_FOUND_MARKERS):
 				raise DANotFound(not_found)
-			raise DARegistryError(f"DA Registry refused to {action}: {message or 'no reason given'}")
+			code = str(header.get("response_error_code") or "").strip() or None
+			# A refusal is HTTP 200: log it here, or nothing records why a call failed.
+			_log_error(
+				title="DA Registry refused request",
+				message=f"{action}: {code or 'no code'} {path}\n{message[:300]}",
+			)
+			raise DARegistryError(
+				f"DA Registry refused to {action}: {message or 'no reason given'}", code=code
+			)
 		return data.get("response_body") or {}
 
 	# ------------------------------------------------------------------ auth
