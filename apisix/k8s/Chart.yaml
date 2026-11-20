@@ -3,3 +3,6 @@ name: oan-da-services-gateway
 description: APISIX Ingress Controller routes for the OAN DA services API
 type: application
 version: 0.0.1
+annotations:
+  oan.org/owner: OpenAgriNet (OAN)
+  oan.org/chart-source: https://github.com/Centre-for-Open-Societal-Systems/oan_da_app_services/tree/develop/apisix/k8s
