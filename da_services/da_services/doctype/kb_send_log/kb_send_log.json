@@ -1,10 +1,9 @@
 {
  "actions": [],
- "allow_rename": 0,
- "creation": "2026-11-09 12:00:00.000000",
+ "autoname": "format:KB-SND-{#######}",
+ "creation": "2026-11-09 12:00:00",
  "description": "One send of a KB Article to one recipient. KB Article.send_count is derived from these rows.",
  "doctype": "DocType",
- "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
   "article",
@@ -18,31 +17,31 @@
   {
    "fieldname": "article",
    "fieldtype": "Link",
-   "label": "Article",
-   "options": "KB Article",
-   "reqd": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "read_only": 1
+   "label": "Article",
+   "options": "KB Article",
+   "read_only": 1,
+   "reqd": 1
   },
   {
+   "description": "Phone number, Telegram id or farmer reference.",
    "fieldname": "recipient",
    "fieldtype": "Data",
-   "label": "Recipient",
-   "reqd": 1,
    "in_list_view": 1,
+   "label": "Recipient",
    "read_only": 1,
-   "description": "Phone number, Telegram id or farmer reference."
+   "reqd": 1
   },
   {
    "fieldname": "channel",
    "fieldtype": "Select",
-   "label": "Channel",
-   "options": "SMS\nTelegram\nWhatsApp",
-   "reqd": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "read_only": 1
+   "label": "Channel",
+   "options": "SMS\nTelegram\nWhatsApp",
+   "read_only": 1,
+   "reqd": 1
   },
   {
    "fieldname": "col_a",
@@ -51,11 +50,11 @@
   {
    "fieldname": "sent_by",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Sent By",
    "options": "User",
-   "reqd": 1,
-   "in_list_view": 1,
-   "read_only": 1
+   "read_only": 1,
+   "reqd": 1
   },
   {
    "fieldname": "sent_on",
@@ -64,57 +63,56 @@
    "read_only": 1
   }
  ],
- "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-09 12:00:00.000000",
+ "modified": "2026-11-20 22:01:15.822562",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "KB Send Log",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
-   "role": "System Manager",
-   "read": 1,
-   "report": 1,
    "create": 1,
-   "export": 1
-  },
-  {
-   "role": "OAN Administrator",
+   "export": 1,
    "read": 1,
    "report": 1,
+   "role": "System Manager"
+  },
+  {
    "create": 1,
-   "export": 1
-  },
-  {
-   "role": "Communications Officer",
+   "export": 1,
    "read": 1,
    "report": 1,
+   "role": "OAN Administrator"
+  },
+  {
    "create": 1,
-   "export": 1
-  },
-  {
-   "role": "Development Agent",
+   "export": 1,
    "read": 1,
    "report": 1,
-   "create": 1
+   "role": "Communications Officer"
   },
   {
-   "role": "Supervisor",
+   "create": 1,
    "read": 1,
-   "report": 1
+   "report": 1,
+   "role": "Development Agent"
   },
   {
-   "role": "Executive",
    "read": 1,
-   "report": 1
+   "report": 1,
+   "role": "Supervisor"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Executive"
   }
  ],
  "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "autoname": "format:KB-SND-{#######}",
  "title_field": "article",
- "naming_rule": "Expression"
+ "track_changes": 1
 }
