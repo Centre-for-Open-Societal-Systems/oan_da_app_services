@@ -245,7 +245,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 		self.assertNotEqual(event.reference_id, "farmer-uuid-001")  # Not the farmer_id
 
 		# Verify payload
-		payload = json.loads(event.payload)
+		payload = frappe.parse_json(event.payload)
 		self.assertEqual(payload["farmer_id"], "farmer-uuid-001")  # farmer_id in payload
 		self.assertEqual(payload["updates"]["phone"], "912345678")
 		self.assertEqual(payload["updates"]["email"], "newemail@example.com")
@@ -322,8 +322,8 @@ class TestFarmerUpdates(IntegrationTestCase):
 		self.assertEqual(event2.reference_id, "update-2-email")
 
 		# Verify payloads are different
-		payload1 = json.loads(event1.payload)
-		payload2 = json.loads(event2.payload)
+		payload1 = frappe.parse_json(event1.payload)
+		payload2 = frappe.parse_json(event2.payload)
 
 		self.assertIn("phone", payload1["updates"])
 		self.assertIn("email", payload2["updates"])
@@ -351,7 +351,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 
 		# Verify all fields in payload
 		event = frappe.get_doc("DA Integration Event", result["data"]["event_id"])
-		payload = json.loads(event.payload)
+		payload = frappe.parse_json(event.payload)
 		updates = payload["updates"]
 
 		self.assertEqual(updates["phone"], "912345678")

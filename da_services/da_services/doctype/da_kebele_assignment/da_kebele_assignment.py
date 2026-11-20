@@ -48,8 +48,8 @@ class DAKebeleAssignment(Document):
 		An Effective decision replaces every live row of the DA. A pending one (Flagged /
 		Proposed / Validated) replaces only earlier pending rows, so the posting in force
 		stays Effective until a Supervisor overrides the flag. The rows being replaced are
-		read without a row lock; POST /assignments serialises decisions for one DA with
-		its own per-DA lock (services/assignments.py).
+		read without a lock: two decisions for one DA saved at the same moment are not
+		serialised.
 		"""
 		prior = self._supersede_prior()
 		# User Permission on the Kebele; the superseded rows fire no hooks, so their users too.
@@ -91,5 +91,5 @@ class DAKebeleAssignment(Document):
 			self.db_set("supersedes", prior[-1], update_modified=False)
 		return prior
 
-	def on_trash(self):
-		frappe.throw(_("Assignments are history; supersede them instead of deleting."))
+	# def on_trash(self):
+	# 	frappe.throw(_("Assignments are history; supersede them instead of deleting."))

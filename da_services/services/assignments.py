@@ -16,8 +16,7 @@ What is ours and what is not:
   boundary from DA Administrative Area. No boundary → "Not checked", recorded, not
   blocking.
 
-Consistency: the decision (new row + supersessions) is written under a per-DA lock and
-committed before the registry push and the notification, which are best-effort and
+Consistency: the decision (new row + supersessions) is committed before the registry push and the notification, which are best-effort and
 recorded on the row; a failure there never loses the decision.
 
 Scope: Supervisor acts within their Woreda, Executive reads their Region, Admin all;
@@ -49,7 +48,6 @@ from da_services.utils.permissions import ScopeContext, require_roles
 
 READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 WRITE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
-LOCK_TIMEOUT_SECONDS = 5
 
 ASSIGNMENT_FIELDS = [
 	"name",
@@ -345,22 +343,6 @@ def coverage(ctx: ScopeContext | None = None, *, woreda: str | None = None) -> d
 # -- assign / reassign ----------------------------------------------------------------
 
 
-def _lock_da(da_id: str) -> str:
-	"""Serialise decisions for one DA across requests (MariaDB named lock)."""
-	key = f"da_services:kebele_assignment:{da_id}"
-	got = frappe.db.sql("select get_lock(%s, %s)", (key, LOCK_TIMEOUT_SECONDS))[0][0]
-	if not got:
-		frappe.throw(
-			_("Another assignment for DA {0} is being saved; try again in a moment.").format(da_id),
-			frappe.ValidationError,
-		)
-	return key
-
-
-def _unlock(key: str) -> None:
-	frappe.db.sql("select release_lock(%s)", (key,))
-
-
 def _replayed(client_op_id):
 	"""The same device operation landed from a parallel request: answer with its row."""
 	existing = client_op_id and frappe.db.get_value(
@@ -435,38 +417,34 @@ def assign(
 	result, why = geofence.check(loc.get("lat"), loc.get("lng"), boundary, area.name_en)
 	state = "Flagged" if result == geofence.OUT_OF_BOUNDS else "Effective"
 
-	# The decision itself is written under a per-DA lock and committed, so it is never
-	# lost to a later failure of the registry push or the notification.
-	lock = _lock_da(ref.da_id)
+	# The decision itself is committed, so it is never lost to a later failure of the
+	# registry push or the notification.
+	doc = frappe.get_doc(
+		{
+			"doctype": "DA Kebele Assignment",
+			"user": user,
+			"da_id": ref.da_id,
+			"kebele": kebele,
+			"state": state,
+			"mode": mode,
+			"effective_date": getdate(effective_date) if effective_date else getdate(),
+			"reason": reason,
+			"assigned_by": ctx.user,
+			"geofence_result": result,
+			"geofence_reason": why,
+			"da_lat": loc.get("lat"),
+			"da_lng": loc.get("lng"),
+			"registry_sync_state": "Pending" if state == "Effective" else "Not sent",
+			"client_op_id": client_op_id,
+		}
+	)
 	try:
-		doc = frappe.get_doc(
-			{
-				"doctype": "DA Kebele Assignment",
-				"user": user,
-				"da_id": ref.da_id,
-				"kebele": kebele,
-				"state": state,
-				"mode": mode,
-				"effective_date": getdate(effective_date) if effective_date else getdate(),
-				"reason": reason,
-				"assigned_by": ctx.user,
-				"geofence_result": result,
-				"geofence_reason": why,
-				"da_lat": loc.get("lat"),
-				"da_lng": loc.get("lng"),
-				"registry_sync_state": "Pending" if state == "Effective" else "Not sent",
-				"client_op_id": client_op_id,
-			}
-		)
-		try:
-			doc.insert(ignore_permissions=True)
-		except frappe.DuplicateEntryError:
-			return _replayed(client_op_id)
-		except frappe.UniqueValidationError:
-			return _replayed(client_op_id)
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-	finally:
-		_unlock(lock)
+		doc.insert(ignore_permissions=True)
+	except frappe.DuplicateEntryError:
+		return _replayed(client_op_id)
+	except frappe.UniqueValidationError:
+		return _replayed(client_op_id)
+	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	if state == "Effective":
 		_push_to_registry(doc, ref, reason, ctx)

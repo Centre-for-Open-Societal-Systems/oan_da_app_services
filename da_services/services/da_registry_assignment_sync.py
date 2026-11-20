@@ -52,16 +52,26 @@ class AssignmentSyncError(Exception):
 
 
 def on_user_update(doc, method=None) -> None:
-	"""User ``on_update``: sync when the User is created with a DA-ID or its DA-ID changes.
+	"""User ``after_insert`` and ``on_update``: sync when the User is created with a DA-ID or
+	its DA-ID changes.
 
-	Frappe runs ``on_update`` on insert too (with ``flags.in_insert``), so this one hook
-	covers both.
+	On create Frappe runs ``after_insert`` and then ``on_update`` (with ``flags.in_insert``);
+	the flag set here makes the second one skip, so the registry is asked once per save.
 	"""
+	inserting = method == "after_insert" or doc.flags.in_insert
+	if (
+		method != "after_insert"
+		and doc.flags.in_insert
+		and doc.flags.pop("da_registry_synced_on_insert", False)
+	):
+		return  # on_update of an insert whose after_insert already synced
 	da_id = (doc.get("da_registry_id") or "").strip()
 	if not da_id:
 		return
-	if not doc.flags.in_insert and not doc.has_value_changed("da_registry_id"):
+	if not inserting and not doc.has_value_changed("da_registry_id"):
 		return
+	if method == "after_insert":
+		doc.flags.da_registry_synced_on_insert = True
 	sync_user_assignments(doc.name, da_id)
 
 

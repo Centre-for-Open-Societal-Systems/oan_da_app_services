@@ -179,9 +179,11 @@ has_permission = {
 
 doc_events = {
 	"User": {
-		# On create with a DA Registry ID, and when it changes: create the DA's RBAC and
-		# Kebele assignments from their DA Registry record (in the request, not a job).
-		"on_update": "da_services.services.da_registry_assignment_sync.on_user_update",
+		# On create with a DA Registry ID: create the DA's RBAC and Kebele assignments from
+		# their DA Registry record (in the request, not a job). A later change of
+		# da_registry_id does not sync.
+		"after_insert": "da_services.services.da_registry_assignment_sync.on_user_update",
+		# "on_update": "da_services.services.da_registry_assignment_sync.on_user_update",
 	},
 }
 

@@ -104,10 +104,12 @@ def ensure_geo_masters() -> None:
 
 def set_da_registry_id(user: str, da_id: str) -> None:
 	"""Give `user` the DA Registry ID `da_id`, taking it off any other user (it is unique)."""
-	frappe.db.sql(
-		"update `tabUser` set da_registry_id = null where da_registry_id = %s and name != %s",
-		(da_id, user),
-	)
+	User = frappe.qb.DocType("User")
+	(
+		frappe.qb.update(User)
+		.set(User.da_registry_id, None)
+		.where((User.da_registry_id == da_id) & (User.name != user))
+	).run()
 	frappe.db.set_value("User", user, "da_registry_id", da_id, update_modified=False)
 
 

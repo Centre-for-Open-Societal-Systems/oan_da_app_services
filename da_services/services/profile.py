@@ -62,7 +62,6 @@ DECISIONS = {"Approve": "Approved", "Reject": "Rejected", "Request changes": "Ch
 LEVEL2_DECISIONS = ("Approve", "Reject")
 NOTE_MIN_LENGTH = 5
 READ_BACK_STEP_SECONDS = 2
-LOCK_TIMEOUT_SECONDS = 5
 
 
 class AlreadyDecided(frappe.ValidationError):
@@ -460,24 +459,16 @@ def _submit(
 	on_created=None,
 ) -> dict:
 	"""Store a checked request. ``on_created(doc)`` adds what belongs to it (a file)."""
-	# Two submits for one DA at once (a double tap, the DA and the Supervisor together)
-	# would both pass the open-request check: take them one at a time.
-	lock = _lock_da(ref.da_id)
-	try:
-		# A transaction reads the database as it was when it began: start a new one now
-		# that the lock is held, or the check below cannot see the row a request that
-		# held the lock a moment ago has just committed.
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-		if client_op_id:
-			existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
-			if existing:
-				return serialize(frappe.get_doc(DOCTYPE, existing), ctx)  # the same operation, sent twice
-		out = _create_request(ctx, ref, section, diff, reason, client_op_id, as_supervisor, on_created)
-		# Committed before the lock is released, so the next holder sees this request.
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-		return out
-	finally:
-		_unlock(lock)
+	# A transaction reads the database as it was when it began: start a new one, so the
+	# check below sees a request another call has just committed.
+	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+	if client_op_id:
+		existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
+		if existing:
+			return serialize(frappe.get_doc(DOCTYPE, existing), ctx)  # the same operation, sent twice
+	out = _create_request(ctx, ref, section, diff, reason, client_op_id, as_supervisor, on_created)
+	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+	return out
 
 
 def _submitter(
@@ -767,58 +758,20 @@ def _push_list_change(doc, ctx: ScopeContext, client):
 	return client.push_section_change(change)
 
 
-def _lock(key: str, busy: str) -> str | None:
-	"""Take a MariaDB named lock across workers, or answer 400 with ``busy`` after a few seconds.
-
-	Released by ``_unlock`` in the caller's finally block, and by MariaDB itself if the
-	connection drops.
-	"""
-	if frappe.db.db_type != "mariadb":
-		return None  # no named locks on other engines; the request transaction still applies
-	key = f"da_services:profile_change:{key}"
-	if not frappe.db.sql("select get_lock(%s, %s)", (key, LOCK_TIMEOUT_SECONDS))[0][0]:
-		frappe.throw(busy, frappe.ValidationError)
-	return key
-
-
-def _lock_da(da_id: str) -> str | None:
-	"""Serialise submissions for one DA."""
-	return _lock(
-		f"da:{da_id}",
-		_("Another change request for DA {0} is being saved; try again in a moment.").format(da_id),
-	)
-
-
-def _one_at_a_time(action):
-	"""Run an action on one change request (decide, cancel, retry, close ...) alone.
-
-	Two people acting on the same request at the same moment (two Supervisors of a
-	Woreda, a double click) are taken one after the other. Each starts a new
-	transaction once it holds the lock and commits before it lets go, so the second
-	one reads what the first one did and gets the ordinary answer ("already approved
-	by ...") instead of a database conflict.
+def _in_own_transaction(action):
+	"""Run an action on one change request (decide, cancel, retry, close ...) in its own
+	transaction: it starts a new one, so it reads what an earlier call committed, and
+	commits what it did before returning.
 	"""
 
 	@functools.wraps(action)
 	def wrapper(name: str, *args, **kwargs):
-		key = _lock(
-			f"request:{name}",
-			_("Change request {0} is being processed by someone else; try again in a moment.").format(name),
-		)
-		try:
-			frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-			out = action(name, *args, **kwargs)
-			frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-			return out
-		finally:
-			_unlock(key)
+		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+		out = action(name, *args, **kwargs)
+		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+		return out
 
 	return wrapper
-
-
-def _unlock(key: str | None) -> None:
-	if key:
-		frappe.db.sql("select release_lock(%s)", (key,))
 
 
 def _create_request(
@@ -901,7 +854,7 @@ def _create_request(
 	return serialize(doc, ctx)
 
 
-@_one_at_a_time
+@_in_own_transaction
 def cancel_change_request(name: str, ctx: ScopeContext | None = None) -> dict:
 	"""Whoever sent a request (the DA, or the Supervisor) withdraws it while it waits for a decision.
 
@@ -1059,7 +1012,7 @@ def _allowed_decisions(row, ctx: ScopeContext) -> list[str]:
 	return list(DECISIONS) if level == 1 else list(LEVEL2_DECISIONS)
 
 
-@_one_at_a_time
+@_in_own_transaction
 def decide(
 	name: str,
 	*,
@@ -1312,7 +1265,7 @@ def _settle(doc, client, *, wait: bool = True) -> None:
 		time.sleep(min(READ_BACK_STEP_SECONDS, remaining))
 
 
-@_one_at_a_time
+@_in_own_transaction
 def retry_registry_push(name: str, ctx: ScopeContext | None = None) -> dict:
 	"""An Administrator sends a request the registry refused or could not take again."""
 	ctx = ctx or require_roles(C.ROLE_ADMIN)
@@ -1358,7 +1311,7 @@ def _registry_already_has(doc) -> bool:
 	return profile_fields.already_applied(doc.section, _changes(doc), ref, get_client())
 
 
-@_one_at_a_time
+@_in_own_transaction
 def sync_local_after_transfer(name: str, ctx: ScopeContext | None = None) -> dict:
 	"""An Administrator repeats the DA Services follow-up of an applied location change
 	(the move of the DA's DA RBAC grant) after it failed."""
@@ -1373,7 +1326,7 @@ def sync_local_after_transfer(name: str, ctx: ScopeContext | None = None) -> dic
 	return serialize(doc, ctx)
 
 
-@_one_at_a_time
+@_in_own_transaction
 def close_change_request(name: str, *, note: str | None = None, ctx: ScopeContext | None = None) -> dict:
 	"""An Administrator closes a request the registry did not apply; the DA may send a new one."""
 	ctx = ctx or require_roles(C.ROLE_ADMIN)
@@ -1461,27 +1414,17 @@ def _read_back(doc, client, *, notify_outcome: bool) -> str | None:
 	Returns "Approved" or "Rejected" once the registry has decided, or None while it is
 	still PENDING or cannot be asked right now.
 
-	Several calls may read the same answer at the same moment (the profile screen
-	loading twice, the DA and the Administrator together): only the one holding the
-	request's lock records it; the others skip. What is recorded is committed here,
-	because the read-back mostly runs inside GET requests, whose writes Frappe discards.
+	What is recorded is committed here, because the read-back mostly runs inside GET
+	requests, whose writes Frappe discards. A request another call has already recorded
+	is not recorded again.
 	"""
-	held = None
-	if frappe.db.db_type == "mariadb":
-		held = f"da_services:profile_change:request:{doc.name}"
-		# No waiting: whoever holds it (another read-back, a decision) is dealing with it.
-		if not frappe.db.sql("select get_lock(%s, 0)", (held,))[0][0]:
-			return None
-	try:
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-		doc.reload()
-		if doc.status != states.SENT_TO_REGISTRY:
-			return "Approved" if doc.status == states.APPLIED else None  # recorded a moment ago
-		outcome = _record_registry_answer(doc, client, notify_outcome=notify_outcome)
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
-		return outcome
-	finally:
-		_unlock(held)
+	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+	doc.reload()
+	if doc.status != states.SENT_TO_REGISTRY:
+		return "Approved" if doc.status == states.APPLIED else None  # recorded a moment ago
+	outcome = _record_registry_answer(doc, client, notify_outcome=notify_outcome)
+	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
+	return outcome
 
 
 def _record_registry_answer(doc, client, *, notify_outcome: bool) -> str | None:

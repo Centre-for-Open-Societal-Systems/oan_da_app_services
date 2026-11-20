@@ -72,7 +72,8 @@ def process_single(event_name: str) -> None:
 	frappe.db.commit()
 
 	try:
-		result = _dispatch(doc.event_type, json.loads(doc.payload))
+		# A JSON field reads back as text on MariaDB and as a dict on PostgreSQL.
+		result = _dispatch(doc.event_type, frappe.parse_json(doc.payload))
 		doc.db_set("status", "Completed", update_modified=True)
 		doc.db_set("completed_at", now_datetime(), update_modified=False)
 		if result and result.ticket_id:
