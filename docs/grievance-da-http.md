@@ -1,23 +1,10 @@
 # DA Services to Grievance Service
 
-The frontend calls DA Services. DA Services checks the caller's role, then calls the Grievance Service. DA Services does not store grievance cases.
-
-`grievance_backend` defaults to `mock`. Set it to `http` to use the live service. The mock treats a repeated `client_submission_uuid` as the original ticket.
+The frontend calls DA Services. DA Services is a thin proxy: it does not hard-code roles, permissions, or geography scope. Authz is owned by the Grievance Service (via the forwarded FE bearer) and by Frappe session login. DA Services does not store grievance cases.
 
 ## Authentication
 
-Later grievance calls send only `Authorization: Bearer {token}`. There is no CSRF header. The token is cached until 30 seconds before its JWT `exp`. `GET {base_url}/v1/auth/me` must include `Grievance Assisted Submitter`.
-
-`grievance_iam.login_key` selects the login:
-
-- `local`: `POST {base_url}/v1/auth/login` with `{"usr","pwd"}`. The token is `data.access_token`.
-- Any other value, including the default `agent`: one session carries cookies through the IAM login.
-  1. `POST {base_url}/v1/auth/iam/login` with `key`, `provider`, and `return_url`. `return_url` is `grievance_iam.return_url`, or the grievance base URL when that is unset. The response supplies `redirect_url` and `cookie_prefix`.
-  2. `GET` the redirect URL and follow redirects. Read the `kc-form-login` form action.
-  3. `POST` that action as `application/x-www-form-urlencoded` with `username`, `password`, and an empty `credentialId`. Do not follow redirects. The `Location` header is the callback.
-  4. `GET` the callback without following redirects. The access token is the `{cookie_prefix}X-Access-Token` cookie, or `X-Access-Token` when that cookie is absent.
-
-`grievance_api_token` is used only when `grievance_iam` has no username and password.
+Calls forward the frontend's `Authorization: Bearer {token}` to the Grievance Service. There is no CSRF header and no site-config service-account login. A missing bearer is an error. Upstream refusals (4xx/5xx) are wrapped and returned to the FE.
 
 Officer actions (resolve, reopen, close, reassign) are not exposed on the DA routes.
 
@@ -34,15 +21,15 @@ Officer actions (resolve, reopen, close, reassign) are not exposed on the DA rou
 | `POST /api/v1/da-services/grievances/{ticket}/attachments` | `POST /v1/grievances/{ticket_number}/attachments` (multipart) |
 | `GET /api/v1/da-services/grievances/{ticket}/attachments` | `GET /v1/grievances/{ticket_number}/attachments` |
 | `GET /api/v1/da-services/grievances/{ticket}/attachments/{attachment_id}/view` | `GET /v1/grievances/{ticket_number}/attachments`, then `GET /v1/attachments/{attachment_id}/view` |
-| `POST /api/v1/da-services/grievances/sync/retry` | Retries a failed DA Integration Event. DA Services Admin only. |
+| `POST /api/v1/da-services/grievances/sync/retry` | Offline retry (not finalized yet). |
 
 A successful submit returns `data.ticket_number` as both `ticket_id` and `ticket_number`. There is no `GET /v1/grievances/{ticket_number}`. The case is `GET /v1/grievances/{ticket_number}/timeline`: description, category, type, submitter, SLA, and timeline. Timeline rows map `created_on`, `entry_type`, `author_name`, and `body` to `timestamp`, `action`, `actor`, and `detail`. `sla_consumed_percent` is not on that SLA object.
 
-List requests send `page`, `page_size`, and `sort_order=desc`. Rows are `data.grievances`. `creation` and `modified` become `created_at` and `updated_at`. A row has no `description`, so `subject` is `grievance_type_name` or `grievance_type`. `location` is the display string or hierarchy when the service sends one, otherwise `administrative_unit`, otherwise the `administrative_area` id. Optional filters are `status`, `category`, `location`, `from_date`, `to_date`, and `search`. `complainant_id` is not sent: a Development Agent's list is limited by the agent token. Scoped callers who are not Development Agents still have `region` or `woreda` narrowed to their grant.
+List requests send `page`, `page_size`, and `sort_order=desc`. Rows are `data.grievances`. `creation` and `modified` become `created_at` and `updated_at`. A row has no `description`, so `subject` is `grievance_type_name` or `grievance_type`. `location` is the display string or hierarchy when the service sends one, otherwise `administrative_unit`, otherwise the `administrative_area` id. Optional filters are `status`, `category`, `location`, `from_date`, `to_date`, and `search`. Row visibility is decided upstream from the FE bearer; DA Services does not narrow by role or geography.
 
 Options call public `GET /v1/submitters/options` for categories, types, submitter types, and channels, then `GET /v1/grievances/options` for queue `statuses`, `departments`, and `submission_channels`. Category and type rows are `{value, label, code}`. A type is listed under a category only when that row names `service_category`. The DA route forwards `service_category`, `category`, `department`, `administrative_area`, `search_country`, `country`, and `include_phone_extensions`.
 
-Summary returns the upstream `data` object unchanged: `cards` of `status`, `label`, `order`, `is_open`, `is_terminal`, and `count`. An HTTP error, or a `200` body whose `status` is `error`, is not returned as a summary. The mock uses the same cards. A fixture status that is not a card counts under In Progress.
+Summary returns the upstream `data` object unchanged: `cards` of `status`, `label`, `order`, `is_open`, `is_terminal`, and `count`. An HTTP error, or a `200` body whose `status` is `error`, is not returned as a summary.
 
 ### Evidence
 
@@ -56,16 +43,16 @@ The list returns every file, Pending and Infected ones too, oldest first.
 
 View returns the file itself, not JSON: inline by default, a download with `?download=1`. The service reads an attachment by its id alone, so DA Services first checks the attachment is on the ticket in the path (`404` otherwise). The service refuses a file that is not Clean; that comes back as `400` with its message.
 
-An upload is never queued. When the Grievance Service is down the caller gets `503 SERVICE_UNAVAILABLE` and sends the files again. A grievance that is still queued (`sync_state: "pending"`) has no ticket yet, so evidence can be added only after it is synced.
+When the Grievance Service is down the caller gets `503 SERVICE_UNAVAILABLE` and sends the files again.
 
-The calls use the same configured Development Agent token as the other grievance routes, so the service credits the upload to that account. Like `GET /grievances/{ticket}`, these routes check the caller's DA Services role and do not check the ticket against the caller's own scope.
+Like the other grievance routes, evidence endpoints forward the FE bearer and pass upstream errors through; they do not apply DA Services role or scope checks.
 
 ### Submit body
 
 | Upstream field | Source |
 |---|---|
 | `submission_channel` | Always `Development Agent Assisted` |
-| `client_submission_uuid` | `client_op_id`, or a UUID generated once and stored on the queued payload |
+| `client_submission_uuid` | `client_op_id`, or a generated UUID |
 | `submitter_type` | `submitter_type`, otherwise `Individual Farmer` |
 | `submitter_name` | `submitter_name`, otherwise the caller's name |
 | `contact_mobile` | `contact_mobile` |
@@ -82,22 +69,12 @@ The calls use the same configured Development Agent token as the other grievance
 
 A repeated `client_submission_uuid` does not create a second case. The service answers `This submission has already been filed as {ticket_number}`, and the wrapper returns that ticket with `sync_state: synced`.
 
-On submit, a timeout, connection error, HTTP 5xx, or unreachable login is queued (`sync_state: pending`). An upstream 4xx is returned to the caller and is not queued. Other upstream faults return HTTP 502 and are not queued.
+On submit, a timeout, connection error, or HTTP 5xx returns HTTP 503 (`SERVICE_UNAVAILABLE`). An upstream 4xx is returned to the caller. Other upstream faults return HTTP 502. Offline queue / retry is not finalized yet.
 
-## Site config
+## Settings
 
-```json
-{
-  "grievance_backend": "http",
-  "grievance_base_url": "https://grievance.example.com/api",
-  "grievance_timeout_seconds": 20,
-  "grievance_iam": {
-    "login_key": "agent",
-    "return_url": "https://grievance.example.com/api",
-    "username": "<service account>",
-    "password": "<secret>"
-  }
-}
-```
+Set **Grievance Base URL** (`grievance_base_url`) on **DA Services Settings** — same pattern as Master Data Domain. If it is blank, the client raises a configuration error (same idea as an unset master domain).
 
-Use `login_key` `local` when the grievance site only offers password login. Keep the password in `site_config.json`. Do not commit it.
+Example value: `https://grievance-service.development.oanstaging.com` or bare host `grievance-service.development.oanstaging.com`.
+
+`grievance_base_url` is the Grievance **APISIX gateway** host. Public paths are `/v1/...` (no `/api`). The gateway rewrites to Frappe as `/api/v1/...`. Do not put `/api` on the base URL: `{base}/api/v1/...` through the gateway returns 404.

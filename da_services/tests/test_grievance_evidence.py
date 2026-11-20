@@ -16,7 +16,6 @@ from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
 from da_services.api.router import ensure_routes_registered
-from da_services.integrations.grievance.auth import AgentTokenProvider
 from da_services.integrations.grievance.client import (
 	GrievanceNotFound,
 	GrievanceRejected,
@@ -40,7 +39,6 @@ PNG = b"\x89PNG\r\n\x1a\n evidence"
 
 SUPERVISOR = "grv-evd-supervisor@da.local"
 DA_USER = "grv-evd-da@da.local"
-COMMS_USER = "grv-evd-comms@da.local"
 
 
 class _Response:
@@ -110,12 +108,19 @@ class TestEvidenceMapping(unittest.TestCase):
 
 
 class TestHttpEvidenceClient(unittest.TestCase):
-	BASE = "https://grievance.example/api"
+	BASE = "https://grievance.example"
 	TICKET = "B-014-0007-6"
 
+	def setUp(self):
+		self._auth = patch(
+			"da_services.integrations.grievance.client.frappe.get_request_header",
+			side_effect=lambda name: "Bearer fe-sso-token" if name == "Authorization" else None,
+		)
+		self._auth.start()
+		self.addCleanup(self._auth.stop)
+
 	def _client(self):
-		tokens = AgentTokenProvider(base_url=self.BASE, static_token="static-token")
-		return HttpGrievanceClient(self.BASE, timeout=5, tokens=tokens)
+		return HttpGrievanceClient(self.BASE, timeout=5)
 
 	@patch("da_services.integrations.grievance.client.requests.request")
 	def test_upload_sends_multipart_to_the_ticket(self, request):
@@ -149,7 +154,7 @@ class TestHttpEvidenceClient(unittest.TestCase):
 		)
 		self.assertEqual(call.kwargs["data"], {"document_type": "Receipt"})
 		self.assertIsNone(call.kwargs["json"])
-		self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer static-token")
+		self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer fe-sso-token")
 		# requests writes the multipart Content-Type, boundary included.
 		self.assertNotIn("Content-Type", call.kwargs["headers"])
 		self.assertGreaterEqual(call.kwargs["timeout"], 120)
@@ -204,7 +209,7 @@ class TestHttpEvidenceClient(unittest.TestCase):
 		content = self._client().get_attachment_content("GAT-00001")
 
 		self.assertEqual(request.call_args.args[1], f"{self.BASE}/v1/attachments/GAT-00001/view")
-		self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer static-token")
+		self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer fe-sso-token")
 		self.assertEqual(content, PDF)
 
 	@patch("da_services.integrations.grievance.client.requests.request")
@@ -309,19 +314,20 @@ class TestGrievanceEvidenceAPI(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		frappe.set_user("Administrator")
-		# These tests use the in-memory client. A site configured for http must not leak in.
-		self._grievance_backend = frappe.conf.get("grievance_backend")
-		frappe.conf.grievance_backend = "mock"
 		MockGrievanceClient.reset()
+		shared = MockGrievanceClient.shared()
+		self._api_client_patch = patch("da_services.api.v1.grievance.get_client", return_value=shared)
+		self._svc_client_patch = patch(
+			"da_services.services.grievance_evidence.get_client", return_value=shared
+		)
+		self._api_client_patch.start()
+		self._svc_client_patch.start()
 		_user(SUPERVISOR, C.ROLE_SUPERVISOR)
 		_user(DA_USER, C.ROLE_DA)
-		_user(COMMS_USER, C.ROLE_COMMS)
 
 	def tearDown(self):
-		if self._grievance_backend is None:
-			frappe.conf.pop("grievance_backend", None)
-		else:
-			frappe.conf.grievance_backend = self._grievance_backend
+		self._api_client_patch.stop()
+		self._svc_client_patch.stop()
 		MockGrievanceClient.reset()
 		frappe.set_user("Administrator")
 		super().tearDown()
@@ -412,12 +418,6 @@ class TestGrievanceEvidenceAPI(IntegrationTestCase):
 		res = self._upload([("files", "receipt.pdf", PDF)], ticket="GRV-999999")
 		self.assertEqual(res.status_code, 404)
 
-	def test_upload_needs_a_grievance_role(self):
-		for user in (COMMS_USER, "Guest"):
-			res = self._upload([("files", "receipt.pdf", PDF)], user=user)
-			self.assertIn(res.status_code, (401, 403), user)
-		self.assertEqual(self._json(self._list())["data"], [])
-
 	def test_upload_is_not_queued_when_the_service_is_down(self):
 		queued = frappe.db.count("DA Integration Event")
 		with patch.object(
@@ -450,9 +450,6 @@ class TestGrievanceEvidenceAPI(IntegrationTestCase):
 
 	def test_list_of_an_unknown_grievance_is_404(self):
 		self.assertEqual(self._list(ticket="GRV-999999").status_code, 404)
-
-	def test_list_needs_a_grievance_role(self):
-		self.assertIn(self._list(user=COMMS_USER).status_code, (401, 403))
 
 	# ------------------------------------------------------------------ view
 
@@ -489,8 +486,3 @@ class TestGrievanceEvidenceAPI(IntegrationTestCase):
 			res = self._view("GAT-00001")
 		self.assertEqual(res.status_code, 400)
 		self.assertIn("scan status is Pending", self._json(res)["message"])
-
-	def test_view_needs_a_grievance_role(self):
-		res = self._view(self._uploaded_id(), user=COMMS_USER)
-		self.assertIn(res.status_code, (401, 403))
-		self.assertNotEqual(res.get_data(), PDF)
