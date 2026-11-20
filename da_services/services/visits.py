@@ -127,9 +127,7 @@ def _check_specialization_conflict(farmer_id: str, new_specializations: list[str
 
 	Visit = frappe.qb.DocType("DA Visit")
 	Spec = frappe.qb.DocType("DA Visit Specialization")
-	open_for_farmer = (Visit.farmer_id == farmer_id) & (
-		Visit.physical_status.isin(BLOCKING_STATUSES)
-	)
+	open_for_farmer = (Visit.farmer_id == farmer_id) & (Visit.physical_status.isin(BLOCKING_STATUSES))
 
 	# Lock parent rows alone: Postgres rejects FOR UPDATE on the nullable side of a LEFT JOIN.
 	frappe.qb.from_(Visit).select(Visit.name).where(open_for_farmer).for_update().run()

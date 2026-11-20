@@ -702,9 +702,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 		frappe.db.commit()
 
 		# Manually set modified time to the past (simulate stuck event)
-		frappe.db.set_value(
-			"DA Integration Event", event.name, "modified", stale_time, update_modified=False
-		)
+		frappe.db.set_value("DA Integration Event", event.name, "modified", stale_time, update_modified=False)
 		frappe.db.commit()
 
 		# Mock client to fail so event stays Pending after recovery
@@ -759,9 +757,7 @@ class TestFarmerUpdates(IntegrationTestCase):
 		frappe.db.commit()
 
 		# Manually set modified time to the past
-		frappe.db.set_value(
-			"DA Integration Event", event.name, "modified", stale_time, update_modified=False
-		)
+		frappe.db.set_value("DA Integration Event", event.name, "modified", stale_time, update_modified=False)
 		frappe.db.commit()
 
 		# Run sweep
