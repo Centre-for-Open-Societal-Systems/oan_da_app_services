@@ -8,6 +8,7 @@ import json
 
 import frappe
 from frappe import _
+from frappe.query_builder.functions import Count, Max
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.da_services.doctype.da_visit.da_visit import OPEN_STATES
@@ -756,16 +757,13 @@ def _get_farmer_visit_counts_batch(farmer_ids: list[str]) -> dict[str, int]:
 	if not farmer_ids:
 		return {}
 
-	# Single query with GROUP BY
-	counts = frappe.db.sql(
-		"""
-		SELECT farmer_id, COUNT(*) as count
-		FROM `tabDA Visit`
-		WHERE farmer_id IN %(farmer_ids)s
-		GROUP BY farmer_id
-		""",
-		{"farmer_ids": farmer_ids},
-		as_dict=True,
+	Visit = frappe.qb.DocType("DA Visit")
+	counts = (
+		frappe.qb.from_(Visit)
+		.select(Visit.farmer_id, Count("*").as_("count"))
+		.where(Visit.farmer_id.isin(farmer_ids))
+		.groupby(Visit.farmer_id)
+		.run(as_dict=True)
 	)
 
 	return {row["farmer_id"]: row["count"] for row in counts}
@@ -783,23 +781,13 @@ def _get_last_visit_dates_batch(farmer_ids: list[str]) -> dict[str, str | None]:
 	if not farmer_ids:
 		return {}
 
-	# Single query to get most recent visit per farmer
-	# Using subquery to get max(scheduled_at) per farmer
-	visits = frappe.db.sql(
-		"""
-		SELECT v.farmer_id, v.scheduled_at
-		FROM `tabDA Visit` v
-		INNER JOIN (
-			SELECT farmer_id, MAX(scheduled_at) as max_scheduled
-			FROM `tabDA Visit`
-			WHERE farmer_id IN %(farmer_ids)s
-			GROUP BY farmer_id
-		) latest ON v.farmer_id = latest.farmer_id
-		          AND v.scheduled_at = latest.max_scheduled
-		WHERE v.farmer_id IN %(farmer_ids)s
-		""",
-		{"farmer_ids": farmer_ids},
-		as_dict=True,
+	Visit = frappe.qb.DocType("DA Visit")
+	visits = (
+		frappe.qb.from_(Visit)
+		.select(Visit.farmer_id, Max(Visit.scheduled_at).as_("scheduled_at"))
+		.where(Visit.farmer_id.isin(farmer_ids))
+		.groupby(Visit.farmer_id)
+		.run(as_dict=True)
 	)
 
 	return {row["farmer_id"]: row["scheduled_at"] for row in visits}
@@ -1024,20 +1012,16 @@ def _get_farmer_assigned_specializations_batch(farmer_ids: list[str]) -> dict[st
 	# Only open visits mark a specialization as assigned. A completed visit does not.
 	active_statuses = list(OPEN_STATES)
 
-	# Query active visits and their specializations
-	results = frappe.db.sql(
-		"""
-		SELECT
-			v.farmer_id,
-			vs.specialization
-		FROM `tabDA Visit` v
-		INNER JOIN `tabDA Visit Specialization` vs ON vs.parent = v.name
-		WHERE
-			v.farmer_id IN %(farmer_ids)s
-			AND v.physical_status IN %(statuses)s
-		""",
-		{"farmer_ids": farmer_ids, "statuses": active_statuses},
-		as_dict=True,
+	Visit = frappe.qb.DocType("DA Visit")
+	Spec = frappe.qb.DocType("DA Visit Specialization")
+	results = (
+		frappe.qb.from_(Visit)
+		.inner_join(Spec)
+		.on((Spec.parent == Visit.name) & (Spec.parenttype == "DA Visit"))
+		.select(Visit.farmer_id, Spec.specialization)
+		.where(Visit.farmer_id.isin(farmer_ids))
+		.where(Visit.physical_status.isin(active_statuses))
+		.run(as_dict=True)
 	)
 
 	# Group by farmer_id and deduplicate specializations
