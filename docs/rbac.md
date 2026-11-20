@@ -57,9 +57,8 @@ and `DA Profile Change Request` carry a `zone` column stamped from the DA's regi
 posting (or the farmer's reference) on insert, and the list hooks filter on it
 (`permissions._officer_scope_clause`). A user holding both a Woreda and a Zone grant sees
 the union of the two; a Region grant applies only when no narrower grant exists. Rows
-created before the column existed are filled by the `backfill_zone` patch (Woreda → Zone
-through `DA Administrative Area`, then the farmer reference, then the DA Registry); rows it
-cannot resolve stay empty and remain denied to Zone-only grants.
+with no `zone` stay denied to Zone-only grants. (Rows created before the column existed
+were filled once by the `backfill_zone` patch, since removed.)
 
 Admin list endpoints clamp `limit` to 1..500 and `start` to >= 0 (`rbac_service.clamp_page`).
 

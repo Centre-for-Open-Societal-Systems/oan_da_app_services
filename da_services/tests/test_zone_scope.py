@@ -6,7 +6,6 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now_datetime, today
 
-from da_services.patches import backfill_zone
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
 from da_services.tests.fixtures import (
@@ -290,18 +289,3 @@ class TestZoneScope(IntegrationTestCase):
 		farmers.list_farmers(_ctx(ZONE_EXEC), woreda="ET04-W01")  # under ET04-Z01: allowed
 		with self.assertRaises(frappe.PermissionError):
 			farmers.list_farmers(_ctx(ZONE_EXEC), woreda="ET04-W09")  # under ET04-Z02
-
-	# -- backfill patch -----------------------------------------------------------------
-
-	def test_backfill_fills_zone_from_master_data_then_registry(self):
-		# v1: Woreda known in master data. v9: Woreda not in master data, zone comes from the registry (DA-000001 posting).
-		frappe.db.sql("update `tabDA Visit` set zone = NULL")
-		frappe.db.set_value("DA Visit", self.v9.name, {"da_id": "DA-000001", "woreda": "ET04-W77"})
-		t = tasks.create_task(title="Backfill me", ctx=_ctx(DA1))
-		frappe.db.set_value("DA Task", t["name"], "zone", None)
-
-		backfill_zone.execute()
-
-		self.assertEqual(frappe.db.get_value("DA Visit", self.v1["name"], "zone"), "ET04-Z01")
-		self.assertEqual(frappe.db.get_value("DA Visit", self.v9.name, "zone"), "ET04-Z01")
-		self.assertEqual(frappe.db.get_value("DA Task", t["name"], "zone"), "ET04-Z01")
