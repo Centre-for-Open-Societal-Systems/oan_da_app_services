@@ -124,15 +124,18 @@ class TestDATask(IntegrationTestCase):
 				{"doctype": "DA Task", "da_id": "DA-000001", "title": "x", "client_op_id": "op-1"}
 			).insert(ignore_permissions=True, ignore_links=True)
 
-	# -- scope: lists via permission_query_conditions ---------------------------
+	# -- scope: lists via User Permissions on DA Region / Zone / Woreda -----------
 
 	def _visible(self, user) -> set[str]:
 		frappe.set_user(user)
 		return {r.da_id for r in frappe.get_list("DA Task", fields=["da_id"])}
 
-	def test_da_sees_only_own_tasks(self):
-		self.assertEqual(self._visible(DA1), {"DA-000001"})
-		self.assertEqual(self._visible(DA2), {"DA-000002"})
+	def test_da_sees_the_tasks_of_their_woreda(self):
+		# Scope is the DA's User Permissions (Region ET04, Woreda ET04-W01), so DAs of one
+		# Woreda see each other's tasks; another Region's are hidden.
+		self.assertEqual(self._visible(DA1), {"DA-000001", "DA-000002"})
+		self.assertEqual(self._visible(DA2), {"DA-000001", "DA-000002"})
+		self.assertEqual(self._visible(DA3), {"DA-000003"})
 
 	def test_supervisor_sees_own_woreda_only(self):
 		self.assertEqual(self._visible(SUP), {"DA-000001", "DA-000002"})
@@ -190,6 +193,8 @@ class TestDATask(IntegrationTestCase):
 		self.assertEqual(total, 1)
 		self.assertEqual(rows[0]["title"], "Submit weekly crop report")
 		rows, total = tasks.list_tasks(get_scope_context(DA1), status="Open")
+		self.assertEqual(total, 3)  # the Woreda's open tasks: DA-000001's two and DA-000002's
+		rows, total = tasks.list_tasks(get_scope_context(DA1), status="Open", da_id="DA-000001")
 		self.assertEqual(total, 2)
 		frappe.set_user(SUP)
 		_rows, total = tasks.list_tasks(get_scope_context(SUP))

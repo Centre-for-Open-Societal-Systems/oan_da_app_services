@@ -245,7 +245,7 @@ def list_farmer_links(
 	if is_active is not None:
 		filters["is_active"] = 1 if is_active else 0
 
-	# Apply scope filtering (mirrors da_farmer_link_query_conditions)
+	# Apply scope filtering
 	if not ctx.unrestricted:
 		if ctx.has_any_role(C.ROLE_DA):
 			# DAs see only their own links

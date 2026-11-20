@@ -590,11 +590,10 @@ class TestFarmersAPI(IntegrationTestCase):
 	def test_zone_scoped_supervisor_denied(self):
 		"""Test zone-scoped Supervisor is denied when no zone on records (PR #12 fix)."""
 		# Note: Can't create zone-only supervisor without woreda due to RBAC validation
-		# Instead, test that permission hook denies access when using frappe.get_list
-		# This tests the da_farmer_reference_query_conditions hook with zone scope
+		# Instead, test that User Permissions deny access through frappe.get_list (zone scope)
 
 		# Note: Supervisor RBAC requires woreda_scope, so we test the hook behavior
-		# by verifying that frappe.get_list applies the permission hook correctly
+		# by verifying that frappe.get_list applies User Permissions
 		frappe.set_user(SUP)  # Use existing supervisor
 
 		from da_services.api.v1.farmers import list_farmers

@@ -107,14 +107,16 @@
   },
   {
    "fieldname": "region",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Region",
+   "options": "DA Region",
    "read_only": 1
   },
   {
    "fieldname": "zone",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Zone",
+   "options": "DA Zone",
    "read_only": 1
   },
   {
@@ -123,9 +125,10 @@
   },
   {
    "fieldname": "woreda",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "in_standard_filter": 1,
    "label": "Woreda",
+   "options": "DA Woreda",
    "read_only": 1,
    "search_index": 1
   },
@@ -235,7 +238,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-19 03:08:43.547377",
+ "modified": "2026-11-21 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Kebele Assignment",

@@ -4,7 +4,11 @@ Who may do what (FSD Appendix D, enforced here, not in the UI):
 
 - Development Agent: create and complete tasks for their own DA-ID only.
 - Supervisor: create and complete tasks for DAs in their Woreda.
-- Executive: read only (lists come through permission_query_conditions).
+- Executive: read only.
+
+Which rows a list returns: Role permissions, then the user's User Permissions on
+DA Region / Zone / Woreda (the `region` / `zone` / `woreda` Link fields), applied by
+frappe.get_list.
 - OAN Administrator / System Manager: unrestricted.
 - Communications Officer: nothing.
 """
@@ -157,7 +161,7 @@ def list_tasks(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Tasks the caller may see. Scope comes from permission_query_conditions via frappe.get_list.
+	"""Tasks the caller may see. Scope comes from the caller's User Permissions via frappe.get_list.
 
 	`due`: "today" (due today), "overdue" (open and past due), or an ISO date.
 	"""
@@ -187,7 +191,7 @@ def list_tasks(
 		limit_page_length=limit,
 		limit_start=start,
 	)
-	# Scoped total: frappe.get_list applies permission_query_conditions; frappe.db.count would not.
+	# Scoped total: frappe.get_list applies User Permissions; frappe.db.count would not.
 	total = len(frappe.get_list("DA Task", filters=filters, pluck="name", limit_page_length=0))
 	return [serialize(frappe._dict(r)) for r in rows], total
 

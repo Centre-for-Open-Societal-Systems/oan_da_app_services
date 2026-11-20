@@ -115,14 +115,16 @@
   },
   {
    "fieldname": "region",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Region",
+   "options": "DA Region",
    "read_only": 1
   },
   {
    "fieldname": "zone",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Zone",
+   "options": "DA Zone",
    "read_only": 1
   },
   {
@@ -131,8 +133,9 @@
   },
   {
    "fieldname": "woreda",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Woreda",
+   "options": "DA Woreda",
    "read_only": 1
   },
   {
@@ -163,7 +166,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-19 12:00:00.000000",
+ "modified": "2026-11-21 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Response",

@@ -181,8 +181,11 @@ class TestScopeRule(IntegrationTestCase):
 		self.assertTrue(ctx.unrestricted)
 		self.assertTrue(ctx.covers("ET99", "ET99-W99"))
 
-	def test_non_admin_sees_only_own_assignments_in_list(self):
+	def test_non_admin_lists_assignments_within_their_user_permissions(self):
+		# The Supervisor's User Permissions (Region ET04, Woreda ET04-W01) filter the scope
+		# Links: assignments in their Woreda are listed, another Region's are not.
 		frappe.set_user(SUPERVISOR)
-		rows = frappe.get_list("DA RBAC Assignment", fields=["user"])
-		self.assertTrue(rows)
-		self.assertTrue(all(r.user == SUPERVISOR for r in rows))
+		users = {r.user for r in frappe.get_list("DA RBAC Assignment", fields=["user"])}
+		self.assertIn(SUPERVISOR, users)
+		self.assertIn(DA_USER, users)
+		self.assertNotIn(EXEC, users)

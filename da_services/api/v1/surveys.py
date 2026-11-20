@@ -12,7 +12,7 @@ GET   /api/v1/da-services/surveys/<id>/responses/export
 GET   /api/v1/da-services/surveys/<id>/results
 
 Thin: parse the request, call the service, wrap the envelope. Access comes from the
-DocType Role DocPerm and the permission hooks (da_services/permissions.py).
+DocType Role DocPerm and the user's User Permissions.
 """
 
 from __future__ import annotations

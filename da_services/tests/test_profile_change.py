@@ -1383,7 +1383,8 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		# hide a Supervisor's Woreda (seen on Dev, 19 Nov 2026: an empty Approvals list).
 		_user(DUAL, [C.ROLE_DA, C.ROLE_SUPERVISOR])
 		_grant(DUAL, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		# The role string alone, or the area on a DA grant, opens nothing.
+		# The Supervisor role with the Woreda of a DA grant: the grant's User Permissions on
+		# DA Region / Zone / Woreda are what scope lists, so that Woreda's requests are listed.
 		_user(ROLE_ONLY, [C.ROLE_DA, C.ROLE_SUPERVISOR])
 		_grant(
 			ROLE_ONLY,
@@ -1399,7 +1400,7 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual([r["name"] for r in rows], [name])
 		self.assertTrue(rows[0]["can_decide"])
 		frappe.set_user(ROLE_ONLY)
-		self.assertEqual(api.list_requests()["data"], [])
+		self.assertEqual([r["name"] for r in api.list_requests()["data"]], [name])
 		frappe.set_user(DA1)
 		self.assertEqual([r["name"] for r in api.list_requests()["data"]], [name])  # a DA: own rows
 		frappe.set_user(SUP_OTHER)

@@ -251,7 +251,7 @@ class TestZoneScope(IntegrationTestCase):
 			self.assertEqual(self._visible(dt, OTHER_ZONE_EXEC), {OTHER_DA}, dt)
 			self.assertEqual(self._visible(dt, REGION_EXEC), {"DA-000001", OTHER_DA}, dt)
 
-		frappe.set_user(ZONE_EXEC)  # the list hook scopes by the session user
+		frappe.set_user(ZONE_EXEC)  # User Permissions scope get_list by the session user
 		rows, total = profile.list_change_requests(_ctx(ZONE_EXEC))
 		self.assertEqual(total, 1)
 		self.assertEqual(rows[0]["da_id"], "DA-000001")

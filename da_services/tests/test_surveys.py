@@ -1,7 +1,7 @@
 """Survey templates and responses (FR-09d).
 
 The service only saves, reads, aggregates and exports. Who may do what comes from Role
-DocPerm and the permission hooks, so every call here runs as the session user.
+DocPerm and User Permissions, so every call here runs as the session user.
 """
 
 import io
@@ -252,10 +252,12 @@ class TestSurveys(IntegrationTestCase):
 			[("p4", "4", 4), ("p5", "Yes, fully", 0), ("p6", "Teff", 0), ("p6", "Maize", 0)],
 		)
 
-	def test_da_cannot_save_for_another_da_or_outside_their_woreda(self):
+	def test_da_saves_within_their_woreda_only(self):
+		# Scope is the DA's User Permissions (Region / Woreda): a response for another DA of
+		# the same Woreda is in scope; one outside the DA's Woreda is refused.
 		survey_id = self._create()
-		with self.assertRaises(frappe.PermissionError):
-			self._respond(survey_id, da_id="DA-000002")
+		row = self._respond(survey_id, da_id="DA-000002")
+		self.assertEqual(row.da_id, "DA-000002")
 		with self.assertRaises(frappe.PermissionError):
 			self._respond(survey_id, user=DA3)
 
@@ -275,14 +277,18 @@ class TestSurveys(IntegrationTestCase):
 
 	# -- GET /surveys/<id>/responses ------------------------------------------------
 
-	def test_da_lists_own_responses_supervisor_lists_all(self):
+	def test_da_and_supervisor_list_the_responses_of_their_woreda(self):
 		survey_id = self._create()
 		self._respond(survey_id, user=DA1, farmer_id="FR-000101")
 		self._respond(survey_id, user=DA2, farmer_id="FR-000102")
 		with _as(DA1):
-			rows, total = svc.list_responses(survey_id)
+			_rows, total = svc.list_responses(survey_id)
+			self.assertEqual(total, 2)  # both DAs are in Woreda ET04-W01
+			rows, total = svc.list_responses(survey_id, da_id="DA-000001")
 		self.assertEqual(([r["farmer_id"] for r in rows], total), (["FR-000101"], 1))
 		self.assertEqual(rows[0]["answers"], ANSWERS)
+		with _as(DA3):
+			self.assertEqual(svc.list_responses(survey_id)[1], 0)  # another Woreda
 		with _as(SUP):
 			_rows, total = svc.list_responses(survey_id)
 			self.assertEqual(total, 2)

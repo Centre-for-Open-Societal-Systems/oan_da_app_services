@@ -413,7 +413,7 @@ def list_farmers(
 
 	# Scope filters
 	# - DA: all farmers in the assigned Kebele(s), not just manually linked ones (DA-211).
-	# - Supervisor: their Woreda(s); the permission_query_conditions hook applies this.
+	# - Supervisor: their Woreda(s), from their User Permissions on DA Woreda.
 	# - Zone-scoped officers: the Woredas under their Zone, via the zone column on
 	#   DA Farmer Reference (Zone scope) and ancestors_of() for the woreda filter.
 	# - Executive (Region): their Region, read-only.
@@ -518,9 +518,8 @@ def list_farmers(
 		else:
 			return [], 0
 
-	# Query DA Farmer Reference using get_list to apply permission hooks
-	# This ensures Zone-scoped officers see only their Zone and multi-Woreda
-	# Supervisors see all their Woredas
+	# get_list, so the caller's User Permissions (DA Region / Zone / Woreda / Kebele) apply:
+	# Zone-scoped officers see only their Zone, multi-Woreda Supervisors all their Woredas.
 	farmers = frappe.get_list(
 		"DA Farmer Reference",
 		filters=filters,
@@ -541,8 +540,7 @@ def list_farmers(
 		limit_start=start,
 	)
 
-	# Count with the same filters using get_list to apply permission hooks
-	# frappe.db.count() bypasses permission hooks, so we use get_list with pluck
+	# Count through get_list too: frappe.db.count() ignores User Permissions.
 	total_ids = frappe.get_list("DA Farmer Reference", filters=filters, pluck="name")
 	total = len(total_ids)
 

@@ -4,8 +4,8 @@ A Supervisor/Admin publishes a template into a Woreda; DAs in that Woreda list i
 assigned survey and save one response per farmer. Executive reads results.
 
 Thin by design: each function does only its own job (save, read, aggregate, export).
-Who may read or write which row comes from Role DocPerm and the permission hooks in
-``da_services/permissions.py``; field rules come from the DocType meta and controllers.
+Who may read or write which row comes from Role DocPerm and the user's User Permissions
+(DA Region / Zone / Woreda / Kebele); field rules come from the DocType meta and controllers.
 """
 
 from __future__ import annotations

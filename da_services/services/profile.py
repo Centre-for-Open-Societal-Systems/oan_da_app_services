@@ -906,7 +906,7 @@ def list_change_requests(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""DA: own. Supervisor / Executive: their Woreda / Region (scope via the query hook).
+	"""DA: own. Supervisor / Executive: their Woreda / Region (scope from their User Permissions).
 
 	``status`` and ``woreda`` take one value or several (comma-separated); the scope
 	rule still applies on top, so a Woreda outside the caller's scope lists nothing.

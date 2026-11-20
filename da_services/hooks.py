@@ -139,32 +139,6 @@ after_migrate = "da_services.setup.install.after_migrate"
 # -----------
 # Permissions evaluated in scripted ways
 
-# FSD 3.1.1 deny-by-default RBAC. The query condition filters list views, reports and
-# the REST API uniformly; has_permission mirrors it for a single document.
-permission_query_conditions = {
-	"DA RBAC Assignment": "da_services.permissions.rbac_assignment_query_conditions",
-	"DA Task": "da_services.permissions.da_task_query_conditions",
-	"DA Notification": "da_services.permissions.da_notification_query_conditions",
-	"DA Kebele Assignment": "da_services.permissions.da_kebele_assignment_query_conditions",
-	"DA Profile Change Request": "da_services.permissions.da_profile_change_request_query_conditions",
-	"DA Farmer Link": "da_services.permissions.da_farmer_link_query_conditions",
-	"DA Farmer Reference": "da_services.permissions.da_farmer_reference_query_conditions",
-	"DA Survey Template": "da_services.permissions.da_survey_template_query_conditions",
-	"DA Survey Response": "da_services.permissions.da_survey_response_query_conditions",
-}
-
-has_permission = {
-	"DA RBAC Assignment": "da_services.permissions.has_rbac_assignment_permission",
-	"DA Task": "da_services.permissions.has_da_task_permission",
-	"DA Notification": "da_services.permissions.has_da_notification_permission",
-	"DA Kebele Assignment": "da_services.permissions.has_da_kebele_assignment_permission",
-	"DA Profile Change Request": "da_services.permissions.has_da_profile_change_request_permission",
-	"DA Farmer Link": "da_services.permissions.has_da_farmer_link_permission",
-	"DA Farmer Reference": "da_services.permissions.has_da_farmer_reference_permission",
-	"DA Survey Template": "da_services.permissions.has_da_survey_template_permission",
-	"DA Survey Response": "da_services.permissions.has_da_survey_response_permission",
-}
-
 # Document Events
 # ---------------
 # Hook on document methods and events
