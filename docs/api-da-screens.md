@@ -136,7 +136,7 @@ Filters: kebele, crop, status (`Verified, Pending, Enrolling, Inactive, Flagged`
 
 | Element | API | Source |
 |---|---|---|
-| Table + filters + facets + total | `GET /farmers?q&woreda&kebele&crop&status&education&limit&start` → `Farmer` fields above + `farmer_id` (registry id). A DA's `woreda` / `kebele` must be inside their assigned scope; an out-of-scope selection is 403, not an empty list | ours: DA Farmer Reference (projection) + DA Farmer Link; `visits`, `lastVisit` derived from DA Visit |
+| Table + filters + facets + total | `GET /farmers?current_page&page_size&filter_by&search_text` → the registry's rows and page, unchanged; geo filters filled in or checked from User Permissions (see [da-farmer-registry.md](da-farmer-registry.md)) | Farmer Registry `search_in_a_register` |
 | Status hover reason | `status_reason` | Farmer Registry (verification state) |
 | Row → profile | `/farmers/{id}` | – |
 | Bulk "Add to segment" (shared with Beneficiaries) | §2.9 | ours |
@@ -212,7 +212,7 @@ each item sequentially in that request and returns partial success so the DA can
 
 | Element | API | Source |
 |---|---|---|
-| Farmer search + chips | `GET /farmers?q=&limit=10` → items + `flags[]` (`registered`, `voucher_redeemed_season`) | ours projection; voucher flag external (**contract pending**) |
+| Farmer search + chips | `GET /farmers?search_text=&page_size=10` → registry rows + `flags[]` (`registered`, `voucher_redeemed_season`) | ours projection; voucher flag external (**contract pending**) |
 | Plan (single, legacy) | `POST /visits` flat body: `user` (required User Link), `client_op_id, farmer_id, farmer_name` (required FE snapshot), `visit_type, purpose, scheduled_at` (or `date`+`time`), `duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng}` (optional), `notify_farmer_sms, advisory_qa[] {question, answer}`, optional `da_id` (Supervisor). No session-user fallback. → one visit `{name, physical_status: Planned, farmer_name, …}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
 | Plan (single or batch list) | `POST /visits` body: `{ user?, da_id?, visits: [ { same fields as single plan per farmer }, … ] }` — length **1–5**, unique `farmer_id`, required `farmer_name` per item, per-item schedule allowed. `user` required per item or once on the envelope (not from session). Response `data`: `{ created: [visit…], failed: [ { status, error, code, request } ], summary: { total, created, failed } }`. `failed[].request` echoes that item as received; `code` is `conflict` \| `validation` \| `error`. HTTP **201** if any created; **400** if envelope invalid or zero created. When `visits` is present it is the list path. Row scope stays on Frappe hooks + User Permissions. | ours: loops `plan_visit` (one DA Visit per farmer) |
 | Save as draft | device | device |
@@ -288,7 +288,7 @@ Queued/Skipped log rows and enqueues a stub job.
 | List | `GET /gatherings?date\|from&to&status&da_id&region&zone&woreda&kebele&limit&start` | ours |
 | Detail | `GET /gatherings/{id}` | ours |
 | Cancel | `POST /gatherings/{id}/cancel {reason}` → `status: Cancelled` | ours |
-| Farmer picker | `GET /farmers` (existing kebele-scoped list) | ours: DA Farmer Reference |
+| Farmer picker | `GET /farmers` (Farmer Registry search, geo filters from User Permissions) | Farmer Registry |
 
 Contract docs: [gatherings-integration.md](gatherings-integration.md), [gatherings-frontend.md](gatherings-frontend.md).
 Postman: `postman/Gatherings/`.

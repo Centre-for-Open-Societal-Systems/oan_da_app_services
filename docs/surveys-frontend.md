@@ -92,11 +92,11 @@ Filters on the list: `status`, `type`, `language`, `woreda`, `q`. A DA only rece
 Use the existing farmer list; do **not** add a survey-specific farmer endpoint:
 
 ```http
-GET /api/v1/da-services/farmers?limit=50&start=0
+GET /api/v1/da-services/farmers?current_page=1&page_size=50
 ```
 
-For a DA the backend already returns only farmers in the DA's assigned Kebeles, so the
-picker cannot offer an out-of-scope farmer. Use the row's `farmer_id` (canonical internal
+The list is the Farmer Registry search (see [da-farmer-registry.md](da-farmer-registry.md)); the backend fills `woreda_code`
+/ `kebele_code` etc. from the caller's User Permissions. Use the row's `farmer_id` (canonical internal
 id) as the capture value, and show `reg_id` / name for the user.
 
 On selection, prefill the standard questions locally:

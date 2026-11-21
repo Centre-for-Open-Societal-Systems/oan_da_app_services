@@ -32,7 +32,7 @@ Every `{id}` accepts the registry internal id or the Farmer-ID (`FR-…`).
 
 | Method | Endpoint | Returns |
 |---|---|---|
-| GET | `/farmers?search_text=&page=&page_size=` | Farmer list. With `search_text` it searches the live registry (`FR-` = every approved farmer; also name or phone). Each row: `farmer_id`, `reg_id`, `farmer_name`, `phone`, `kebele`, `woreda`, `region`, `total_land_hectares`, `total_plots`, `photo_url`, `registration_state`, `registered_at`. Optional `woreda`, `kebele`, `state` filters. Without `search_text` it reads the DA cache. |
+| GET | `/farmers?current_page=&page_size=&filter_by=&search_text=` | One page of the register via `search_in_a_register`, called with the caller's own tokens; `data` / `meta` are the registry's `response_payload` / `pagination_response` unchanged. Geo codes in `filter_by` (`region_code` … `kebele_code`) are filled in or checked from the caller's User Permissions and sent to the registry as `region_name` … `kebele_name`; see [da-farmer-registry.md](da-farmer-registry.md) |
 | GET | `/farmers/{id}/profile` | Profile header and overview (name, phone, email, gender, education, location, total land, land ownership, household size, last visit, `can_edit`) |
 | GET | `/farmers/{id}/plots` | Land records (area, ownership, soil fertility, land use) |
 | GET | `/farmers/{id}/photo` | `photo_url` (signed link, about 1 hour) and `document_id` |
@@ -72,7 +72,7 @@ Staff API base: `farmer_registry_url` (dev: `https://staff-farmer.development.oa
 
 | Registry endpoint | Used by | For |
 |---|---|---|
-| `/register-data/search_in_a_register` | `GET /farmers?search_text=` | List and search rows (name, FR-id, location, photo link) |
+| `/register-data/search_in_a_register` | `GET /farmers` (`integrations/da_farmer_registry`) | List and search rows (name, FR-id, location, photo link) |
 | `/register-data/get_subject_record` | list (per farmer), profile, photo | Phone, total land, email, photo; identity row |
 | `/register-data/get_tab_records` | list (per farmer), profile, plots | Lands tab (plots), farmer / location / household tabs |
 | `/change-requests/get_change_requests` | `GET /farmers/{id}/change-requests` | Change requests per tab |
@@ -163,8 +163,10 @@ By hand against the dev registry (Admin sees every farmer):
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8200/api/v1/auth/login -H 'Content-Type: application/json' \
   -d '{"usr":"Administrator","pwd":"admin"}' | python -c "import sys,json;print(json.load(sys.stdin)['data']['access_token'])")
+CSRF=<csrf_token>  # GET /farmers forwards both; take them from the SSO login
 
-curl -s "http://127.0.0.1:8200/api/v1/da-services/farmers?search_text=FR-&page=1&page_size=50" -H "Authorization: Bearer $TOKEN"
+curl -s -G "http://127.0.0.1:8200/api/v1/da-services/farmers" --data-urlencode "current_page=1" --data-urlencode "page_size=50" \
+  -H "Authorization: Bearer $TOKEN" -H "X-CSRF-Token: $CSRF"
 curl -s "http://127.0.0.1:8200/api/v1/da-services/farmers/FR-675618129549/profile" -H "Authorization: Bearer $TOKEN"
 curl -s "http://127.0.0.1:8200/api/v1/da-services/farmers/FR-675618129549/plots" -H "Authorization: Bearer $TOKEN"
 ```

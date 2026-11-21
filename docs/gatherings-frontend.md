@@ -9,8 +9,8 @@ Do not hardcode fixture farmers or invent kebele codes in the page.
 ## Sequence
 
 1. SSO login → Bearer token.
-2. Farmer picker: `GET /api/v1/da-services/farmers` (kebele-scoped list already used
-   elsewhere). Select **1–20** farmers and keep each row's **name** and **phone**.
+2. Farmer picker: `GET /api/v1/da-services/farmers` (Farmer Registry search, geo filters from the DA's User Permissions;
+   see [da-farmer-registry.md](da-farmer-registry.md)). Select **1–20** farmers and keep each row's **name** and **phone**.
 3. DA enters **Venue** (required), optional landmark + map pin. Do **not** collect
    free-text address or region/zone/woreda/kebele — server stamps those from the
    DA's Effective Kebele Assignment as `Venue, Kebele, Woreda, Zone, Region`.
