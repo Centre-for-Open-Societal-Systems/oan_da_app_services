@@ -3,10 +3,10 @@
 Two surfaces share one implementation:
 
 - ``GET /api/v1/da-services/me`` returns the caller's DA Services profile: the single role
-  code the portal switches on, Region/Woreda scope and its footer label, the Kebeles the
+  code the portal switches on, its footer label, the Kebeles the
   caller is posted to and the nav hrefs the role may see.
 - The ``on_user_profile`` hook in ``api/v1/profile.py`` (PR #4) gives oan_auth_service's
-  ``GET /api/v1/auth/me`` the roles and scope under ``data.profiles.da_services``; this
+  ``GET /api/v1/auth/me`` the roles under ``data.profiles.da_services``; this
   endpoint adds the Kebeles and the menu on top.
 
 The menu is a convenience for the UI, not an authorisation control: every endpoint
@@ -21,7 +21,6 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.services import constants as C
 from da_services.services.notifications import own_kebeles
-from da_services.utils.permissions import granted_areas
 
 # Single role code and label the portal switches on (frontend lib/rbac.ts ROLES / ROLE_LABELS).
 ROLE_CODES: dict[str, str] = {
@@ -81,32 +80,17 @@ def menu_for() -> list[str]:
 	return [href for href, roles in NAV if codes.intersection(roles)]
 
 
-def _scope_text() -> str:
-	# Codes for now; names come once the location master data is in (DA Services backlog).
-	areas = granted_areas()
-	for label, values in (
-		("Woreda", areas["woredas"]),
-		("Zone", areas["zones"]),
-		("Region", areas["regions"]),
-	):
-		if values:
-			return f"{label} · {', '.join(sorted(values))}"
-	return ""
-
-
 def scope_label_for(role: str | None) -> str:
-	"""Sidebar footer line (frontend ROLE_SCOPES), e.g. "Woreda · ET04-W01"."""
+	"""Sidebar footer line (frontend ROLE_SCOPES), e.g. "All regions"."""
 	if role == "Admin":
 		return "All regions"
 	if role == "CommsOfficer":
 		return "Broadcast domain"
 	if role == "DA":
-		where = next(iter(sorted(granted_areas()["woredas"])), None)
-		return f"Own record · {where}" if where else "Own record"
-	text = _scope_text()
+		return "Own record"
 	if role == "Executive":
-		return f"{text} (read)" if text else "Read only"
-	return text
+		return "Read only"
+	return ""
 
 
 def profile_for() -> dict:
@@ -123,7 +107,6 @@ def profile_for() -> dict:
 		"role_label": ROLE_LABELS.get(role),
 		"role_codes": codes,
 		"roles": sorted(r for r in frappe.get_roles() if r in ROLE_CODES),
-		"scope": {key: sorted(values) for key, values in granted_areas().items()},
 		"menu": menu_for(),
 	}
 	if kebeles := own_kebeles():
@@ -138,7 +121,7 @@ def profile_for() -> dict:
 	return data
 
 
-@route("/me", methods=("GET",), summary="Current user's DA Services profile: roles, scope, menu")
+@route("/me", methods=("GET",), summary="Current user's DA Services profile: roles, menu")
 @frappe.whitelist()
 @handle_api_errors
 def get_me():

@@ -134,10 +134,10 @@ class TestMe(_Base):
 		self.assertEqual(out["status"], "success")
 		d = out["data"]
 		self.assertEqual(d["roles"], [C.ROLE_SUPERVISOR])
-		self.assertEqual(d["scope"]["woredas"], ["ET04-W01"])
+		self.assertNotIn("scope", d)
 		self.assertEqual(d["role"], "Supervisor")
 		self.assertEqual(d["role_label"], "Supervisor (Woreda)")
-		self.assertEqual(d["scope_label"], "Woreda · ET04-W01")
+		self.assertEqual(d["scope_label"], "")
 		self.assertEqual(d["user"]["email"], SUP)
 		# frontend hrefs (lib/rbac.ts NAV_GROUPS), in nav order
 		self.assertEqual(d["menu"][0], "/dashboard")
@@ -151,7 +151,7 @@ class TestMe(_Base):
 		d = me_api.get_me()["data"]
 		self.assertNotIn("agent", d)  # no own DA-ID: the registry record is not looked up
 		self.assertEqual(d["role"], "DA")
-		self.assertEqual(d["scope_label"], "Own record · ET04-W01")
+		self.assertEqual(d["scope_label"], "Own record")
 		self.assertIn("/my-teams", d["menu"])
 		self.assertNotIn("/approvals", d["menu"])
 		self.assertNotIn("/agents", d["menu"])
@@ -168,25 +168,21 @@ class TestMe(_Base):
 	def test_scope_labels_per_role(self):
 		from unittest.mock import patch
 
-		def labels(roles, **areas):
-			"""(role codes, label for `role`, menu) for a user with `roles` and granted `areas`."""
-			granted = {k: frozenset(areas.get(k, ())) for k in ("regions", "zones", "woredas")}
-			with (
-				patch.object(me_api.frappe, "get_roles", return_value=list(roles)),
-				patch.object(me_api, "granted_areas", return_value=granted),
-			):
+		def labels(roles):
+			"""(role codes, label per role, menu) for a user with `roles`."""
+			with patch.object(me_api.frappe, "get_roles", return_value=list(roles)):
 				codes = me_api.role_codes_for()
 				return codes, {c: me_api.scope_label_for(c) for c in codes}, me_api.menu_for()
 
-		codes, label, _menu = labels({C.ROLE_EXECUTIVE}, regions={"ET03"})
-		self.assertEqual((codes, label["Executive"]), (["Executive"], "Region · ET03 (read)"))
-		_codes, label, _menu = labels({C.ROLE_SUPERVISOR}, regions={"ET04"}, zones={"ET04-Z01"})
-		self.assertEqual(label["Supervisor"], "Zone · ET04-Z01")
+		codes, label, _menu = labels({C.ROLE_EXECUTIVE})
+		self.assertEqual((codes, label["Executive"]), (["Executive"], "Read only"))
+		_codes, label, _menu = labels({C.ROLE_SUPERVISOR})
+		self.assertEqual(label["Supervisor"], "")
 		_codes, label, menu = labels({C.ROLE_COMMS})
 		self.assertEqual(label["CommsOfficer"], "Broadcast domain")
 		self.assertEqual(menu, ["/dashboard", "/knowledge", "/broadcast", "/alerts"])
 		# two roles: the widest one wins, the menu is the union
-		codes, _label, menu = labels({C.ROLE_DA, C.ROLE_SUPERVISOR}, woredas={"ET04-W01"})
+		codes, _label, menu = labels({C.ROLE_DA, C.ROLE_SUPERVISOR})
 		self.assertEqual(codes, ["Supervisor", "DA"])
 		self.assertTrue({"/my-teams", "/assignments"} <= set(menu))
 
@@ -204,9 +200,7 @@ class TestMe(_Base):
 	def test_profile_hook_for_auth_me(self):
 		ns, data = profile_api.resolve_user_profile_hook(user_doc=frappe.get_doc("User", SUP))
 		self.assertEqual(ns, "da_services")
-		self.assertEqual(data["scope"]["woredas"], ["ET04-W01"])
-		# same scope shape as GET /da-services/me, so the frontend can use either
-		self.assertEqual(set(data["scope"]), {"regions", "zones", "woredas"})
+		self.assertEqual(data, {"roles": [C.ROLE_SUPERVISOR]})
 
 	def test_profile_hook_returns_none_for_outsiders(self):
 		ns, data = profile_api.resolve_user_profile_hook(user_doc=frappe.get_doc("User", PLAIN))

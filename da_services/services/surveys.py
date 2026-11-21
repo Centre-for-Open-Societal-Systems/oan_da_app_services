@@ -20,7 +20,6 @@ from frappe.utils import get_datetime, getdate, today
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.services import constants as C
-from da_services.utils.permissions import granted_areas
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
@@ -341,12 +340,6 @@ def _parameter_rows(questions) -> list[dict]:
 	return rows
 
 
-def _default_woreda() -> str | None:
-	"""A caller with exactly one granted Woreda may leave it out of the request."""
-	woredas = granted_areas()["woredas"]
-	return next(iter(woredas)) if len(woredas) == 1 else None
-
-
 def create_template(
 	*,
 	name=None,
@@ -362,7 +355,7 @@ def create_template(
 	client_op_id=None,
 ) -> str:
 	"""Insert one template (create = publish). Returns its id."""
-	woreda = (woreda or "").strip() or _default_woreda()
+	woreda = (woreda or "").strip() or None
 	area = ancestors_of(woreda) if woreda else {}
 	params = _parameter_rows(questions)
 	doc = frappe.get_doc(

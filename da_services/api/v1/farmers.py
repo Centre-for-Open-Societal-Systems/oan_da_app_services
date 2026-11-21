@@ -76,10 +76,9 @@ def list_farmers(
 	- start: Offset (default 0)
 	- page / page_size: 1-based alternative to limit / start (registry style)
 	- search_text: Free text (name, Farmer-ID, phone). When given, the live
-	  Farmer register is searched inside the caller's scope instead of the
-	  DA Farmer Reference cache, so newly registered farmers are found too.
-	  Supervisors of several Woredas, Zone and Region officers must pass
-	  ``woreda`` with it. ``da_id`` does not apply to a live search.
+	  Farmer register is searched in ``woreda`` (required with it) instead of
+	  the DA Farmer Reference cache, so newly registered farmers are found too.
+	  ``da_id`` does not apply to a live search.
 
 	Returns:
 	    {

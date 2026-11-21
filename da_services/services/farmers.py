@@ -27,7 +27,7 @@ from da_services.integrations.farmer_registry.mapper import (
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.pending_actions import derive_pending_actions_batch
-from da_services.utils.permissions import granted_areas, require_permission
+from da_services.utils.permissions import require_permission
 
 
 def get_farmer_profile(farmer_id: str) -> dict:
@@ -222,23 +222,14 @@ def search_farmers(
 
 	Unlike list_farmers this does not read the DA Farmer Reference cache: the
 	registry is asked directly with search_text, so a farmer registered
-	yesterday is found. Scope is applied as a registry filter, so a restricted
-	caller always searches inside one Woreda:
-
-	- One Woreda granted: that Woreda
-	- Several Woredas, or a Zone / Region grant: ``woreda`` is required
+	yesterday is found. ``woreda`` is required, so a search always runs
+	inside one Woreda.
 	"""
 	filter_by: dict = {}
 
-	if woreda:
-		_require_woreda_in_scope(woreda)
-	elif len(granted_areas()["woredas"]) == 1:
-		woreda = next(iter(granted_areas()["woredas"]))
-	else:
-		frappe.throw(
-			_("Pass a woreda to search in: your scope covers more than one Woreda."),
-			frappe.ValidationError,
-		)
+	if not woreda:
+		frappe.throw(_("woreda is required."), frappe.ValidationError)
+	_require_woreda_in_scope(woreda)
 	filter_by.update({"woreda": woreda, "kebele": kebele})
 	if state:
 		filter_by["state"] = state

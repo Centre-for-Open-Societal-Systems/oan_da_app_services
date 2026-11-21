@@ -102,6 +102,7 @@ class TestSurveys(IntegrationTestCase):
 			"languages": ["English", "Amharic"],
 			"targetFarmers": 20,
 			"questions": QUESTIONS,
+			"woreda": "ET04-W01",
 			**over,
 		}
 		with _as(user):
@@ -210,7 +211,7 @@ class TestSurveys(IntegrationTestCase):
 		closed = self._create(name="Mine closed")
 		with _as(SUP):
 			svc.patch_template(closed, {"status": "Closed"})
-		self._create(user=SUP_OTHER, name="Other Woreda")
+		self._create(user=SUP_OTHER, name="Other Woreda", woreda="ET03-W02")
 		with _as(SUP):
 			rows, total = svc.list_templates()
 			self.assertEqual({r["id"] for r in rows}, {mine, closed})

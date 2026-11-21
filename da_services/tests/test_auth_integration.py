@@ -184,8 +184,7 @@ class TestRESTRoutes(IntegrationTestCase):
 		da_profile = data["data"]["profiles"].get("da_services")
 		self.assertIsNotNone(da_profile)
 		self.assertIn(C.ROLE_SUPERVISOR, da_profile["roles"])
-		self.assertIn("ET04", da_profile["scope"]["regions"])
-		self.assertIn("ET04-W01", da_profile["scope"]["woredas"])
+		self.assertNotIn("scope", da_profile)
 
 	def test_me_returns_no_da_profile_for_user_without_da_role(self):
 		import frappe.api
@@ -210,20 +209,3 @@ class TestRESTRoutes(IntegrationTestCase):
 		da_profile = data["data"].get("profiles", {}).get("da_services")
 		if da_profile is not None:
 			self.assertIn("roles", da_profile)
-			self.assertIn("scope", da_profile)
-
-	def test_supervisor_scope_aggregates_multiple_assignments(self):
-		"""Supervisor with assignments in two woredas sees both in their profile."""
-		import frappe.api
-
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W02")
-		frappe.set_user(SUPERVISOR)
-		req = make_test_request("/api/v1/auth/me", method="GET")
-		res = frappe.api.handle(req)
-		self.assertEqual(res.status_code, 200)
-		data = json.loads(res.get_data(as_text=True))
-		da_profile = data["data"]["profiles"]["da_services"]
-		self.assertIn("ET04-W01", da_profile["scope"]["woredas"])
-		self.assertIn("ET04-W02", da_profile["scope"]["woredas"])
-		self.assertIn("ET04", da_profile["scope"]["regions"])

@@ -142,7 +142,7 @@ class TestDashboard(IntegrationTestCase):
 	def test_supervisor_summary_without_da_id_is_woreda_view(self):
 		create_administrative_areas()
 		with as_user(SUP):
-			out = dashboard.summary()
+			out = dashboard.summary(woreda="ET04-W01")
 		self.assertEqual(out["view"], "woreda")
 		self.assertEqual(out["woreda"]["code"], "ET04-W01")
 		self.assertIn("kebeles", out)
@@ -322,7 +322,7 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def test_supervisor_sees_only_assigned_woreda(self):
 		with as_user(SUP):
-			out = dashboard.summary()
+			out = dashboard.summary(woreda="ET04-W01")
 		self.assertEqual(out["view"], "woreda")
 		self.assertEqual(out["woreda"]["code"], "ET04-W01")
 		self.assertEqual(out["woreda"]["name"], "Bako Tibe")
@@ -347,7 +347,7 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def test_kebele_rows_visit_pct_and_status(self):
 		with as_user(SUP):
-			out = dashboard.summary()
+			out = dashboard.summary(woreda="ET04-W01")
 		by_code = {r["kebele_code"]: r for r in out["kebeles"]}
 		k03 = by_code["ET04-W01-K03"]
 		self.assertEqual(k03["farmers"], 2)
@@ -360,21 +360,21 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def test_filters_status_kebele_agents_and_search(self):
 		with as_user(SUP):
-			out = dashboard.summary(status=dashboard.STATUS_AT_RISK)
+			out = dashboard.summary(woreda="ET04-W01", status=dashboard.STATUS_AT_RISK)
 		self.assertTrue(out["kebeles"])
 		self.assertTrue(all(r["status"] == dashboard.STATUS_AT_RISK for r in out["kebeles"]))
 
 		with as_user(SUP):
-			out_k = dashboard.summary(kebele="ET04-W01-K03")
+			out_k = dashboard.summary(woreda="ET04-W01", kebele="ET04-W01-K03")
 		self.assertEqual(out_k["total"], 1)
 		self.assertEqual(out_k["kebeles"][0]["kebele_code"], "ET04-W01-K03")
 
 		with self.assertRaises(frappe.ValidationError):
 			with as_user(SUP):
-				dashboard.summary(kebele="ET03-W02-K01")
+				dashboard.summary(woreda="ET04-W01", kebele="ET03-W02-K01")
 
 		with as_user(SUP):
-			out_q = dashboard.summary(q="Dambi")
+			out_q = dashboard.summary(woreda="ET04-W01", q="Dambi")
 		self.assertTrue(out_q["kebeles"])
 		self.assertTrue(all("dambi" in r["kebele"].lower() for r in out_q["kebeles"]))
 
@@ -384,7 +384,7 @@ class TestWoredaHealth(IntegrationTestCase):
 	def test_invalid_status_rejected(self):
 		with self.assertRaises(frappe.ValidationError):
 			with as_user(SUP):
-				dashboard.summary(status="Needs support")
+				dashboard.summary(woreda="ET04-W01", status="Needs support")
 
 	def test_caller_without_a_da_id_gets_the_woreda_summary(self):
 		# No DA-ID to default to: the programme-health view, whatever the caller's role.

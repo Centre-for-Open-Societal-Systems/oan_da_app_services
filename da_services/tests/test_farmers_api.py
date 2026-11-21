@@ -269,12 +269,12 @@ class TestFarmersAPI(IntegrationTestCase):
 	# -- DA-272: live search, change requests, registry metadata ---------------
 
 	def test_list_farmers_search_text_asks_the_registry(self):
-		"""search_text bypasses the cache: the mock registry is searched in the caller's Woreda."""
+		"""search_text bypasses the cache: the mock registry is searched in the Woreda asked for."""
 		frappe.set_user(SUP)
 
 		from da_services.api.v1.farmers import list_farmers
 
-		result = list_farmers(search_text="almaz", page=1, page_size=10)
+		result = list_farmers(search_text="almaz", woreda="ET04-W01", page=1, page_size=10)
 		self.assertEqual(result["status"], "success")
 		self.assertEqual(result["data"]["source"], "registry")
 		farmers = result["data"]["farmers"]
@@ -292,12 +292,12 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import list_farmers
 
-		result = list_farmers(search_text="chaltu")
+		result = list_farmers(search_text="chaltu", woreda="ET04-W01")
 		self.assertEqual(result["data"]["farmers"], [])
 		self.assertEqual(result["data"]["total"], 0)
 
-	def test_list_farmers_search_as_da_searches_their_woreda(self):
-		"""DA1's grant is one Woreda (ET04-W01): the registry search is sent that Woreda.
+	def test_list_farmers_search_requires_a_woreda(self):
+		"""A live search needs a Woreda, and the registry search is sent that Woreda.
 
 		The registry has no User Permissions to apply, so a search is bounded by the Woreda.
 		"""
@@ -305,9 +305,10 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import list_farmers
 
+		self.assertEqual(list_farmers(search_text="almaz")["status"], "error")
 		with patch("da_services.services.farmers.get_farmer_registry_client") as client:
 			client.return_value.search_farmers.return_value = {"items": [], "total": 0}
-			list_farmers(search_text="almaz")
+			list_farmers(search_text="almaz", woreda="ET04-W01")
 		filter_by = client.return_value.search_farmers.call_args.kwargs["filter_by"]
 		self.assertEqual((filter_by["woreda"], filter_by["kebele"]), ("ET04-W01", None))
 

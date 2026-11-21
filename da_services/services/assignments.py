@@ -44,7 +44,7 @@ from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.notifications import notify_da
 from da_services.utils import geofence
-from da_services.utils.permissions import granted_areas, require_permission
+from da_services.utils.permissions import require_permission
 
 ASSIGNMENT_FIELDS = [
 	"name",
@@ -184,21 +184,13 @@ def _row(ref: DAReference, live: dict | None, names: dict[str, str]) -> dict:
 
 
 def _resolve_officer_scope(woreda: str | None) -> tuple[str | None, str | None]:
-	"""(woreda, region) to list: the one asked for, else the caller's only granted Woreda
-	(or Region)."""
-	if woreda:
-		tree = ancestors_of(woreda)
-		if tree["woreda"] != woreda:
-			frappe.throw(_("{0} is not a Woreda in the administrative area master.").format(woreda))
-		return woreda, None
-	areas = granted_areas()
-	if len(areas["woredas"]) == 1:
-		return next(iter(areas["woredas"])), None
-	if areas["woredas"]:
-		frappe.throw(_("woreda is required (you hold more than one)."), frappe.ValidationError)
-	if len(areas["regions"]) == 1:
-		return None, next(iter(areas["regions"]))
-	frappe.throw(_("woreda is required."), frappe.ValidationError)
+	"""(woreda, region) to list: the Woreda asked for. Required."""
+	if not woreda:
+		frappe.throw(_("woreda is required."), frappe.ValidationError)
+	tree = ancestors_of(woreda)
+	if tree["woreda"] != woreda:
+		frappe.throw(_("{0} is not a Woreda in the administrative area master.").format(woreda))
+	return woreda, None
 
 
 def list_assignments(
