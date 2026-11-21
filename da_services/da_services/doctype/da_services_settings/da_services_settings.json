@@ -73,7 +73,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-20 22:01:16.017418",
+ "modified": "2026-11-21 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",
@@ -87,6 +87,12 @@
    "read": 1,
    "role": "System Manager",
    "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "OAN Administrator",
    "write": 1
   }
  ],

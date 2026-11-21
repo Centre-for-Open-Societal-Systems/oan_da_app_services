@@ -16,16 +16,16 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.services import constants as C
 from da_services.services import notifications as svc
-from da_services.utils.permissions import require_roles
+from da_services.utils.permissions import require_permission
 
 
 @route("/notifications", methods=("GET",), summary="My notifications")
 @frappe.whitelist()
 @handle_api_errors
 def list_notifications(unread=None, limit=20, start=0):
-	ctx = require_roles(*C.DA_SERVICES_ROLES)
+	require_permission("DA Notification", "read")
 	want_unread = str(unread).lower() in ("1", "true", "yes") if unread is not None else False
-	rows, meta = svc.list_notifications(ctx, unread=want_unread, limit=limit, start=start)
+	rows, meta = svc.list_notifications(unread=want_unread, limit=limit, start=start)
 	return success_response(data=rows, meta=meta)
 
 
@@ -33,16 +33,16 @@ def list_notifications(unread=None, limit=20, start=0):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def read_all():
-	ctx = require_roles(*C.DA_SERVICES_ROLES)
-	return success_response(data=svc.mark_all_read(ctx), message="All notifications marked read")
+	require_permission("DA Notification", "read")
+	return success_response(data=svc.mark_all_read(), message="All notifications marked read")
 
 
 @route("/notifications/<notification_id>/read", methods=("POST",), summary="Mark one notification read")
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def read_one(notification_id: str):
-	ctx = require_roles(*C.DA_SERVICES_ROLES)
-	return success_response(data=svc.mark_read(notification_id, ctx), message="Notification marked read")
+	require_permission("DA Notification", "read")
+	return success_response(data=svc.mark_read(notification_id), message="Notification marked read")
 
 
 @route("/notifications/broadcast", methods=("POST",), summary="Broadcast a message to DAs")
@@ -71,7 +71,7 @@ def broadcast():
 	Returns:
 	    {"success": true, "data": {"broadcast_id", "scope", "scope_value", "recipients", "duplicate"}}
 	"""
-	ctx = require_roles(C.ROLE_COMMS, C.ROLE_ADMIN, C.ROLE_DA)
+	require_permission("DA Broadcast", "create")
 
 	data = frappe.request.get_json(silent=True) if frappe.request else None
 	if not data and frappe.form_dict:
@@ -80,7 +80,6 @@ def broadcast():
 	data = data or {}
 
 	out = svc.broadcast(
-		ctx,
 		title=data.get("title"),
 		body=data.get("body"),
 		href=data.get("href"),

@@ -5,9 +5,9 @@ from __future__ import annotations
 import frappe
 from frappe.tests import IntegrationTestCase
 
+from da_services.services import constants as C
 from da_services.services import farmer_links as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user
-from da_services.utils.permissions import ScopeContext
+from da_services.tests.fixtures import as_user, create_administrative_areas, ensure_da_user
 
 
 class TestFarmerLinks(IntegrationTestCase):
@@ -28,6 +28,9 @@ class TestFarmerLinks(IntegrationTestCase):
 			user.first_name = "Supervisor"
 			user.send_welcome_email = 0
 			user.insert(ignore_permissions=True)
+		# DA Farmer Link create / read come from the Supervisor role (Role Permission Manager).
+		if C.ROLE_SUPERVISOR not in frappe.get_roles(self.supervisor_user):
+			frappe.get_doc("User", self.supervisor_user).add_roles(C.ROLE_SUPERVISOR)
 
 		# Clean up any existing test data
 		frappe.db.delete("DA Farmer Link", {"da_id": self.da_id})
@@ -61,12 +64,7 @@ class TestFarmerLinks(IntegrationTestCase):
 			).insert(ignore_permissions=True, ignore_links=True)
 
 		# Create Supervisor context
-		self.ctx = ScopeContext(
-			user=self.supervisor_user,
-			roles={"Supervisor"},
-			woreda_scopes={self.woreda},
-			unrestricted=False,
-		)
+		self.ctx = self.supervisor_user
 
 	def tearDown(self):
 		"""Clean up test data."""
@@ -76,11 +74,11 @@ class TestFarmerLinks(IntegrationTestCase):
 
 	def test_create_manual_farmer_link_success(self):
 		"""Test successful manual farmer link creation."""
-		result = svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			result = svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id=self.farmer_id,
+			)
 
 		self.assertEqual(result["da_id"], self.da_id)
 		self.assertEqual(result["farmer_id"], self.farmer_id)
@@ -96,11 +94,11 @@ class TestFarmerLinks(IntegrationTestCase):
 		self.assignment.save(ignore_permissions=True)
 
 		with self.assertRaises(frappe.ValidationError) as cm:
-			svc.create_farmer_link(
-				da_id=self.da_id,
-				farmer_id=self.farmer_id,
-				ctx=self.ctx,
-			)
+			with as_user(self.ctx):
+				svc.create_farmer_link(
+					da_id=self.da_id,
+					farmer_id=self.farmer_id,
+				)
 
 		self.assertIn("Effective", str(cm.exception))
 
@@ -111,30 +109,30 @@ class TestFarmerLinks(IntegrationTestCase):
 		self.assignment.save(ignore_permissions=True)
 
 		with self.assertRaises(frappe.ValidationError) as cm:
-			svc.create_farmer_link(
-				da_id=self.da_id,
-				farmer_id=self.farmer_id,
-				ctx=self.ctx,
-			)
+			with as_user(self.ctx):
+				svc.create_farmer_link(
+					da_id=self.da_id,
+					farmer_id=self.farmer_id,
+				)
 
 		self.assertIn("Automatic", str(cm.exception))
 
 	def test_create_link_duplicate(self):
 		"""Test rejection of duplicate active link."""
 		# Create first link
-		svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			ctx=self.ctx,
-		)
-
-		# Try to create duplicate
-		with self.assertRaises(frappe.ValidationError) as cm:
+		with as_user(self.ctx):
 			svc.create_farmer_link(
 				da_id=self.da_id,
 				farmer_id=self.farmer_id,
-				ctx=self.ctx,
 			)
+
+		# Try to create duplicate
+		with self.assertRaises(frappe.ValidationError) as cm:
+			with as_user(self.ctx):
+				svc.create_farmer_link(
+					da_id=self.da_id,
+					farmer_id=self.farmer_id,
+				)
 
 		self.assertIn("already actively linked", str(cm.exception))
 
@@ -143,84 +141,66 @@ class TestFarmerLinks(IntegrationTestCase):
 		client_op_id = "test-op-123"
 
 		# Create first time
-		result1 = svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			client_op_id=client_op_id,
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			result1 = svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id=self.farmer_id,
+				client_op_id=client_op_id,
+			)
 
 		# Retry with same client_op_id
-		result2 = svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			client_op_id=client_op_id,
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			result2 = svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id=self.farmer_id,
+				client_op_id=client_op_id,
+			)
 
 		# Should return same link
 		self.assertEqual(result1["link_id"], result2["link_id"])
 		self.assertEqual(result1["da_id"], result2["da_id"])
 		self.assertEqual(result1["farmer_id"], result2["farmer_id"])
 
-	def test_create_link_supervisor_scope_violation(self):
-		"""Test rejection when Supervisor doesn't have scope over Woreda."""
-		# Create context with different Woreda scope
-		wrong_ctx = ScopeContext(
-			user=self.supervisor_user,
-			roles={"Supervisor"},
-			woreda_scopes={"ET03-W02"},  # Different Woreda
-			unrestricted=False,
-		)
-
-		with self.assertRaises(frappe.PermissionError) as cm:
-			svc.create_farmer_link(
-				da_id=self.da_id,
-				farmer_id=self.farmer_id,
-				ctx=wrong_ctx,
-			)
-
-		self.assertIn("outside your authorized scope", str(cm.exception))
-
 	def test_create_link_missing_da_id(self):
 		"""Test validation of required da_id."""
 		with self.assertRaises(frappe.ValidationError) as cm:
-			svc.create_farmer_link(
-				da_id="",
-				farmer_id=self.farmer_id,
-				ctx=self.ctx,
-			)
+			with as_user(self.ctx):
+				svc.create_farmer_link(
+					da_id="",
+					farmer_id=self.farmer_id,
+				)
 
 		self.assertIn("required", str(cm.exception))
 
 	def test_create_link_missing_farmer_id(self):
 		"""Test validation of required farmer_id."""
 		with self.assertRaises(frappe.ValidationError) as cm:
-			svc.create_farmer_link(
-				da_id=self.da_id,
-				farmer_id="",
-				ctx=self.ctx,
-			)
+			with as_user(self.ctx):
+				svc.create_farmer_link(
+					da_id=self.da_id,
+					farmer_id="",
+				)
 
 		self.assertIn("required", str(cm.exception))
 
 	def test_list_farmer_links_by_da(self):
 		"""Test listing farmer links filtered by DA."""
 		# Create multiple links
-		svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id=self.farmer_id,
+			)
 
-		svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id="FARMER-TEST-002",
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id="FARMER-TEST-002",
+			)
 
 		# List links for this DA
-		links = svc.list_farmer_links(da_id=self.da_id, ctx=self.ctx)
+		with as_user(self.ctx):
+			links = svc.list_farmer_links(da_id=self.da_id)
 
 		self.assertEqual(len(links), 2)
 		self.assertTrue(all(link["da_id"] == self.da_id for link in links))
@@ -228,25 +208,26 @@ class TestFarmerLinks(IntegrationTestCase):
 	def test_list_farmer_links_by_type(self):
 		"""Test listing farmer links filtered by link_type."""
 		# Create manual link
-		svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id=self.farmer_id,
+			)
 
 		# List manual links
-		links = svc.list_farmer_links(link_type="Manual", ctx=self.ctx)
+		with as_user(self.ctx):
+			links = svc.list_farmer_links(link_type="Manual")
 
 		self.assertTrue(all(link["link_type"] == "Manual" for link in links))
 
 	def test_list_farmer_links_inactive_filter(self):
 		"""Test listing inactive farmer links."""
 		# Create link
-		result = svc.create_farmer_link(
-			da_id=self.da_id,
-			farmer_id=self.farmer_id,
-			ctx=self.ctx,
-		)
+		with as_user(self.ctx):
+			result = svc.create_farmer_link(
+				da_id=self.da_id,
+				farmer_id=self.farmer_id,
+			)
 
 		# Deactivate it
 		link = frappe.get_doc("DA Farmer Link", result["link_id"])
@@ -254,8 +235,10 @@ class TestFarmerLinks(IntegrationTestCase):
 		link.save(ignore_permissions=True)
 
 		# List inactive links
-		active_links = svc.list_farmer_links(da_id=self.da_id, is_active=True, ctx=self.ctx)
-		inactive_links = svc.list_farmer_links(da_id=self.da_id, is_active=False, ctx=self.ctx)
+		with as_user(self.ctx):
+			active_links = svc.list_farmer_links(da_id=self.da_id, is_active=True)
+		with as_user(self.ctx):
+			inactive_links = svc.list_farmer_links(da_id=self.da_id, is_active=False)
 
 		self.assertEqual(len(active_links), 0)
 		self.assertEqual(len(inactive_links), 1)

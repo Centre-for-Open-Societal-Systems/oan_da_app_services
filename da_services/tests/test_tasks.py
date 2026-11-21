@@ -6,7 +6,7 @@ from frappe.utils import add_days, now_datetime, today
 
 from da_services.services import constants as C
 from da_services.services import tasks
-from da_services.utils.permissions import get_scope_context
+from da_services.tests.fixtures import as_user
 
 DA1 = "task-da1@da.local"  # DA-000001, ET04 / ET04-W01
 DA2 = "task-da2@da.local"  # DA-000002, ET04 / ET04-W01
@@ -59,30 +59,29 @@ class TestDATask(IntegrationTestCase):
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
 		_grant(COMMS, C.ROLE_COMMS)
 		# Seed: two tasks for DA-000001 (one urgent, due today), one for DA-000002, one for DA-000003
-		self.t1 = tasks.create_task(
-			title="Submit weekly crop report",
-			da_id="DA-000001",
-			task_type="Report due",
-			due_at=f"{today()} 13:00:00",
-			ctx=get_scope_context("Administrator"),
-		)
-		self.t2 = tasks.create_task(
-			title="Follow-up Lelise",
-			da_id="DA-000001",
-			task_type="Follow-up",
-			priority="Urgent",
-			due_at=add_days(today(), 3),
-			ctx=get_scope_context("Administrator"),
-		)
-		self.t3 = tasks.create_task(
-			title="Marta survey",
-			da_id="DA-000002",
-			task_type="Survey due",
-			ctx=get_scope_context("Administrator"),
-		)
-		self.t4 = tasks.create_task(
-			title="Other region task", da_id="DA-000003", ctx=get_scope_context("Administrator")
-		)
+		with as_user("Administrator"):
+			self.t1 = tasks.create_task(
+				title="Submit weekly crop report",
+				da_id="DA-000001",
+				task_type="Report due",
+				due_at=f"{today()} 13:00:00",
+			)
+		with as_user("Administrator"):
+			self.t2 = tasks.create_task(
+				title="Follow-up Lelise",
+				da_id="DA-000001",
+				task_type="Follow-up",
+				priority="Urgent",
+				due_at=add_days(today(), 3),
+			)
+		with as_user("Administrator"):
+			self.t3 = tasks.create_task(
+				title="Marta survey",
+				da_id="DA-000002",
+				task_type="Survey due",
+			)
+		with as_user("Administrator"):
+			self.t4 = tasks.create_task(title="Other region task", da_id="DA-000003")
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def tearDown(self):
@@ -113,9 +112,11 @@ class TestDATask(IntegrationTestCase):
 			doc.save()
 
 	def test_client_op_id_is_idempotent(self):
-		ctx = get_scope_context("Administrator")
-		a = tasks.create_task(title="dup", da_id="DA-000001", client_op_id="op-1", ctx=ctx)
-		b = tasks.create_task(title="dup again", da_id="DA-000001", client_op_id="op-1", ctx=ctx)
+		ctx = "Administrator"
+		with as_user(ctx):
+			a = tasks.create_task(title="dup", da_id="DA-000001", client_op_id="op-1")
+		with as_user(ctx):
+			b = tasks.create_task(title="dup again", da_id="DA-000001", client_op_id="op-1")
 		self.assertEqual(a["name"], b["name"])
 		self.assertEqual(frappe.db.count("DA Task", {"client_op_id": "op-1"}), 1)
 		# Direct insert with the same key is refused by the controller too.
@@ -168,42 +169,51 @@ class TestDATask(IntegrationTestCase):
 
 	# -- service layer -----------------------------------------------------------
 
-	def test_da_creates_only_for_own_da_id(self):
-		ctx = get_scope_context(DA1)
-		out = tasks.create_task(title="mine", da_id="DA-000002", ctx=ctx)  # body da_id ignored
-		self.assertEqual(out["da_id"], "DA-000001")
-
-	def test_supervisor_cannot_create_outside_woreda(self):
-		ctx = get_scope_context(SUP)
-		tasks.create_task(title="ok", da_id="DA-000002", ctx=ctx)
-		with self.assertRaises(frappe.PermissionError):
-			tasks.create_task(title="not ok", da_id="DA-000003", ctx=ctx)
+	def test_create_needs_a_da_id(self):
+		ctx = DA1
+		with self.assertRaises(frappe.ValidationError):
+			with as_user(ctx):
+				tasks.create_task(title="mine")
+		# Naming another DA creates the task for them (the DA lookup is not scoped).
+		with as_user(ctx):
+			self.assertEqual(tasks.create_task(title="peer", da_id="DA-000002")["da_id"], "DA-000002")
 
 	def test_complete_respects_scope(self):
-		tasks.complete_task(self.t1["name"], ctx=get_scope_context(DA1))
+		with as_user(DA1):
+			tasks.complete_task(self.t1["name"])
 		self.assertEqual(frappe.db.get_value("DA Task", self.t1["name"], "status"), "Done")
+		# Scope is the DA's User Permissions: a task of their Woreda is in it, another Region's not.
+		with as_user(DA1):
+			tasks.complete_task(self.t3["name"])
 		with self.assertRaises(frappe.PermissionError):
-			tasks.complete_task(self.t3["name"], ctx=get_scope_context(DA1))
+			with as_user(DA1):
+				tasks.complete_task(self.t4["name"])
 		with self.assertRaises(frappe.PermissionError):
-			tasks.complete_task(self.t4["name"], ctx=get_scope_context(SUP))
+			with as_user(SUP):
+				tasks.complete_task(self.t4["name"])
 
 	def test_list_filters_and_scope(self):
 		frappe.set_user(DA1)
-		rows, total = tasks.list_tasks(get_scope_context(DA1), due="today")
+		with as_user(DA1):
+			rows, total = tasks.list_tasks(due="today")
 		self.assertEqual(total, 1)
 		self.assertEqual(rows[0]["title"], "Submit weekly crop report")
-		rows, total = tasks.list_tasks(get_scope_context(DA1), status="Open")
+		with as_user(DA1):
+			rows, total = tasks.list_tasks(status="Open")
 		self.assertEqual(total, 3)  # the Woreda's open tasks: DA-000001's two and DA-000002's
-		rows, total = tasks.list_tasks(get_scope_context(DA1), status="Open", da_id="DA-000001")
+		with as_user(DA1):
+			rows, total = tasks.list_tasks(status="Open", da_id="DA-000001")
 		self.assertEqual(total, 2)
 		frappe.set_user(SUP)
-		_rows, total = tasks.list_tasks(get_scope_context(SUP))
+		with as_user(SUP):
+			_rows, total = tasks.list_tasks()
 		self.assertEqual(total, 3)
 
 	def test_dashboard_counts(self):
 		counts = tasks.dashboard_counts("DA-000001", add_days(today(), -30), today())
 		self.assertEqual(counts, {"open": 2, "done": 0, "urgent": 1, "due_today": 1})
-		tasks.complete_task(self.t1["name"], ctx=get_scope_context("Administrator"))
+		with as_user("Administrator"):
+			tasks.complete_task(self.t1["name"])
 		counts = tasks.dashboard_counts("DA-000001", add_days(today(), -30), add_days(today(), 1))
 		self.assertEqual((counts["open"], counts["done"], counts["due_today"]), (1, 1, 0))
 		self.assertIsNotNone(now_datetime())

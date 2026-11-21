@@ -3,11 +3,11 @@
 Two surfaces share one implementation:
 
 - ``GET /api/v1/da-services/me`` returns the caller's DA Services profile: the single role
-  code the portal switches on, Region/Woreda scope and its footer label, bound DA-ID, the
-  DA record from the registry (for a Development Agent) and the nav hrefs the role may see.
+  code the portal switches on, Region/Woreda scope and its footer label, the Kebeles the
+  caller is posted to and the nav hrefs the role may see.
 - The ``on_user_profile`` hook in ``api/v1/profile.py`` (PR #4) gives oan_auth_service's
   ``GET /api/v1/auth/me`` the roles and scope under ``data.profiles.da_services``; this
-  endpoint adds the registry record and the menu on top.
+  endpoint adds the Kebeles and the menu on top.
 
 The menu is a convenience for the UI, not an authorisation control: every endpoint
 still enforces the scope rule itself.
@@ -19,10 +19,9 @@ import frappe
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
-from da_services.integrations.da_registry.client import DARegistryAuthError, DARegistryError, get_client
 from da_services.services import constants as C
 from da_services.services.notifications import own_kebeles
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.utils.permissions import granted_areas
 
 # Single role code and label the portal switches on (frontend lib/rbac.ts ROLES / ROLE_LABELS).
 ROLE_CODES: dict[str, str] = {
@@ -71,99 +70,76 @@ NAV: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def role_codes_for(ctx: ScopeContext) -> list[str]:
-	if ctx.unrestricted:
-		# System Manager / Administrator act as OAN Administrator here. Frappe's Administrator
-		# also holds every role, which must not merge the DA and Comms menus into theirs.
-		return ["Admin"]
-	codes = {ROLE_CODES[r] for r in C.DA_SERVICES_ROLES if r in ctx.roles}
+def role_codes_for() -> list[str]:
+	codes = {ROLE_CODES[r] for r in frappe.get_roles() if r in ROLE_CODES}
 	return [c for c in PRIMARY_ROLE_ORDER if c in codes]
 
 
-def menu_for(ctx: ScopeContext) -> list[str]:
+def menu_for() -> list[str]:
 	"""Nav hrefs for every role the user holds. A UI convenience, not an access control."""
-	codes = set(role_codes_for(ctx))
+	codes = set(role_codes_for())
 	return [href for href, roles in NAV if codes.intersection(roles)]
 
 
-def _scope_text(ctx: ScopeContext) -> str:
+def _scope_text() -> str:
 	# Codes for now; names come once the location master data is in (DA Services backlog).
+	areas = granted_areas()
 	for label, values in (
-		("Woreda", ctx.woreda_scopes),
-		("Zone", ctx.zone_scopes),
-		("Region", ctx.region_scopes),
+		("Woreda", areas["woredas"]),
+		("Zone", areas["zones"]),
+		("Region", areas["regions"]),
 	):
 		if values:
 			return f"{label} · {', '.join(sorted(values))}"
 	return ""
 
 
-def scope_label_for(role: str | None, ctx: ScopeContext, agent: dict | None = None) -> str:
+def scope_label_for(role: str | None) -> str:
 	"""Sidebar footer line (frontend ROLE_SCOPES), e.g. "Woreda · ET04-W01"."""
 	if role == "Admin":
 		return "All regions"
 	if role == "CommsOfficer":
 		return "Broadcast domain"
 	if role == "DA":
-		where = (agent or {}).get("woreda") or next(iter(sorted(ctx.woreda_scopes)), None)
+		where = next(iter(sorted(granted_areas()["woredas"])), None)
 		return f"Own record · {where}" if where else "Own record"
-	text = _scope_text(ctx)
+	text = _scope_text()
 	if role == "Executive":
 		return f"{text} (read)" if text else "Read only"
 	return text
 
 
-def profile_for(ctx: ScopeContext, include_agent: bool = True) -> dict:
-	da_id = next(iter(sorted(ctx.da_ids)), None)
-	codes = role_codes_for(ctx)
+def profile_for() -> dict:
+	codes = role_codes_for()
 	role = codes[0] if codes else None
-	full_name = frappe.db.get_value("User", ctx.user, "full_name") if ctx.user else None
+	full_name = frappe.db.get_value("User", frappe.session.user, "full_name") if frappe.session.user else None
 	data: dict = {
-		"user": {"id": ctx.user, "name": full_name or ctx.user, "email": ctx.user},
+		"user": {
+			"id": frappe.session.user,
+			"name": full_name or frappe.session.user,
+			"email": frappe.session.user,
+		},
 		"role": role,
 		"role_label": ROLE_LABELS.get(role),
 		"role_codes": codes,
-		"roles": [r for r in C.DA_SERVICES_ROLES if r in ctx.roles],
-		"unrestricted": ctx.unrestricted,
-		"scope": {
-			"regions": sorted(ctx.region_scopes),
-			"zones": sorted(ctx.zone_scopes),
-			"woredas": sorted(ctx.woreda_scopes),
-		},
-		"da_id": da_id,
-		"menu": menu_for(ctx),
+		"roles": sorted(r for r in frappe.get_roles() if r in ROLE_CODES),
+		"scope": {key: sorted(values) for key, values in granted_areas().items()},
+		"menu": menu_for(),
 	}
-	if C.ROLE_DA in ctx.roles:
-		# The Kebeles the DA is posted to (Effective assignments); a DA broadcasts to these.
-		codes = own_kebeles(ctx)
-		names = (
-			dict(
-				frappe.get_all(
-					"DA Kebele", filters={"name": ("in", codes)}, fields=["name", "kebele_name"], as_list=True
-				)
+	if kebeles := own_kebeles():
+		# The Kebeles the caller is posted to (Effective assignments).
+		names = dict(
+			frappe.get_all(
+				"DA Kebele", filters={"name": ("in", kebeles)}, fields=["name", "kebele_name"], as_list=True
 			)
-			if codes
-			else {}
 		)
-		data["kebeles"] = [{"code": c, "name": names.get(c) or c} for c in codes]
-	if include_agent and da_id:
-		try:
-			data["agent"] = get_client().get_da(da_id).to_dict()
-		except DARegistryAuthError as exc:
-			# Roles, scope and menu still come from DA Services; the registry's refusal
-			# (expired token, or no registry role) is reported on the profile screen.
-			data["agent"] = None
-			data["agent_error"] = f"registry refused the token ({exc.http_status_code})"
-		except DARegistryError as exc:
-			data["agent"] = None
-			data["agent_error"] = f"registry unavailable: {exc.__class__.__name__}"
-	data["scope_label"] = scope_label_for(role, ctx, data.get("agent"))
+		data["kebeles"] = [{"code": c, "name": names.get(c) or c} for c in kebeles]
+	data["scope_label"] = scope_label_for(role)
 	return data
 
 
-@route("/me", methods=("GET",), summary="Current user's DA Services profile: roles, scope, DA-ID, menu")
+@route("/me", methods=("GET",), summary="Current user's DA Services profile: roles, scope, menu")
 @frappe.whitelist()
 @handle_api_errors
 def get_me():
-	ctx = require_roles(*C.DA_SERVICES_ROLES, *C.UNRESTRICTED_ROLES)
-	return success_response(data=profile_for(ctx))
+	return success_response(data=profile_for())

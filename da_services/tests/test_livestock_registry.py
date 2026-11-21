@@ -707,7 +707,6 @@ class TestRoutes(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict(form_dict or {})
 		try:
 			with (
-				patch("da_services.api.v1.livestock.require_roles", return_value=object()),
 				patch(
 					"da_services.api.v1.livestock.farmers.get_farmer_profile",
 					side_effect=frappe.DoesNotExistError,

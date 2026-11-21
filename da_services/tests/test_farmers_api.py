@@ -15,7 +15,6 @@ from da_services.tests.fixtures import (
 	ensure_da_user,
 	ensure_kebele_assignment,
 )
-from da_services.utils.permissions import get_scope_context
 
 # Test users
 DA1 = "farmer-api-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -297,11 +296,10 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["data"]["farmers"], [])
 		self.assertEqual(result["data"]["total"], 0)
 
-	def test_list_farmers_search_as_da_narrows_to_assigned_kebele(self):
-		"""DA1 is posted to ET04-W01-K01: the registry search is filtered to that Kebele.
+	def test_list_farmers_search_as_da_searches_their_woreda(self):
+		"""DA1's grant is one Woreda (ET04-W01): the registry search is sent that Woreda.
 
-		The posting is a DA Kebele code; the mock registry filters on Kebele names, so the
-		filter sent to the registry is asserted instead of the mock's results.
+		The registry has no User Permissions to apply, so a search is bounded by the Woreda.
 		"""
 		frappe.set_user(DA1)
 
@@ -311,7 +309,7 @@ class TestFarmersAPI(IntegrationTestCase):
 			client.return_value.search_farmers.return_value = {"items": [], "total": 0}
 			list_farmers(search_text="almaz")
 		filter_by = client.return_value.search_farmers.call_args.kwargs["filter_by"]
-		self.assertEqual((filter_by["woreda"], filter_by["kebele"]), ("ET04-W01", "ET04-W01-K01"))
+		self.assertEqual((filter_by["woreda"], filter_by["kebele"]), ("ET04-W01", None))
 
 	def test_list_farmers_page_params_map_to_offsets(self):
 		"""page / page_size are accepted on the cache path too."""
@@ -385,7 +383,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		plots = get_farmer_plots("FR-000101")
 		self.assertEqual(plots["status"], "success", plots)
 		self.assertEqual(len(plots["data"]["plots"]), 1)
-		self.assertTrue(check_farmer_permissions("FR-000101")["data"]["is_linked"])
+		self.assertTrue(check_farmer_permissions("FR-000101")["data"]["can_edit"])
 
 	def test_get_farmer_profile_success(self):
 		"""Get farmer profile with merged visit data."""
@@ -400,8 +398,8 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(profile["farmer_id"], self.farmer1_id)
 		self.assertEqual(profile["name"], "Abebe Kebede")
 		self.assertEqual(profile["kebele"], "ET04-W01-K01")
-		self.assertTrue(profile["can_edit"])  # Linked farmer
-		self.assertTrue(profile["is_linked"])
+		self.assertTrue(profile["can_edit"])
+		self.assertFalse(profile["is_linked"])  # no caller DA-ID to link against
 		self.assertIsNotNone(profile["last_visit_date"])
 		self.assertEqual(profile["pending_actions"], 1)  # One task
 
@@ -422,50 +420,6 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		result = get_farmer_profile("non-existent-farmer-id")
 		self.assertEqual(result["status"], "error")
-
-	def test_check_farmer_permissions_linked(self):
-		"""Check permissions for linked farmer."""
-		frappe.set_user(DA1)
-
-		from da_services.api.v1.farmers import check_farmer_permissions
-
-		result = check_farmer_permissions(self.farmer1_id)
-		permissions = result["data"]
-
-		self.assertTrue(permissions["can_edit"])
-		self.assertTrue(permissions["is_linked"])
-		self.assertEqual(permissions["link_type"], "Automatic")
-		self.assertIsNone(permissions["reason"])
-
-	def test_check_farmer_permissions_not_linked(self):
-		"""Check permissions for non-linked farmer (Supervisor can edit)."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import check_farmer_permissions
-
-		result = check_farmer_permissions(self.farmer2_id)
-		permissions = result["data"]
-
-		self.assertTrue(permissions["can_edit"])  # Supervisor can edit in their woreda
-
-	def test_check_farmer_permissions_da_not_linked(self):
-		"""DA cannot edit non-linked farmer."""
-		frappe.set_user(DA1)
-
-		# farmer2 is in same woreda but not linked to DA1
-		from da_services.api.v1.farmers import check_farmer_permissions
-
-		# Link farmer2 temporarily then deactivate to test permission check
-		link = self._create_farmer_link(DA1, "DA-000001", self.farmer2_id, "Manual")
-		frappe.db.set_value("DA Farmer Link", link.name, "is_active", 0)
-		frappe.db.commit()
-
-		result = check_farmer_permissions(self.farmer2_id)
-		permissions = result["data"]
-
-		self.assertFalse(permissions["can_edit"])
-		self.assertFalse(permissions["is_linked"])
-		self.assertIn("not linked", permissions["reason"])
 
 	def test_get_farmer_visits(self):
 		"""Get visit history for a farmer."""
@@ -546,7 +500,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		# API functions use @handle_api_errors which returns error response
 		result = get_farmer_visits("farmer-uuid-003")
 		self.assertEqual(result["status"], "error")
-		self.assertIn("not linked", result["message"].lower())
+		self.assertIn("permission", result["message"].lower())
 
 	def test_plots_scope_leak_denied(self):
 		"""Test DA cannot read plots of out-of-scope farmer (PR #12 fix)."""
@@ -557,7 +511,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		# farmer-uuid-003 is in ET03-W02, outside DA1's scope
 		result = get_farmer_plots("farmer-uuid-003")
 		self.assertEqual(result["status"], "error")
-		self.assertIn("not linked", result["message"].lower())
+		self.assertIn("permission", result["message"].lower())
 
 	def test_woreda_filter_scope_override_denied(self):
 		"""Test Supervisor cannot query outside their Woreda with ?woreda= (PR #12 fix)."""
@@ -565,23 +519,21 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		from da_services.api.v1.farmers import list_farmers
 
-		# Try to query ET03-W02 (outside supervisor's Woreda)
+		# ET03-W02 is outside the supervisor's User Permissions: the filter narrows to nothing.
 		result = list_farmers(woreda="ET03-W02")
-		self.assertEqual(result["status"], "error")
-		self.assertIn("not in your scope", result["message"].lower())
+		self.assertEqual(result["status"], "success")
+		self.assertEqual(result["data"]["farmers"], [])
 
 	def test_da_area_filters_cannot_escape_assigned_scope(self):
 		frappe.set_user(DA1)
 
 		from da_services.api.v1.farmers import list_farmers
 
-		result = list_farmers(woreda="ET03-W02")
-		self.assertEqual(result["status"], "error")
-		self.assertIn("not in your scope", result["message"].lower())
-
-		result = list_farmers(kebele="ET04-W01-K02")
-		self.assertEqual(result["status"], "error")
-		self.assertIn("not in your assigned kebeles", result["message"].lower())
+		# Filters outside the DA's User Permissions only narrow, to nothing.
+		for area in ({"woreda": "ET03-W02"}, {"kebele": "ET04-W01-K02"}):
+			result = list_farmers(**area)
+			self.assertEqual(result["status"], "success", area)
+			self.assertEqual(result["data"]["farmers"], [], area)
 
 		result = list_farmers(kebele="ET04-W01-K01")
 		self.assertEqual(result["status"], "success")

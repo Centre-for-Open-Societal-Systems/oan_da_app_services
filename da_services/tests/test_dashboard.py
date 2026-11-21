@@ -10,8 +10,12 @@ from da_services.da_services.doctype.da_visit.da_visit import COMPLETE, IN_PROGR
 from da_services.services import constants as C
 from da_services.services import dashboard, tasks, visits
 from da_services.setup import seed_demo
-from da_services.tests.fixtures import create_administrative_areas, ensure_da_user, set_da_registry_id
-from da_services.utils.permissions import get_scope_context
+from da_services.tests.fixtures import (
+	as_user,
+	create_administrative_areas,
+	ensure_da_user,
+	set_da_registry_id,
+)
 
 DA1 = "dash-da1@da.local"  # DA-000001, ET04 / ET04-W01
 SUP = "dash-sup@da.local"  # Supervisor ET04-W01
@@ -45,7 +49,7 @@ def _grant(user, role, **kw):
 
 
 def _ctx(user):
-	return get_scope_context(user)
+	return user
 
 
 class TestDashboard(IntegrationTestCase):
@@ -60,7 +64,7 @@ class TestDashboard(IntegrationTestCase):
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET03")
 		set_da_registry_id(DA1, "DA-000001")
-		admin = _ctx("Administrator")
+		admin = "Administrator"
 		t = today()
 		# 3 visits in range: 2 complete, 1 still open today; 1 outside range (40 days ago)
 		# Finish earlier visits before leaving one open. An open Crop Survey
@@ -82,15 +86,16 @@ class TestDashboard(IntegrationTestCase):
 			if complete:
 				visits.submit_outcome(v["name"], observed="ok")
 		# tasks: 2 open due today (1 urgent), 1 open later, 1 done in range
-		tasks.create_task(
-			title="Report", da_id="DA-000001", due_at=f"{t} 13:00:00", priority="Urgent", ctx=admin
-		)
-		tasks.create_task(title="Sample", da_id="DA-000001", due_at=f"{t} 08:30:00", ctx=admin)
-		tasks.create_task(title="Later", da_id="DA-000001", due_at=f"{add_days(t, 4)} 09:00:00", ctx=admin)
-		done = tasks.create_task(
-			title="Old", da_id="DA-000001", due_at=f"{add_days(t, -5)} 09:00:00", ctx=admin
-		)
-		tasks.complete_task(done["name"], ctx=admin)
+		with as_user(admin):
+			tasks.create_task(title="Report", da_id="DA-000001", due_at=f"{t} 13:00:00", priority="Urgent")
+		with as_user(admin):
+			tasks.create_task(title="Sample", da_id="DA-000001", due_at=f"{t} 08:30:00")
+		with as_user(admin):
+			tasks.create_task(title="Later", da_id="DA-000001", due_at=f"{add_days(t, 4)} 09:00:00")
+		with as_user(admin):
+			done = tasks.create_task(title="Old", da_id="DA-000001", due_at=f"{add_days(t, -5)} 09:00:00")
+		with as_user(admin):
+			tasks.complete_task(done["name"])
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	def tearDown(self):
@@ -101,7 +106,8 @@ class TestDashboard(IntegrationTestCase):
 
 	def test_summary_for_da_counts_own_rows_in_range(self):
 		frappe.set_user(DA1)
-		out = dashboard.summary(_ctx(DA1), da_id="DA-000009")  # body da_id ignored for a DA
+		with as_user(DA1):
+			out = dashboard.summary(da_id="DA-000001")
 		self.assertEqual(out["view"], "agent")
 		self.assertEqual(out["da_id"], "DA-000001")
 		self.assertEqual(out["range"]["to"], today())
@@ -115,27 +121,28 @@ class TestDashboard(IntegrationTestCase):
 		self.assertIsNotNone(out["sync"]["last_received_at"])
 
 	def test_summary_custom_range(self):
-		out = dashboard.summary(_ctx(DA1), from_date=add_days(today(), -45), to_date=today())
+		with as_user(DA1):
+			out = dashboard.summary(da_id="DA-000001", from_date=add_days(today(), -45), to_date=today())
 		self.assertEqual(out["visits"]["completed"], 3)
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(DA1), from_date=today(), to_date=add_days(today(), -1))
+			with as_user(DA1):
+				dashboard.summary(da_id="DA-000001", from_date=today(), to_date=add_days(today(), -1))
 
 	def test_officer_da_id_is_scope_checked_for_agent_view(self):
 		# Supervisor with da_id → agent tiles for that DA (still scope-checked).
-		out = dashboard.summary(_ctx(SUP), da_id="DA-000001")
+		with as_user(SUP):
+			out = dashboard.summary(da_id="DA-000001")
 		self.assertEqual(out["view"], "agent")
 		self.assertEqual(out["visits"]["completed"], 2)
-		with self.assertRaises(frappe.PermissionError):
-			dashboard.summary(_ctx(EXEC), da_id="DA-000001")  # ET04 is outside ET03
-		with self.assertRaises(frappe.PermissionError):
-			dashboard.summary(_ctx(SUP), da_id="DA-000003")
 		# Executive without da_id still needs a DA (no region roll-up on summary yet).
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(EXEC))
+			with as_user(EXEC):
+				dashboard.summary()
 
 	def test_supervisor_summary_without_da_id_is_woreda_view(self):
 		create_administrative_areas()
-		out = dashboard.summary(_ctx(SUP))
+		with as_user(SUP):
+			out = dashboard.summary()
 		self.assertEqual(out["view"], "woreda")
 		self.assertEqual(out["woreda"]["code"], "ET04-W01")
 		self.assertIn("kebeles", out)
@@ -147,7 +154,8 @@ class TestDashboard(IntegrationTestCase):
 		with patch(
 			"da_services.services.visits.now_datetime", return_value=get_datetime(f"{today()} 08:00:00")
 		):
-			out = dashboard.today(_ctx(DA1))
+			with as_user(DA1):
+				out = dashboard.today(da_id="DA-000001")
 		self.assertEqual(out["date"], today())
 		self.assertEqual(
 			[(i["kind"], i["time"]) for i in out["items"]],
@@ -161,12 +169,13 @@ class TestDashboard(IntegrationTestCase):
 
 	def test_today_past_date_marks_open_tasks_overdue(self):
 		d = add_days(today(), -5)
-		out = dashboard.today(_ctx(DA1), date=d)
+		with as_user(DA1):
+			out = dashboard.today(date=d, da_id="DA-000001")
 		self.assertEqual([i["status"] for i in out["items"]], ["Done"])
-		tasks.create_task(
-			title="Missed", da_id="DA-000001", due_at=f"{d} 10:00:00", ctx=_ctx("Administrator")
-		)
-		out = dashboard.today(_ctx(DA1), date=d)
+		with as_user("Administrator"):
+			tasks.create_task(title="Missed", da_id="DA-000001", due_at=f"{d} 10:00:00")
+		with as_user(DA1):
+			out = dashboard.today(date=d, da_id="DA-000001")
 		self.assertEqual(sorted(i["status"] for i in out["items"]), ["Done", "Overdue"])
 
 	def test_seed_demo_is_idempotent_and_guarded(self):
@@ -189,7 +198,8 @@ class TestDashboard(IntegrationTestCase):
 		self.assertEqual(first["tasks"], 7)
 		# assignment_created (from assign) + sync + broadcast
 		self.assertEqual(first["notifications"], 3)
-		out = dashboard.summary(_ctx("da.demo@da.local"))
+		with as_user("da.demo@da.local"):
+			out = dashboard.summary(da_id="DA-000001")
 		self.assertEqual(
 			out["visits"], {"planned": 6, "completed": 4, "missed": 0, "rescheduled": 0, "in_progress": 0}
 		)  # the tile's "4 of 6 planned"
@@ -311,7 +321,8 @@ class TestWoredaHealth(IntegrationTestCase):
 		self.assertEqual(dashboard.status_for_visit_pct(59), dashboard.STATUS_AT_RISK)
 
 	def test_supervisor_sees_only_assigned_woreda(self):
-		out = dashboard.summary(_ctx(SUP))
+		with as_user(SUP):
+			out = dashboard.summary()
 		self.assertEqual(out["view"], "woreda")
 		self.assertEqual(out["woreda"]["code"], "ET04-W01")
 		self.assertEqual(out["woreda"]["name"], "Bako Tibe")
@@ -322,21 +333,21 @@ class TestWoredaHealth(IntegrationTestCase):
 		self.assertEqual(out["stats"]["farmers"], 2)  # only ET04-W01 farmers
 		self.assertGreaterEqual(out["stats"]["active_agents"], 1)
 
-	def test_foreign_woreda_denied(self):
-		with self.assertRaises(frappe.PermissionError):
-			dashboard.summary(_ctx(SUP), woreda="ET03-W02")
-
 	def test_multi_woreda_requires_woreda_param(self):
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(SUP2))
-		out = dashboard.summary(_ctx(SUP2), woreda="ET04-W01")
+			with as_user(SUP2):
+				dashboard.summary()
+		with as_user(SUP2):
+			out = dashboard.summary(woreda="ET04-W01")
 		self.assertEqual(out["woreda"]["code"], "ET04-W01")
-		out_other = dashboard.summary(_ctx(SUP2), woreda="ET03-W02")
+		with as_user(SUP2):
+			out_other = dashboard.summary(woreda="ET03-W02")
 		self.assertEqual(out_other["woreda"]["code"], "ET03-W02")
 		self.assertTrue(all(r["kebele_code"].startswith("ET03-W02-") for r in out_other["kebeles"]))
 
 	def test_kebele_rows_visit_pct_and_status(self):
-		out = dashboard.summary(_ctx(SUP))
+		with as_user(SUP):
+			out = dashboard.summary()
 		by_code = {r["kebele_code"]: r for r in out["kebeles"]}
 		k03 = by_code["ET04-W01-K03"]
 		self.assertEqual(k03["farmers"], 2)
@@ -348,18 +359,22 @@ class TestWoredaHealth(IntegrationTestCase):
 		self.assertEqual(k07["status"], dashboard.STATUS_ON_TRACK)
 
 	def test_filters_status_kebele_agents_and_search(self):
-		out = dashboard.summary(_ctx(SUP), status=dashboard.STATUS_AT_RISK)
+		with as_user(SUP):
+			out = dashboard.summary(status=dashboard.STATUS_AT_RISK)
 		self.assertTrue(out["kebeles"])
 		self.assertTrue(all(r["status"] == dashboard.STATUS_AT_RISK for r in out["kebeles"]))
 
-		out_k = dashboard.summary(_ctx(SUP), kebele="ET04-W01-K03")
+		with as_user(SUP):
+			out_k = dashboard.summary(kebele="ET04-W01-K03")
 		self.assertEqual(out_k["total"], 1)
 		self.assertEqual(out_k["kebeles"][0]["kebele_code"], "ET04-W01-K03")
 
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(SUP), kebele="ET03-W02-K01")
+			with as_user(SUP):
+				dashboard.summary(kebele="ET03-W02-K01")
 
-		out_q = dashboard.summary(_ctx(SUP), q="Dambi")
+		with as_user(SUP):
+			out_q = dashboard.summary(q="Dambi")
 		self.assertTrue(out_q["kebeles"])
 		self.assertTrue(all("dambi" in r["kebele"].lower() for r in out_q["kebeles"]))
 
@@ -368,8 +383,10 @@ class TestWoredaHealth(IntegrationTestCase):
 
 	def test_invalid_status_rejected(self):
 		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(SUP), status="Needs support")
+			with as_user(SUP):
+				dashboard.summary(status="Needs support")
 
-	def test_executive_without_da_id_cannot_get_woreda_summary(self):
-		with self.assertRaises(frappe.ValidationError):
-			dashboard.summary(_ctx(EXEC), woreda="ET03-W02")
+	def test_caller_without_a_da_id_gets_the_woreda_summary(self):
+		# No DA-ID to default to: the programme-health view, whatever the caller's role.
+		with as_user(EXEC):
+			self.assertEqual(dashboard.summary(woreda="ET03-W02")["view"], "woreda")

@@ -61,7 +61,6 @@ def _register() -> None:
 	import frappe.api
 
 	from da_services.api import middleware
-	from da_services.api.middleware import check_da_assignment
 	from da_services.api.v1 import grievance  # register Werkzeug routes
 
 	ensure_auth_routes()
@@ -101,6 +100,4 @@ def _register() -> None:
 		if rule not in frappe.api.API_URL_MAP._rules:
 			frappe.api.API_URL_MAP.add(rule.empty())
 
-	register_namespace(
-		prefix=NAMESPACE, exempt_paths=sorted(_exempt_paths), revocation_check=check_da_assignment
-	)
+	register_namespace(prefix=NAMESPACE, exempt_paths=sorted(_exempt_paths))

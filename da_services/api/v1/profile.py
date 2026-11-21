@@ -2,8 +2,8 @@
 
 import frappe
 
-from da_services.services import constants as C
-from da_services.utils.permissions import get_scope_context
+from da_services.api.v1.me import ROLE_CODES
+from da_services.utils.permissions import granted_areas
 
 
 def resolve_user_profile_hook(user_doc, roles=None) -> tuple[str, dict | None]:
@@ -12,18 +12,13 @@ def resolve_user_profile_hook(user_doc, roles=None) -> tuple[str, dict | None]:
 	Returns ("da_services", profile_data) namespaced under data["profiles"]["da_services"]
 	containing DA-specific scope that auth_service does not already provide.
 	"""
-	ctx = get_scope_context(user_doc.name)
-	da_roles = ctx.roles & set(C.DA_SERVICES_ROLES)
+	# The DA Services roles the user holds (Frappe roles).
+	da_roles = {r for r in frappe.get_roles(user_doc.name) if r in ROLE_CODES}
 
 	if not da_roles:
 		return "da_services", None
 
 	return "da_services", {
 		"roles": sorted(da_roles),
-		"scope": {
-			"regions": sorted(ctx.region_scopes),
-			"zones": sorted(ctx.zone_scopes),
-			"woredas": sorted(ctx.woreda_scopes),
-			"da_ids": sorted(ctx.da_ids),
-		},
+		"scope": {key: sorted(values) for key, values in granted_areas(user_doc.name).items()},
 	}

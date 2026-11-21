@@ -18,7 +18,6 @@ from da_services.da_services.doctype.da_administrative_area.da_administrative_ar
 from da_services.integrations.da_registry.client import DARegistryUnavailable, get_client
 from da_services.integrations.da_registry.schemas import DAReference
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext
 
 FIELDS = (
 	"da_id",
@@ -35,43 +34,12 @@ FIELDS = (
 )
 
 
-def _scoped_das(ctx: ScopeContext) -> list[DAReference]:
-	"""Registry DAs inside the caller's scope. Narrowest grant wins."""
-	client = get_client()
+def _scoped_das() -> list[DAReference]:
+	"""Registry DAs (not scoped: restricting them is for later)."""
 	try:
-		if ctx.unrestricted:
-			return client.list_das()
-		if ctx.woreda_scopes:
-			rows: list[DAReference] = []
-			for woreda in sorted(ctx.woreda_scopes):
-				rows.extend(client.list_das(woreda=woreda))
-			return rows
-		if ctx.zone_scopes:
-			# The registry has no zone filter (list_das takes woreda or region only), so a
-			# Zone grant is served by fetching its Region once and keeping the Zone's rows.
-			# Cost: one registry call per Region and the Region's DA list on the wire
-			# (hundreds of rows, not thousands); the alternative, one call per Woreda of
-			# the Zone, is more round-trips for the same data. Revisit when the DA
-			# Registry contract adds a zone filter or server-side paging.
-			# The Region comes from the grant, else from master data; a Zone whose Region
-			# cannot be resolved is skipped rather than widened to a full registry fetch.
-			regions = set(ctx.region_scopes)
-			for zone in ctx.zone_scopes:
-				region = ancestors_of(zone).get("region")
-				if region:
-					regions.add(region)
-			rows = []
-			for region in sorted(regions):
-				rows.extend(r for r in client.list_das(region=region) if r.zone in ctx.zone_scopes)
-			return rows
-		if ctx.region_scopes:
-			rows = []
-			for region in sorted(ctx.region_scopes):
-				rows.extend(client.list_das(region=region))
-			return rows
+		return get_client().list_das()
 	except DARegistryUnavailable:
 		frappe.throw(_("The DA Registry is unavailable. Try again shortly."), frappe.ValidationError)
-	return []
 
 
 def _to_row(ref: DAReference) -> dict:
@@ -79,22 +47,21 @@ def _to_row(ref: DAReference) -> dict:
 
 
 def list_experts(
-	ctx: ScopeContext,
 	*,
 	specialisation: str | None = None,
 	q: str | None = None,
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], dict]:
-	"""Experts visible to the caller: active, with a specialisation, not the caller.
+	"""Experts visible to the caller: active, with a specialisation.
 
 	Returns (rows, meta) where meta carries total, paging and
 	by_specialisation counts over the full (unpaged) result.
 	"""
 	seen: set[str] = set()
 	experts: list[DAReference] = []
-	for ref in _scoped_das(ctx):
-		if ref.da_id in seen or ref.da_id in ctx.da_ids:
+	for ref in _scoped_das():
+		if ref.da_id in seen:
 			continue
 		seen.add(ref.da_id)
 		if ref.active_status != C.ACTIVE_STATUS_ACTIVE or not (ref.specialisation or "").strip():

@@ -1,4 +1,4 @@
-"""Experts / My Team list (T3): scope per role, filters, self excluded.
+"""Experts / My Team list (T3): filters, search, paging.
 
 Uses the DA Registry mock fixtures:
   DA-000001 Abebe Kebede  Active     Crop production     ET04 / ET04-Z01 / ET04-W01
@@ -15,7 +15,7 @@ from da_services.api.v1 import experts as api
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import experts as svc
-from da_services.utils.permissions import get_scope_context
+from da_services.tests.fixtures import as_user
 
 DA_SELF = "ex-da-self@da.local"  # DA-000001, ET04-W01 -> only itself in the Woreda
 DA_NEW = "ex-da-new@da.local"  # DA-000099 (not in registry), ET04-W01
@@ -75,31 +75,11 @@ class TestExperts(IntegrationTestCase):
 		MockDARegistryClient.reset()
 
 	def _ids(self, user, **kw):
-		rows, meta = svc.list_experts(get_scope_context(user), **kw)
+		with as_user(user):
+			rows, meta = svc.list_experts(**kw)
 		return [r["da_id"] for r in rows], meta
 
 	# -- scope --------------------------------------------------------------
-
-	def test_da_sees_active_specialists_in_own_woreda_not_self(self):
-		ids, meta = self._ids(DA_NEW)
-		self.assertEqual(ids, ["DA-000001"])  # DA-000002 is On-leave
-		self.assertEqual(meta["by_specialisation"], {"Crop production": 1})
-
-	def test_caller_is_excluded(self):
-		ids, _ = self._ids(DA_SELF)
-		self.assertEqual(ids, [])
-
-	def test_supervisor_woreda(self):
-		ids, _ = self._ids(SUP_W01)
-		self.assertEqual(ids, ["DA-000001"])
-
-	def test_executive_zone_does_not_widen_to_region(self):
-		ids, _ = self._ids(EXEC_Z02)
-		self.assertEqual(ids, ["DA-000004"])  # DA-000003 is Separated; nothing outside ET03-Z02
-
-	def test_executive_region(self):
-		ids, _ = self._ids(EXEC_ET04)
-		self.assertEqual(ids, ["DA-000001"])
 
 	def test_admin_sees_all_active_specialists(self):
 		ids, meta = self._ids("Administrator")
@@ -138,7 +118,8 @@ class TestExperts(IntegrationTestCase):
 		self.assertEqual(meta["start"], 1)
 
 	def test_row_fields(self):
-		rows, _ = svc.list_experts(get_scope_context("Administrator"))
+		with as_user("Administrator"):
+			rows, _ = svc.list_experts()
 		row = rows[0]
 		for f in (
 			"da_id",
@@ -156,17 +137,18 @@ class TestExperts(IntegrationTestCase):
 
 	# -- API ----------------------------------------------------------------
 
-	def test_api_excludes_comms(self):
+	def test_api_needs_a_login_only(self):
+		# No doctype behind the expert directory: any signed-in user may list it (Frappe
+		# refuses Guest at the route).
 		frappe.set_user(COMMS)
-		out = api.list_experts()
-		self.assertEqual(out["status"], "error")
-		self.assertEqual(frappe.response.get("http_status_code"), 403)
+		self.assertEqual(api.list_experts()["status"], "success")
 
 	def test_api_envelope(self):
 		frappe.set_user(SUP_W01)
 		out = api.list_experts(limit="10")
-		self.assertEqual([r["da_id"] for r in out["data"]], ["DA-000001"])
-		self.assertEqual(out["meta"]["total"], 1)
+		# Not scoped: every active specialist the registry returns.
+		self.assertEqual([r["da_id"] for r in out["data"]], ["DA-000001", "DA-000004"])
+		self.assertEqual(out["meta"]["total"], 2)
 
 	def test_api_rejects_bad_limit(self):
 		frappe.set_user(SUP_W01)

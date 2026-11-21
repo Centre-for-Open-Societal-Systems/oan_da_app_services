@@ -7,14 +7,15 @@ from datetime import datetime, timedelta
 import frappe
 from frappe.tests import IntegrationTestCase
 
+from da_services.services import constants as C
 from da_services.services import farmers as svc
 from da_services.services import visit_specializations as spec_svc
 from da_services.tests.fixtures import (
+	as_user,
 	cleanup_test_rows,
 	create_administrative_areas,
 	ensure_da_user,
 )
-from da_services.utils.permissions import ScopeContext
 
 
 class TestAssignmentFlags(IntegrationTestCase):
@@ -59,13 +60,11 @@ class TestAssignmentFlags(IntegrationTestCase):
 			}
 		).insert(ignore_permissions=True, ignore_links=True)
 
-		# Create DA context
-		self.ctx = ScopeContext(
-			user="da@test.com",
-			roles={"Development Agent"},
-			da_ids={self.da_id},
-			unrestricted=False,
-		)
+		# The DA signs in: DA Farmer Reference read comes from the Development Agent role, and
+		# their Kebele assignment gave them a User Permission on the Kebele.
+		if C.ROLE_DA not in frappe.get_roles(self.user):
+			frappe.get_doc("User", self.user).add_roles(C.ROLE_DA)
+		self.ctx = self.user
 
 	def tearDown(self):
 		"""Clean up test data."""
@@ -73,7 +72,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 
 	def test_no_active_visits_empty_flags(self):
 		"""Test farmer with no active visits has empty assignment flags."""
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		self.assertIsNotNone(farmer)
@@ -97,7 +97,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 		spec_svc.set_visit_specializations(visit, ["Crop Production"])
 		visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		self.assertIsNotNone(farmer)
@@ -120,7 +121,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 		spec_svc.set_visit_specializations(visit, ["Livestock"])
 		visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		self.assertIn("Livestock", farmer["assigned_specializations"])
@@ -142,7 +144,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 		spec_svc.set_visit_specializations(visit, ["Crop Production", "Livestock"])
 		visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		self.assertIn("Crop Production", farmer["assigned_specializations"])
@@ -167,7 +170,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit.flags.ignore_validate = True  # Bypass status validation for testing
 		visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		self.assertEqual(farmer["assigned_specializations"], [])
@@ -190,7 +194,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 		visit.flags.ignore_validate = True  # Bypass status validation for testing
 		visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		self.assertEqual(farmer["assigned_specializations"], [])
@@ -231,7 +236,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 			visit.insert(ignore_permissions=True, ignore_links=True)
 
 		# List farmers - should use batch query
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		# All farmers should have flags
 		for farmer in farmers:
@@ -259,7 +265,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 			spec_svc.set_visit_specializations(visit, ["Crop Production"])
 			visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		# Should only have one "Crop Production" entry
@@ -282,7 +289,8 @@ class TestAssignmentFlags(IntegrationTestCase):
 		spec_svc.set_visit_specializations(visit, ["Livestock", "Crop Production"])
 		visit.insert(ignore_permissions=True, ignore_links=True)
 
-		farmers, _ = svc.list_farmers(self.ctx)
+		with as_user(self.ctx):
+			farmers, _ = svc.list_farmers()
 
 		farmer = next((f for f in farmers if f["farmer_id"] == self.farmer_id), None)
 		# Should be alphabetically sorted

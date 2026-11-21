@@ -1,7 +1,7 @@
 """Administer DA RBAC Assignments.
 
-Only unrestricted roles (OAN Administrator, System Manager, Administrator) may grant,
-change or revoke a scope. Validation of the grant itself (Supervisor needs a Woreda,
+Who may list, grant, change or revoke a scope is DA RBAC Assignment's read / create /
+write permission (Role Permission Manager). Validation of the grant itself (Supervisor needs a Woreda,
 DA needs a DA-ID, date window) lives on the doctype so it holds for Desk and API alike.
 """
 
@@ -12,7 +12,7 @@ from frappe import _
 from frappe.utils import getdate, today
 
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.utils.permissions import require_permission
 
 MAX_PAGE_LENGTH = 500
 
@@ -49,10 +49,6 @@ MUTABLE = {
 }
 
 
-def require_admin() -> ScopeContext:
-	return require_roles(*C.UNRESTRICTED_ROLES)
-
-
 def serialize(doc) -> dict:
 	out = {f: doc.get(f) for f in FIELDS}
 	for f in ("effective_from", "effective_to"):
@@ -65,7 +61,7 @@ def serialize(doc) -> dict:
 def list_assignments(
 	user=None, role=None, region=None, woreda=None, active=None, limit=50, start=0
 ) -> list[dict]:
-	require_admin()
+	require_permission("DA RBAC Assignment", "read")
 	filters: dict = {}
 	if user:
 		filters["user"] = user
@@ -90,7 +86,7 @@ def list_assignments(
 
 
 def get_assignment(name: str) -> dict:
-	require_admin()
+	require_permission("DA RBAC Assignment", "read")
 	return serialize(frappe.get_doc("DA RBAC Assignment", name))
 
 
@@ -105,7 +101,7 @@ def create_assignment(
 	notes=None,
 	zone_scope=None,
 ) -> dict:
-	require_admin()
+	require_permission("DA RBAC Assignment", "create")
 	if not user or not role:
 		frappe.throw(_("user and role are required"), frappe.ValidationError)
 	doc = frappe.get_doc(
@@ -128,7 +124,7 @@ def create_assignment(
 
 
 def update_assignment(name: str, **changes) -> dict:
-	require_admin()
+	require_permission("DA RBAC Assignment", "write")
 	doc = frappe.get_doc("DA RBAC Assignment", name)
 	unknown = set(changes) - MUTABLE
 	if unknown:
@@ -145,7 +141,7 @@ def update_assignment(name: str, **changes) -> dict:
 
 def revoke_assignment(name: str, reason: str | None = None) -> dict:
 	"""Deactivate a grant and close its window today. The row stays for audit."""
-	require_admin()
+	require_permission("DA RBAC Assignment", "write")
 	doc = frappe.get_doc("DA RBAC Assignment", name)
 	doc.active = 0
 	if not doc.effective_to or getdate(doc.effective_to) > getdate(today()):

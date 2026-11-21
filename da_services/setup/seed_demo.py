@@ -18,7 +18,6 @@ from frappe.utils import add_days, today
 from da_services.integrations.da_registry.mock import FIXTURE_GEO
 from da_services.services import assignments, notifications, tasks, visits
 from da_services.services import constants as C
-from da_services.utils.permissions import get_scope_context
 
 DEMO_PASSWORD = "Demo#2026"  # local demo only; the guard below keeps this off real sites
 
@@ -87,7 +86,7 @@ def _user(email: str, first_name: str, role: str, grant: dict) -> None:
 		doc.insert(ignore_permissions=True)
 
 
-def _visits(ctx) -> None:
+def _visits() -> None:
 	t = today()
 	plan = [
 		# (client_op_id, farmer, scheduled_at, visit type, complete?)
@@ -119,7 +118,7 @@ def _visits(ctx) -> None:
 			)
 
 
-def _tasks(ctx) -> None:
+def _tasks() -> None:
 	t = today()
 	plan = [
 		# (client_op_id, title, type, due_at, priority, done?)
@@ -140,10 +139,10 @@ def _tasks(ctx) -> None:
 	]
 	for op, title, ttype, due, priority, done in plan:
 		out = tasks.create_task(
-			title=title, da_id=DA_ID, task_type=ttype, due_at=due, priority=priority, client_op_id=op, ctx=ctx
+			title=title, da_id=DA_ID, task_type=ttype, due_at=due, priority=priority, client_op_id=op
 		)
 		if done and out["status"] == "Open":
-			tasks.complete_task(out["name"], ctx=ctx)
+			tasks.complete_task(out["name"])
 
 
 # Region > Zone > Woreda > Kebele codes match the mock DA Registry fixtures (ET04-W01-K03 ...).
@@ -184,7 +183,7 @@ def _areas() -> None:
 		doc.insert(ignore_permissions=True)
 
 
-def _assignments(ctx) -> None:
+def _assignments() -> None:
 	assignments.assign(
 		da_id=DA_ID,
 		kebele="ET04-W01-K03",
@@ -193,7 +192,6 @@ def _assignments(ctx) -> None:
 		mode="Automatic",
 		da_location={"lat": 9.1236, "lng": 37.5671},  # inside the demo boundary
 		client_op_id="seed-kas-1",
-		ctx=ctx,
 	)
 
 
@@ -215,11 +213,10 @@ def run(force: str | int | bool = False) -> dict:
 	_geo_masters()  # before the grants: their scopes link to the geo masters
 	for email, first_name, role, grant in USERS:
 		_user(email, first_name, role, grant)
-	ctx = get_scope_context("Administrator")
 	_areas()
-	_assignments(ctx)
-	_visits(ctx)
-	_tasks(ctx)
+	_assignments()
+	_visits()
+	_tasks()
 	_notifications()
 	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 	counts = {

@@ -25,7 +25,7 @@ from frappe.utils import now_datetime
 
 from da_services.integrations.da_registry.client import get_client
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.utils.permissions import require_permission
 
 EVENT_TYPE = "Agent Import"
 MAX_BYTES = 10 * 1024 * 1024
@@ -66,8 +66,8 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _FAYDA_STRIP_RE = re.compile(r"[\s-]")
 
 
-def _admin(ctx: ScopeContext | None) -> ScopeContext:
-	return ctx or require_roles(*C.UNRESTRICTED_ROLES)
+def _admin() -> None:
+	require_permission("DA Integration Event", "create")
 
 
 def template_csv() -> str:
@@ -223,14 +223,14 @@ def _serialize(doc) -> dict:
 	}
 
 
-def import_agents(filename: str, content: bytes, ctx: ScopeContext | None = None) -> dict:
+def import_agents(filename: str, content: bytes) -> dict:
 	"""Validate, then hand the file to the registry. Row errors stop the import.
 
 	Returns {"status": "Rejected", "errors": [...]} without contacting the registry, or
 	the import record once the registry has queued the file. DARegistryUnavailable is
 	raised to the caller (registry down: retry later).
 	"""
-	ctx = _admin(ctx)
+	_admin()
 	checked = validate_file(filename, content)
 	if checked["errors"]:
 		return {"status": "Rejected", "rows": checked["rows"], "errors": checked["errors"]}
@@ -246,7 +246,7 @@ def import_agents(filename: str, content: bytes, ctx: ScopeContext | None = None
 			"payload": {
 				"file_name": filename,
 				"rows": checked["rows"],
-				"uploaded_by": ctx.user,
+				"uploaded_by": frappe.session.user,
 				"document_id": (result.raw or {}).get("document_id"),
 			},
 			"attempts": 1,
@@ -258,8 +258,8 @@ def import_agents(filename: str, content: bytes, ctx: ScopeContext | None = None
 	return {**_serialize(doc), "errors": []}
 
 
-def list_imports(*, limit: int = 20, start: int = 0, ctx: ScopeContext | None = None) -> list[dict]:
-	_admin(ctx)
+def list_imports(*, limit: int = 20, start: int = 0) -> list[dict]:
+	_admin()
 	rows = frappe.get_all(
 		"DA Integration Event",
 		filters={"event_type": EVENT_TYPE},
@@ -271,13 +271,13 @@ def list_imports(*, limit: int = 20, start: int = 0, ctx: ScopeContext | None = 
 	return [_serialize(row) for row in rows]
 
 
-def import_exceptions(*, page: int = 1, page_size: int = 50, ctx: ScopeContext | None = None) -> dict:
+def import_exceptions(*, page: int = 1, page_size: int = 50) -> dict:
 	"""Rows the registry could not import, with the reason, newest first.
 
 	The registry does not record which file or row a failure came from: entries are
 	identified by Fayda ID and name.
 	"""
-	_admin(ctx)
+	_admin()
 	page = max(1, int(page or 1))
 	page_size = max(1, min(int(page_size or 50), 200))
 	out = get_client().list_import_exceptions(page=page, page_size=page_size)

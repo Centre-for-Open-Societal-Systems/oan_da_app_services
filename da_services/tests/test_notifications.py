@@ -8,8 +8,7 @@ from da_services.api.v1 import notifications as api
 from da_services.services import constants as C
 from da_services.services import notifications as svc
 from da_services.services import visits
-from da_services.tests.fixtures import set_da_registry_id
-from da_services.utils.permissions import get_scope_context
+from da_services.tests.fixtures import as_user, set_da_registry_id
 
 DA1 = "ntf-da1@da.local"  # DA-000001
 DA2 = "ntf-da2@da.local"  # DA-000002
@@ -110,7 +109,8 @@ class TestDANotification(IntegrationTestCase):
 	# -- service / API ----------------------------------------------------------------
 
 	def test_list_is_own_rows_only_with_unread_count(self):
-		rows, meta = svc.list_notifications(get_scope_context(DA1))
+		with as_user(DA1):
+			rows, meta = svc.list_notifications()
 		self.assertEqual({r["id"] for r in rows}, {self.n1, self.n2})
 		self.assertEqual(meta["unread_count"], 2)
 		self.assertEqual(rows[0]["id"], self.n2)  # newest first
@@ -131,18 +131,23 @@ class TestDANotification(IntegrationTestCase):
 				"at",
 			},
 		)
-		rows, meta = svc.list_notifications(get_scope_context(DA2))
+		with as_user(DA2):
+			rows, meta = svc.list_notifications()
 		self.assertEqual([r["id"] for r in rows], [self.n3])
 
 	def test_mark_read_and_read_all(self):
-		ctx1 = get_scope_context(DA1)
-		out = svc.mark_read(self.n1, ctx1)
+		ctx1 = DA1
+		with as_user(ctx1):
+			out = svc.mark_read(self.n1)
 		self.assertTrue(out["read"])
 		self.assertIsNotNone(out["read_at"])
 		with self.assertRaises(frappe.PermissionError):
-			svc.mark_read(self.n3, ctx1)  # someone else's
-		self.assertEqual(svc.mark_all_read(ctx1), {"updated": 1})
-		_rows, meta = svc.list_notifications(ctx1, unread=True)
+			with as_user(ctx1):
+				svc.mark_read(self.n3)  # someone else's
+		with as_user(ctx1):
+			self.assertEqual(svc.mark_all_read(), {"updated": 1})
+		with as_user(ctx1):
+			_rows, meta = svc.list_notifications(unread=True)
 		self.assertEqual(meta["unread_count"], 0)
 
 	def test_api_endpoints(self):
@@ -177,7 +182,8 @@ class TestDANotification(IntegrationTestCase):
 			observed="ok",
 			next_action={"type": "Task", "note": "Bring seed", "date": add_days(today(), 3)},
 		)
-		rows, _meta = svc.list_notifications(get_scope_context(DA1), unread=True)
+		with as_user(DA1):
+			rows, _meta = svc.list_notifications(unread=True)
 		row = next((r for r in rows if r["event"] == "task_created"), None)
 		self.assertIsNotNone(row, [r["title"] for r in rows])
 		self.assertEqual(row["kind"], "Task")

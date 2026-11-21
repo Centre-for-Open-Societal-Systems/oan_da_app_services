@@ -23,7 +23,7 @@ FIELDS = ["name", "category_name", "category_name_am", "color", "sort_order"]
 @frappe.whitelist()
 @handle_api_errors
 def list_categories():
-	common.read_ctx()
+	common.read_ctx("KB Category")
 	rows = frappe.get_all(
 		DOCTYPE, filters={"enabled": 1}, fields=FIELDS, order_by="sort_order asc, category_name asc"
 	)

@@ -191,8 +191,8 @@ class TestRegisterIdempotency(IntegrationTestCase):
 			"da_services.services.farmers.get_farmer_registry_client",
 			return_value=MockFarmerRegistryClient(),
 		):
-			first = svc.register_farmer(dict(form), ctx=None)
-			second = svc.register_farmer(dict(form), ctx=None)
+			first = svc.register_farmer(dict(form))
+			second = svc.register_farmer(dict(form))
 
 		self.assertFalse(first["duplicate"])
 		self.assertTrue(second["duplicate"])
@@ -255,7 +255,7 @@ class TestRegisterRegistryRejection(IntegrationTestCase):
 			"da_services.services.farmers.get_farmer_registry_client",
 			return_value=self._client(REGISTRY_REJECTED),
 		):
-			result = svc.register_farmer(dict(SAMPLE_FORM), ctx=None)
+			result = svc.register_farmer(dict(SAMPLE_FORM))
 
 		self.assertFalse(result["success"])
 		self.assertEqual(result["error_code"], "SYS-ERR-001")
@@ -273,7 +273,6 @@ class TestRegisterRegistryRejection(IntegrationTestCase):
 
 		frappe.local.form_dict = frappe._dict(first_name="Abebe", gender="male")
 		with (
-			patch.object(api, "require_roles", return_value=None),
 			patch(
 				"da_services.services.farmers.get_farmer_registry_client",
 				return_value=self._client(REGISTRY_REJECTED),
@@ -295,7 +294,6 @@ class TestRegisterRegistryRejection(IntegrationTestCase):
 
 		frappe.local.form_dict = frappe._dict(first_name="Abebe", gender="male")
 		with (
-			patch.object(api, "require_roles", return_value=None),
 			patch(
 				"da_services.services.farmers.get_farmer_registry_client",
 				return_value=MockFarmerRegistryClient(),

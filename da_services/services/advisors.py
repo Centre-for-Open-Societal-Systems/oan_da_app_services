@@ -15,8 +15,6 @@ from da_services.da_services.doctype.da_advisor.da_advisor import EXPERTISE_AREA
 from da_services.services import constants as C
 
 DOCTYPE = "DA Advisor"
-WRITE_ROLES = (C.ROLE_ADMIN, "System Manager", "Administrator")
-READ_ROLES = C.DA_READ_ROLES
 MAX_LIMIT = 500
 
 FIELDS = (
@@ -114,7 +112,7 @@ def create_advisor(
 			"availability": availability,
 		}
 	)
-	# The role check is done by the API layer (require_roles); the insert itself is a system write.
+	# The permission check is done by the API layer (require_permission); the insert itself is a system write.
 	doc.insert(ignore_permissions=True)
 	return serialize(doc.as_dict())
 

@@ -7,8 +7,7 @@ OpenG2P envelope and a double-submit CSRF pair (same random value in the
 ``X-CSRF-Token`` header and cookie).
 
 The registry trusts the service account with every DA, so callers decide whose record
-is read or changed: the DA-ID must come from DA Services' own user -> DA-ID mapping,
-never from the request (services/profile.py ``_own_da_id``).
+is read or changed: DA Services' own permission checks run before any call.
 
 Staff API endpoints used:
     register-data/search_in_a_register     -> find a DA by DA-ID (exact match on top of a

@@ -24,6 +24,8 @@ SUP = "srv-sup@da.local"  # Supervisor ET04-W01
 SUP_OTHER = "srv-sup3@da.local"  # Supervisor ET03-W02
 EXEC = "srv-exec@da.local"  # Executive ET04
 ALL_USERS = (DA1, DA2, DA3, SUP, SUP_OTHER, EXEC)
+# The DA-ID each DA user collects as (their grant's da_id).
+COLLECTOR = {DA1: "DA-000001", DA2: "DA-000002", DA3: "DA-000004"}
 
 
 def _user(email, roles):
@@ -106,7 +108,15 @@ class TestSurveys(IntegrationTestCase):
 			return svc.create_template(**data)
 
 	def _respond(self, survey_id, user=DA1, farmer_id="FR-000101", **over):
-		data = {"farmer_id": farmer_id, "consent": "granted", "answers": ANSWERS, "kebele": "Bako 01", **over}
+		# The collector is named: the session has no DA-ID of its own.
+		data = {
+			"farmer_id": farmer_id,
+			"consent": "granted",
+			"answers": ANSWERS,
+			"kebele": "Bako 01",
+			"da_id": COLLECTOR.get(user),
+			**over,
+		}
 		with _as(user):
 			svc.create_response(survey_id, **data)
 		return frappe.get_last_doc("DA Survey Response", filters={"survey": survey_id})
@@ -217,18 +227,14 @@ class TestSurveys(IntegrationTestCase):
 
 	# -- GET /surveys[/<id>] (DA) ---------------------------------------------------
 
-	def test_da_lists_woreda_and_own_assigned_surveys_with_own_counts(self):
+	def test_da_lists_every_survey_of_their_woreda(self):
+		# No caller DA-ID: assignment to selected DAs no longer narrows the list.
 		woreda_wide = self._create(name="Woreda wide")
 		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedDaIds=["DA-000002"])
-		self._respond(woreda_wide, user=DA2, farmer_id="FR-000102")
-		with _as(DA1):
-			rows, _total = svc.list_surveys()
-			self.assertEqual([r["id"] for r in rows], [woreda_wide])
-			self.assertEqual(rows[0]["collected"], 0)  # DA2's response is not DA1's
-			self.assertNotIn("assignedDaIds", rows[0])
-		with _as(DA2):
-			rows, _total = svc.list_surveys()
-			self.assertEqual({r["id"] for r in rows}, {woreda_wide, for_da2})
+		for user in (DA1, DA2):
+			with _as(user):
+				rows, _total = svc.list_surveys()
+			self.assertEqual({r["id"] for r in rows}, {woreda_wide, for_da2}, user)
 
 	def test_get_survey_returns_parameters_and_denies_other_woreda(self):
 		survey_id = self._create()
@@ -271,7 +277,9 @@ class TestSurveys(IntegrationTestCase):
 	def test_submit_api_is_message_only(self):
 		survey_id = self._create()
 		with _as(DA1):
-			out = api.submit_response(survey_id, farmer_id="FR-000101", consent="granted", answers=ANSWERS)
+			out = api.submit_response(
+				survey_id, farmer_id="FR-000101", consent="granted", answers=ANSWERS, da_id="DA-000001"
+			)
 		self.assertEqual(out["message"], "Survey response saved")
 		self.assertFalse(out.get("data"))
 

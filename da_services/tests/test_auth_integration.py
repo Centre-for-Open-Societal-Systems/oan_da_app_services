@@ -1,6 +1,6 @@
 """Auth integration tests for oan_auth_service in DA Services.
 
-Covers: deny-by-default revocation check, REST and RPC namespace protection,
+Covers: REST and RPC namespace protection,
 /me profile enrichment, health endpoint accessibility, and scope resolution.
 """
 
@@ -8,11 +8,10 @@ import json
 
 import frappe
 from frappe.tests import IntegrationTestCase
-from frappe.utils import add_days, today
+from frappe.utils import today
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
-from da_services.api.middleware import check_da_assignment
 from da_services.api.router import ensure_routes_registered
 from da_services.services import constants as C
 
@@ -84,70 +83,6 @@ def _grant(user, role, **kw):
 
 
 # ---------------------------------------------------------------------------
-# 1. Deny-by-default revocation check
-# ---------------------------------------------------------------------------
-
-
-class TestRevocationCheck(IntegrationTestCase):
-	"""Unit tests for the deny-by-default revocation_check callback."""
-
-	def setUp(self):
-		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
-		_user(SUPERVISOR, [C.ROLE_SUPERVISOR])
-		_user(DA_USER, [C.ROLE_DA])
-		_user(NO_ROLE_USER)
-
-	def tearDown(self):
-		frappe.set_user("Administrator")
-
-	def test_unrestricted_role_bypasses_check(self):
-		result = check_da_assignment("Administrator")
-		self.assertIsNone(result)
-
-	def test_system_manager_bypasses_check(self):
-		sm_user = _user("auth-test-sm@da.local", ["System Manager"])
-		result = check_da_assignment(sm_user)
-		self.assertIsNone(result)
-
-	def test_user_without_da_role_is_rejected(self):
-		result = check_da_assignment(NO_ROLE_USER)
-		self.assertIsNotNone(result)
-		self.assertIn("no DA Services role", result)
-
-	def test_da_role_without_assignment_is_rejected(self):
-		result = check_da_assignment(SUPERVISOR)
-		self.assertIsNotNone(result)
-		self.assertIn("No active DA RBAC assignment", result)
-
-	def test_da_role_with_active_assignment_passes(self):
-		_grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		result = check_da_assignment(SUPERVISOR)
-		self.assertIsNone(result)
-
-	def test_expired_assignment_is_rejected(self):
-		_grant(
-			SUPERVISOR,
-			C.ROLE_SUPERVISOR,
-			region_scope="ET04",
-			woreda_scope="ET04-W01",
-			effective_from=add_days(today(), -30),
-			effective_to=add_days(today(), -1),
-		)
-		result = check_da_assignment(SUPERVISOR)
-		self.assertIsNotNone(result)
-
-	def test_da_user_without_assignment_is_rejected(self):
-		result = check_da_assignment(DA_USER)
-		self.assertIsNotNone(result)
-
-	def test_da_user_with_active_assignment_passes(self):
-		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		result = check_da_assignment(DA_USER)
-		self.assertIsNone(result)
-
-
-# ---------------------------------------------------------------------------
 # 2. RPC namespace protection (/api/method/da_services.*)
 # ---------------------------------------------------------------------------
 
@@ -165,27 +100,11 @@ class TestRPCNamespace(IntegrationTestCase):
 
 		self.assertIn("/api/method/da_services.", _NAMESPACES)
 
-	def test_rpc_namespace_has_revocation_check(self):
-		from oan_auth_service.api.middleware import _NAMESPACES
-
-		config = _NAMESPACES.get("/api/method/da_services.")
-		self.assertIsNotNone(config)
-		self.assertIsNotNone(config.get("revocation_check"))
-		self.assertEqual(config["revocation_check"], check_da_assignment)
-
 	def test_rest_namespace_is_registered(self):
 		from oan_auth_service.api.middleware import _NAMESPACES
 		from oan_auth_service.api.router import NAMESPACE
 
 		self.assertIn(NAMESPACE, _NAMESPACES)
-
-	def test_rest_namespace_has_revocation_check(self):
-		from oan_auth_service.api.middleware import _NAMESPACES
-		from oan_auth_service.api.router import NAMESPACE
-
-		config = _NAMESPACES.get(NAMESPACE)
-		self.assertIsNotNone(config)
-		self.assertIsNotNone(config.get("revocation_check"))
 
 	def test_jwt_middleware_rejects_guest_on_rpc(self):
 		"""Guest hitting an RPC endpoint in our namespace gets 401."""
@@ -267,20 +186,6 @@ class TestRESTRoutes(IntegrationTestCase):
 		self.assertIn(C.ROLE_SUPERVISOR, da_profile["roles"])
 		self.assertIn("ET04", da_profile["scope"]["regions"])
 		self.assertIn("ET04-W01", da_profile["scope"]["woredas"])
-
-	def test_me_returns_da_ids_for_assigned_da(self):
-		import frappe.api
-
-		_grant(DA_USER, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		frappe.set_user(DA_USER)
-		req = make_test_request("/api/v1/auth/me", method="GET")
-		res = frappe.api.handle(req)
-		self.assertEqual(res.status_code, 200)
-		data = json.loads(res.get_data(as_text=True))
-		da_profile = data["data"]["profiles"].get("da_services")
-		self.assertIsNotNone(da_profile)
-		self.assertIn(C.ROLE_DA, da_profile["roles"])
-		self.assertIn("DA-000001", da_profile["scope"]["da_ids"])
 
 	def test_me_returns_no_da_profile_for_user_without_da_role(self):
 		import frappe.api

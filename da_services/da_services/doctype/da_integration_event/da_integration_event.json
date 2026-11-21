@@ -117,7 +117,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-20 22:01:19.620252",
+ "modified": "2026-11-21 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Integration Event",
@@ -134,7 +134,9 @@
   {
    "read": 1,
    "report": 1,
-   "role": "OAN Administrator"
+   "role": "OAN Administrator",
+   "create": 1,
+   "write": 1
   }
  ],
  "row_format": "Dynamic",

@@ -5,7 +5,6 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
 from da_services.services import constants as C
-from da_services.services.da_lookup import get_da_reference
 from da_services.utils import audit
 
 SUP = "test-sup-audit@da.local"
@@ -70,33 +69,16 @@ class TestAudit(IntegrationTestCase):
 		doc.save()
 		self.assertEqual(len(_events(action=audit.RBAC_REVOKED, entity_name=doc.name)), 1)
 
-	def test_denial_is_audited_with_reason(self):
-		frappe.get_doc(
-			{
-				"doctype": "DA RBAC Assignment",
-				"user": SUP,
-				"role": C.ROLE_SUPERVISOR,
-				"region_scope": "ET04",
-				"woreda_scope": "ET04-W01",
-				"effective_from": today(),
-			}
-		).insert()
-		frappe.set_user(SUP)
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000003")  # ET03-W02, outside scope
-		frappe.set_user("Administrator")
-		denied = _events(action=audit.ACCESS_DENIED, decision="denied", entity_name="DA-000003")
-		self.assertEqual(len(denied), 1)
-		self.assertEqual(denied[0].user, SUP)
-		self.assertEqual(denied[0].reason, "out of scope")
+	def test_missing_permission_denial_is_audited(self):
+		# A gate on a doctype the user has no role permission for (Role Permission Manager).
+		from da_services.services import rbac_service
 
-	def test_missing_role_denial_is_audited(self):
 		frappe.set_user(NO_ROLE)
 		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000001")
+			rbac_service.list_assignments()
 		frappe.set_user("Administrator")
 		denied = _events(action=audit.ACCESS_DENIED, decision="denied")
-		self.assertEqual(denied[0].reason, "missing role")
+		self.assertEqual(denied[0].reason, "missing permission")
 
 	def test_audit_rows_cannot_be_edited_or_deleted(self):
 		name = audit.record("test.event", entity_type="Test", entity_name="x")
@@ -122,9 +104,11 @@ class TestAudit(IntegrationTestCase):
 		frappe.local.request = Request(EnvironBuilder(path="/api/v1/da-services/me").get_environ())
 		frappe.local.da_audit_pending = []  # denials queued by earlier tests in this process are not ours
 		try:
-			frappe.set_user(SUP)
+			from da_services.services import rbac_service
+
+			frappe.set_user(NO_ROLE)  # no role permission on DA RBAC Assignment
 			with self.assertRaises(frappe.PermissionError):
-				get_da_reference("DA-000001")
+				rbac_service.list_assignments()
 			frappe.set_user("Administrator")
 			self.assertEqual(_events(action=audit.ACCESS_DENIED), [])  # queued, not written
 			self.assertEqual(len(frappe.local.da_audit_pending), 1)

@@ -15,7 +15,6 @@ from da_services.api.v1 import profile as profile_api
 from da_services.api.v1 import rbac as rbac_api
 from da_services.services import constants as C
 from da_services.tests.fixtures import ensure_geo_masters
-from da_services.utils.permissions import ScopeContext
 
 ADMIN = "test-oan-admin@da.local"
 SUP = "test-sup-auth@da.local"
@@ -136,7 +135,6 @@ class TestMe(_Base):
 		d = out["data"]
 		self.assertEqual(d["roles"], [C.ROLE_SUPERVISOR])
 		self.assertEqual(d["scope"]["woredas"], ["ET04-W01"])
-		self.assertIsNone(d["da_id"])
 		self.assertEqual(d["role"], "Supervisor")
 		self.assertEqual(d["role_label"], "Supervisor (Woreda)")
 		self.assertEqual(d["scope_label"], "Woreda · ET04-W01")
@@ -148,36 +146,15 @@ class TestMe(_Base):
 		self.assertIn("/approvals", d["menu"])
 		self.assertNotIn("/admin/users", d["menu"])
 
-	def test_da_profile_includes_registry_record(self):
+	def test_da_profile(self):
 		frappe.set_user(DA_USER)
 		d = me_api.get_me()["data"]
-		self.assertEqual(d["da_id"], "DA-000001")
-		self.assertEqual(d["agent"]["full_name"], "Abebe Kebede")
+		self.assertNotIn("agent", d)  # no own DA-ID: the registry record is not looked up
 		self.assertEqual(d["role"], "DA")
 		self.assertEqual(d["scope_label"], "Own record · ET04-W01")
-		agent = d["agent"]
-		self.assertEqual(
-			(agent["phone"], agent["specialisation"], agent["joined_at"], agent["farmer_count"]),
-			("+251911000001", "Crop production", "2019-09-01", 128),
-		)
 		self.assertIn("/my-teams", d["menu"])
 		self.assertNotIn("/approvals", d["menu"])
 		self.assertNotIn("/agents", d["menu"])
-
-	def test_me_survives_a_registry_token_refusal(self):
-		from unittest.mock import patch
-
-		from da_services.integrations.da_registry.client import DARegistryAuthError
-		from da_services.integrations.da_registry.mock import MockDARegistryClient
-
-		# Roles and menu come from DA Services; a registry 401/403 must not lock the user out.
-		frappe.set_user(DA_USER)
-		with patch.object(MockDARegistryClient, "get_da", side_effect=DARegistryAuthError("no role", 403)):
-			out = me_api.get_me()
-		self.assertEqual(out["status"], "success", out)
-		self.assertIsNone(out["data"]["agent"])
-		self.assertIn("403", out["data"]["agent_error"])
-		self.assertEqual(out["data"]["role"], "DA")
 
 	def test_administrator_is_admin_with_full_menu(self):
 		frappe.set_user("Administrator")
@@ -185,26 +162,33 @@ class TestMe(_Base):
 		self.assertEqual((d["role"], d["scope_label"]), ("Admin", "All regions"))
 		self.assertIn("/approvals", d["menu"])
 		self.assertIn("/admin/settings", d["menu"])
-		self.assertNotIn("/my-teams", d["menu"])
+		# Frappe's Administrator holds every role, so every role's menu items show.
+		self.assertIn("/my-teams", d["menu"])
 
 	def test_scope_labels_per_role(self):
-		def ctx(roles, **kw):
-			return ScopeContext(user="x@da.local", roles=frozenset(roles), unrestricted=False, **kw)
+		from unittest.mock import patch
 
-		exec_ctx = ctx({C.ROLE_EXECUTIVE}, region_scopes=frozenset({"ET03"}))
-		self.assertEqual(me_api.role_codes_for(exec_ctx), ["Executive"])
-		self.assertEqual(me_api.scope_label_for("Executive", exec_ctx), "Region · ET03 (read)")
-		zone_ctx = ctx(
-			{C.ROLE_SUPERVISOR}, region_scopes=frozenset({"ET04"}), zone_scopes=frozenset({"ET04-Z01"})
-		)
-		self.assertEqual(me_api.scope_label_for("Supervisor", zone_ctx), "Zone · ET04-Z01")
-		comms = ctx({C.ROLE_COMMS})
-		self.assertEqual(me_api.scope_label_for("CommsOfficer", comms), "Broadcast domain")
-		self.assertEqual(me_api.menu_for(comms), ["/dashboard", "/knowledge", "/broadcast", "/alerts"])
+		def labels(roles, **areas):
+			"""(role codes, label for `role`, menu) for a user with `roles` and granted `areas`."""
+			granted = {k: frozenset(areas.get(k, ())) for k in ("regions", "zones", "woredas")}
+			with (
+				patch.object(me_api.frappe, "get_roles", return_value=list(roles)),
+				patch.object(me_api, "granted_areas", return_value=granted),
+			):
+				codes = me_api.role_codes_for()
+				return codes, {c: me_api.scope_label_for(c) for c in codes}, me_api.menu_for()
+
+		codes, label, _menu = labels({C.ROLE_EXECUTIVE}, regions={"ET03"})
+		self.assertEqual((codes, label["Executive"]), (["Executive"], "Region · ET03 (read)"))
+		_codes, label, _menu = labels({C.ROLE_SUPERVISOR}, regions={"ET04"}, zones={"ET04-Z01"})
+		self.assertEqual(label["Supervisor"], "Zone · ET04-Z01")
+		_codes, label, menu = labels({C.ROLE_COMMS})
+		self.assertEqual(label["CommsOfficer"], "Broadcast domain")
+		self.assertEqual(menu, ["/dashboard", "/knowledge", "/broadcast", "/alerts"])
 		# two roles: the widest one wins, the menu is the union
-		both = ctx({C.ROLE_DA, C.ROLE_SUPERVISOR}, woreda_scopes=frozenset({"ET04-W01"}))
-		self.assertEqual(me_api.role_codes_for(both), ["Supervisor", "DA"])
-		self.assertTrue({"/my-teams", "/assignments"} <= set(me_api.menu_for(both)))
+		codes, _label, menu = labels({C.ROLE_DA, C.ROLE_SUPERVISOR}, woredas={"ET04-W01"})
+		self.assertEqual(codes, ["Supervisor", "DA"])
+		self.assertTrue({"/my-teams", "/assignments"} <= set(menu))
 
 	def test_menu_hrefs_match_the_portal_nav(self):
 		hrefs = [href for href, _roles in me_api.NAV]
@@ -213,19 +197,16 @@ class TestMe(_Base):
 		for _href, roles in me_api.NAV:
 			self.assertTrue(set(roles) <= set(me_api.ROLE_LABELS))
 
-	def test_user_without_assignment_is_denied(self):
+	def test_me_needs_a_login_only(self):
 		frappe.set_user(PLAIN)
-		out = me_api.get_me()
-		self.assertEqual(out["status"], "error")
-		self.assertEqual(frappe.response.get("http_status_code"), 403)
+		self.assertEqual(me_api.get_me()["status"], "success")  # Frappe refuses Guest before it
 
 	def test_profile_hook_for_auth_me(self):
 		ns, data = profile_api.resolve_user_profile_hook(user_doc=frappe.get_doc("User", SUP))
 		self.assertEqual(ns, "da_services")
 		self.assertEqual(data["scope"]["woredas"], ["ET04-W01"])
 		# same scope shape as GET /da-services/me, so the frontend can use either
-		self.assertEqual(set(data["scope"]), {"regions", "zones", "woredas", "da_ids"})
-		self.assertNotIn("agent", data)  # the hook stays cheap: no registry call
+		self.assertEqual(set(data["scope"]), {"regions", "zones", "woredas"})
 
 	def test_profile_hook_returns_none_for_outsiders(self):
 		ns, data = profile_api.resolve_user_profile_hook(user_doc=frappe.get_doc("User", PLAIN))
@@ -261,9 +242,13 @@ class TestRbacAdminApi(_Base):
 		self.assertEqual(out["status"], "error")
 		self.assertIn(frappe.response.get("http_status_code"), (400, 417))
 
-	def test_supervisor_cannot_administer_assignments(self):
+	def test_supervisor_reads_but_cannot_administer_assignments(self):
+		# DA RBAC Assignment gives Supervisor read only (Role Permission Manager).
 		frappe.set_user(SUP)
-		out = rbac_api.list_assignments()
+		self.assertEqual(rbac_api.list_assignments()["status"], "success")
+		out = rbac_api.create_assignment(
+			user=PLAIN, role=C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01"
+		)
 		self.assertEqual(out["status"], "error")
 		self.assertEqual(frappe.response.get("http_status_code"), 403)
 		frappe.response.pop("http_status_code", None)

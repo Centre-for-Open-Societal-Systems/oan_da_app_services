@@ -10,8 +10,6 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.integrations.a2c import get_a2c_client, reset_client
 from da_services.services.pending_actions import (
-	CROP_SURVEY_DUE_DAYS,
-	LIVESTOCK_SURVEY_DUE_DAYS,
 	STATE_CREDIT_IN_REVIEW,
 	STATE_CROP_SURVEY_DUE,
 	STATE_FAYDA_CHECK,

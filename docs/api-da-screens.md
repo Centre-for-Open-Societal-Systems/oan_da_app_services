@@ -563,7 +563,7 @@ two types.
 | 9 | `GET /visits`, `GET /visits/{id}`, `POST /visits`, `/reschedule`, `/start`, `/submit`, `/attachments` | visits | Nikky |
 | 10 | `GET /tasks`, `POST /tasks/{id}/done` | dashboard tasks | Nikky |
 | 11 | `GET /reports/activity`, `/export` | outcome page | Nikky |
-| 12 | `GET /assignments/me`, `GET /assignments`, `GET /assignments/coverage` | assignments | Nikky |
+| 12 | `GET /assignments`, `GET /assignments/coverage` | assignments | Nikky |
 | 13 | `GET /beneficiaries/segments`, `GET /beneficiaries`, `POST /beneficiaries/link`, `POST /beneficiaries/{id}/remove` | beneficiaries | Nikky |
 | 14 | Grievances (list, detail, raise, sync-status, retry) | grievances | Pushkar (ticket written) |
 | 15 | `GET /my-team` | my teams | Nikky |

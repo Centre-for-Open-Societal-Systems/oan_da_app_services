@@ -10,7 +10,7 @@ from da_services.integrations.knowledge_base import categories as category_api
 from da_services.integrations.knowledge_base import common
 from da_services.integrations.knowledge_base import videos as video_api
 from da_services.services import constants as C
-from da_services.utils.permissions import get_scope_context
+from da_services.tests.fixtures import as_user
 
 TAG = "KBTEST"
 CATEGORY = f"{TAG} Cat"
@@ -382,14 +382,16 @@ class TestKnowledgeBase(IntegrationTestCase):
 		self.assertNotIn(vid, [r["name"] for r in video_api.list_videos()["data"]])
 
 	def test_narrowest_grant_wins_when_reaching_areas(self):
-		woreda_user = common._reach(get_scope_context(READER_W01))
+		with as_user(READER_W01):
+			woreda_user = common._reach()
 		self.assertIn("ET04-W01", woreda_user)
 		self.assertIn("ET04-Z01", woreda_user)  # ancestor: content aimed at the Zone reaches the Woreda
 		self.assertIn("ET04", woreda_user)
 		self.assertIn("ET04-W01-K01", woreda_user)  # descendant: the Woreda's Kebeles
 		self.assertNotIn("ET04-W09", woreda_user)  # the Region on the assignment is not a Region grant
 		self.assertNotIn("ET04-Z02", woreda_user)
-		region_user = common._reach(get_scope_context(EXECUTIVE))
+		with as_user(EXECUTIVE):
+			region_user = common._reach()
 		self.assertTrue(
 			{"ET04", "ET04-Z01", "ET04-W01", "ET04-Z02", "ET04-W09", "ET04-W01-K01"} <= region_user
 		)

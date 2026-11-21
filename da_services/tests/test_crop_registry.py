@@ -260,7 +260,6 @@ class TestCropSownPayload(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict(submission_id=submission_id)
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch(
 					"da_services.api.v1.crop_sown._internal_farmer_id",
 					return_value="FR-427495614351",
@@ -295,7 +294,6 @@ class TestCropSownPayload(unittest.TestCase):
 		)
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 				patch(
 					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -330,7 +328,6 @@ class TestCropSownPayload(unittest.TestCase):
 			"approval_status": "PENDING",
 		}
 		with (
-			patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 			patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 			patch(
 				"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -355,7 +352,6 @@ class TestCropSownPayload(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict(reg_id="FR-427495614351", source="submission")
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 				patch(
 					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -384,7 +380,6 @@ class TestCropSownPayload(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict()
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 				patch(
 					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -406,7 +401,6 @@ class TestCropSownPayload(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict(internal_record_id="crop-rec-001")
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 				patch(
 					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -437,7 +431,6 @@ class TestCropSownPayload(unittest.TestCase):
 		)
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 				patch(
 					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -461,7 +454,6 @@ class TestCropSownPayload(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict(reg_id="FR-someone-else", source="submission")
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown._internal_farmer_id", return_value="farmer-1"),
 				patch(
 					"da_services.api.v1.crop_sown.farmers.get_farmer_profile",
@@ -487,10 +479,9 @@ class TestCropSownPayload(unittest.TestCase):
 		previous = frappe.local.form_dict
 		frappe.local.form_dict = frappe._dict()
 		try:
-			with patch("da_services.api.v1.crop_sown.require_roles", return_value=object()):
-				from da_services.api.v1.crop_sown import get_crop_intake_form
+			from da_services.api.v1.crop_sown import get_crop_intake_form
 
-				result = get_crop_intake_form()
+			result = get_crop_intake_form()
 		finally:
 			frappe.local.form_dict = previous
 
@@ -511,7 +502,6 @@ class TestCropSownPayload(unittest.TestCase):
 		frappe.local.form_dict = frappe._dict(form="harvesting")
 		try:
 			with (
-				patch("da_services.api.v1.crop_sown.require_roles", return_value=object()),
 				patch("da_services.api.v1.crop_sown.get_crop_registry_client", return_value=client),
 			):
 				from da_services.api.v1.crop_sown import get_crop_intake_form

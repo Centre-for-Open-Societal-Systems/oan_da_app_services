@@ -308,3 +308,17 @@ def cleanup_test_rows(
 		frappe.db.delete("DA RBAC Assignment", {"user": ["in", users]})
 		frappe.db.delete("DA Profile Change Request", {"requested_by": ["in", users]})
 		frappe.db.delete("DA Kebele Assignment", {"user": ["in", users]})
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def as_user(user: str):
+	"""Run the block signed in as `user`, then restore the previous session user."""
+	previous = frappe.session.user
+	frappe.set_user(user)
+	try:
+		yield
+	finally:
+		frappe.set_user(previous)
