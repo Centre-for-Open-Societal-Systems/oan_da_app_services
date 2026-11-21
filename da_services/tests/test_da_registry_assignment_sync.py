@@ -52,6 +52,11 @@ def _cleanup():
 	frappe.set_user("Administrator")
 	users = frappe.get_all("User", filters={"name": ("like", f"{TAG}-%")}, pluck="name")
 	if users:
+		# DA Hierarchy nodes, leaves first (a node with children cannot be deleted).
+		for node in frappe.get_all(
+			sync.HIERARCHY, filters={"user": ("in", users)}, pluck="name", order_by="lft desc"
+		):
+			frappe.delete_doc(sync.HIERARCHY, node, force=True, ignore_permissions=True)
 		for dt in (sync.RBAC, sync.KEBELE_ASSIGNMENT, "User Permission"):
 			frappe.db.delete(dt, {"user": ("in", users)})
 		for user in users:
@@ -204,7 +209,7 @@ class TestUserHook(IntegrationTestCase):
 		with patch(FETCH, return_value=RECORD):
 			user = self._user().name
 		again = sync.sync_user_assignments(user, DA_ID, fetch=lambda _id: RECORD)
-		self.assertEqual(again, {"rbac": None, "kebele": None})
+		self.assertEqual(again, {"rbac": None, "kebele": None, "hierarchy": user})  # node updated in place
 		self.assertEqual(len(self._rbac(user)), 1)
 		self.assertEqual(len(self._kebele(user)), 1)
 
@@ -227,6 +232,119 @@ class TestUserHook(IntegrationTestCase):
 			user = self._user().name
 		self.assertEqual(self._rbac(user), [])
 		self.assertEqual(self._kebele(user), [])
+
+
+class TestHierarchySync(IntegrationTestCase):
+	"""The DA Hierarchy node made from the record, and its User Permissions."""
+
+	def setUp(self):
+		_cleanup()
+		ensure_geo_masters()
+
+	def tearDown(self):
+		_cleanup()
+
+	def _user(self, n, username=None):
+		doc = frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": _email(n),
+				"first_name": f"{TAG}{n}",
+				"username": username,
+				"send_welcome_email": 0,
+			}
+		)
+		doc.insert(ignore_permissions=True)
+		# Set after insert: the User hook syncs only on insert, and the Kebele step needs it.
+		frappe.db.set_value("User", doc.name, "da_registry_id", f"{TAG}-da-{n}")
+		return doc.name
+
+	def _sync(self, user, **record):
+		return sync.sync_user_assignments(user, DA_ID, fetch=lambda _id: {**RECORD, **record})
+
+	def _perms(self, user):
+		return set(
+			frappe.get_all("User Permission", filters={"user": user, "allow": "User"}, pluck="for_value")
+		)
+
+	def test_the_node_is_filled_from_the_record(self):
+		user = self._user(1)
+		out = self._sync(user, position="Development Agent", country_code="ET")
+		node = frappe.get_doc(sync.HIERARCHY, out["hierarchy"])
+		self.assertEqual(node.user, user)
+		# designation and country are not taken from the record
+		self.assertIsNone(node.designation)
+		self.assertIsNone(node.country)
+		self.assertEqual(
+			(node.region, node.zone, node.woreda, node.kebele),
+			("ET04", "ET04-Z01", "ET04-W01", "ET04-W01-K01"),
+		)
+		self.assertEqual(node.parent_da_hierarchy, "All DA Hierarchy")  # no reports_to
+		self.assertEqual(node.is_group, 0)
+		self.assertEqual(self._perms(user), {user})  # only themselves
+
+	def test_reports_to_places_the_user_under_their_boss(self):
+		boss = self._user(2, username=f"{TAG}boss")
+		user = self._user(1)
+		self._sync(user, reports_to=f"{TAG}boss")
+		boss_node = frappe.get_doc(sync.HIERARCHY, {"user": boss})  # created for the boss
+		self.assertEqual(boss_node.is_group, 1)
+		self.assertEqual(frappe.db.get_value(sync.HIERARCHY, {"user": user}, "parent_da_hierarchy"), boss)
+		self.assertEqual(self._perms(boss), {boss, user})  # the boss sees the report
+		self.assertEqual(self._perms(user), {user})
+
+	def test_a_manager_sees_every_level_below(self):
+		top = self._user(3, username=f"{TAG}top")
+		mid = self._user(2, username=f"{TAG}mid")
+		da = self._user(1)
+		self._sync(mid, reports_to=f"{TAG}top")
+		self._sync(da, reports_to=f"{TAG}mid")
+		self.assertEqual(self._perms(top), {top, mid, da})
+		self.assertEqual(self._perms(mid), {mid, da})
+		self.assertEqual(frappe.db.get_value(sync.HIERARCHY, mid, "is_group"), 1)
+
+	def test_moving_to_another_boss_moves_the_permission(self):
+		old = self._user(2, username=f"{TAG}old")
+		new = self._user(3, username=f"{TAG}new")
+		da = self._user(1)
+		self._sync(da, reports_to=f"{TAG}old")
+		self._sync(da, reports_to=f"{TAG}new")
+		self.assertEqual(self._perms(old), {old})
+		self.assertEqual(self._perms(new), {new, da})
+
+	def test_an_unknown_reports_to_goes_under_the_root(self):
+		user = self._user(1)
+		self._sync(user, reports_to="nobody-by-this-name")
+		self.assertEqual(
+			frappe.db.get_value(sync.HIERARCHY, {"user": user}, "parent_da_hierarchy"), "All DA Hierarchy"
+		)
+
+	def test_the_daily_job_rebuilds_missing_permissions(self):
+		from da_services.services import hierarchy_user_permissions as hup
+
+		boss = self._user(2, username=f"{TAG}boss")
+		da = self._user(1)
+		self._sync(da, reports_to=f"{TAG}boss")
+		frappe.db.delete("User Permission", {"user": boss, "allow": "User"})
+		with patch.object(frappe.db, "commit"):  # sync_each commits per user; keep the test's rollback
+			hup.sync_all_user_permissions()
+		self.assertEqual(self._perms(boss), {boss, da})
+
+	def test_only_user_is_restricted(self):
+		user = self._user(1)
+		self._sync(user, position="Development Agent", country_code="ET")
+		allows = set(frappe.get_all("User Permission", filters={"user": user}, pluck="allow"))
+		self.assertIn("User", allows)
+		self.assertNotIn(sync.HIERARCHY, allows)
+		self.assertNotIn("DA Country", allows)
+
+	def test_deleting_a_node_removes_the_permissions(self):
+		boss = self._user(2, username=f"{TAG}boss")
+		da = self._user(1)
+		self._sync(da, reports_to=f"{TAG}boss")
+		frappe.delete_doc(sync.HIERARCHY, da, ignore_permissions=True)
+		self.assertEqual(self._perms(da), set())
+		self.assertEqual(self._perms(boss), {boss})
 
 
 class TestRegistryRequest(IntegrationTestCase):

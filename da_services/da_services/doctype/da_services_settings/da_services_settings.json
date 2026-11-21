@@ -6,6 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "master_data_domain",
+  "farmer_registry_domain",
+  "farmer_registry_form_register_id",
   "column_break_cciq",
   "da_registry_domain",
   "da_registry_form_register_id",
@@ -67,13 +69,23 @@
    "fieldname": "grievance_base_url",
    "fieldtype": "Data",
    "label": "Grievance Base URL"
+  },
+  {
+   "fieldname": "farmer_registry_domain",
+   "fieldtype": "Data",
+   "label": "Farmer Registry Domain"
+  },
+  {
+   "fieldname": "farmer_registry_form_register_id",
+   "fieldtype": "Data",
+   "label": "Farmer Registry Form Register ID"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-21 14:00:00.000000",
+ "modified": "2026-11-21 18:41:10.373640",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",

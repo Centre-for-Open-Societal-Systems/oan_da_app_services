@@ -1,6 +1,6 @@
 """v1: Farmer profile and listing APIs (DA-40, DA-39).
 
-GET /api/v1/da-services/farmers                (?search_text= searches the live registry, DA-272)
+GET /api/v1/da-services/farmers                (Farmer Registry search_in_a_register)
 GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
 GET /api/v1/da-services/farmers/{id}/advisory       (questions and answers of Advisory visits)
@@ -32,6 +32,9 @@ from oan_auth_service.api.utils import error_response, handle_api_errors, succes
 from pydantic import ValidationError as PydanticValidationError
 
 from da_services.api.router import route
+from da_services.api.v1.common import request_fields
+from da_services.api.v1.master import _forwarded_credentials, _positive_int
+from da_services.integrations import da_farmer_registry
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryClientError,
@@ -41,166 +44,75 @@ from da_services.integrations.farmer_registry.schemas import FarmerRegistrationF
 from da_services.services import constants as C
 from da_services.services import farmers
 from da_services.services import visits as visit_svc
+from da_services.services.utils import apply_geo_user_permissions
 
 _REGISTRY_UNAVAILABLE = _("Farmer Registry is unavailable. Try again shortly.")
 
 
-@route("/farmers", methods=("GET",), summary="List farmers with scope selector")
+@route("/farmers", methods=("GET",), summary="Search the Farmer Registry register")
 @frappe.whitelist()
 @handle_api_errors
-def list_farmers(
-	woreda=None,
-	kebele=None,
-	state=None,
-	da_id=None,
-	limit=None,
-	start=None,
-	search_text=None,
-	page=None,
-	page_size=None,
-):
-	"""List farmers visible to the user with scope enforcement (DA-40, DA-39, DA-272).
+def list_farmers(**kwargs):
+	"""One page of the Farmer Registry register (``search_in_a_register``).
 
-	Scope selector:
-	- Development Agent: Only linked farmers
-	- Supervisor: All farmers in their Woreda
-	- Executive: All farmers in their Region (read-only)
-	- Admin: All farmers
+	Query (or JSON body): ``current_page`` (default 1), ``page_size`` (default 100, at most
+	1000), ``filter_by`` (an object, e.g. ``{"first_name": {"eq": "test"}}``; a JSON string
+	on a GET) and ``search_text``. They are sent to the registry as its
+	``pagination_request`` with the same keys. The geo keys of ``filter_by`` are filled in
+	or checked from the caller's User Permissions (``apply_geo_user_permissions``).
 
-	Query parameters:
-	- woreda: Filter by woreda code
-	- kebele: Filter by kebele code
-	- state: Filter by registration state (APPROVED, PENDING_APPROVAL, etc.)
-	- da_id: Filter by linked DA
-	- limit: Page size (default 50, max 500)
-	- start: Offset (default 0)
-	- page / page_size: 1-based alternative to limit / start (registry style)
-	- search_text: Free text (name, Farmer-ID, phone). When given, the live
-	  Farmer register is searched in ``woreda`` (required with it) instead of
-	  the DA Farmer Reference cache, so newly registered farmers are found too.
-	  ``da_id`` does not apply to a live search.
+	The registry is ``farmer_registry_domain`` of DA Services Settings, the register is
+	``farmer_registry_form_register_id``, and the caller's own ``Authorization`` bearer and
+	``X-CSRF-Token`` are forwarded to it.
 
-	Returns:
-	    {
-	        "success": true,
-	        "data": {
-	            "farmers": [
-	                {
-	                    "farmer_id": "...",
-	                    "reg_id": "FR-xxxxx",
-	                    "farmer_name": "...",
-	                    "phone": "...",
-	                    "kebele": "...",
-	                    "woreda": "...",
-	                    "region": "...",
-	                    "total_land_hectares": 2.5,
-	                    "registration_state": "APPROVED",
-	                    "registered_at": "...",
-	                    "visit_count": 5,
-	                    "last_visit": "...",
-	                    "pending_action": "Crop survey due",
-	                    "pending_action_priority": "high",
-	                    "pending_action_reason": "Last crop survey 45 days ago"
-	                }
-	            ],
-	            "total": 123,
-	            "page": {"limit": 50, "start": 0}
-	        }
-	    }
-
-	DA-39 Pending Actions:
-	- pending_action: "Crop survey due" | "Livestock due" | "Credit in review" |
-	                  "Fayda check" | "No action due" (system-derived)
-	- pending_action_priority: "high" | "medium" | "low"
-	- pending_action_reason: Optional description
+	Returns the registry's ``response_payload`` as ``data`` and its ``pagination_response``
+	as ``meta``, both with the registry's own keys.
 	"""
-
-	# Parse params
-	woreda = woreda or frappe.form_dict.get("woreda")
-	kebele = kebele or frappe.form_dict.get("kebele")
-	state = state or frappe.form_dict.get("state")
-	da_id = da_id or frappe.form_dict.get("da_id")
-
-	search_text = (search_text or frappe.form_dict.get("search_text") or "").strip()
-	page = page or frappe.form_dict.get("page")
-	page_size = page_size or frappe.form_dict.get("page_size")
+	b = request_fields(
+		kwargs, "current_page", "page_size", "filter_by", "search_text", json_keys=("filter_by",)
+	)
+	current_page = _positive_int(b.get("current_page"), "current_page", default=1)
+	page_size = _positive_int(
+		b.get("page_size"),
+		"page_size",
+		default=da_farmer_registry.DEFAULT_PAGE_SIZE,
+		maximum=da_farmer_registry.MAX_PAGE_SIZE,
+	)
+	filter_by = b.get("filter_by") or {}
+	if not isinstance(filter_by, dict):
+		frappe.throw(_("filter_by must be an object."), frappe.ValidationError)
+	filter_by = apply_geo_user_permissions(filter_by)
+	search_text = str(b.get("search_text") or "").strip()
+	token, csrf = _forwarded_credentials()
 
 	try:
-		if page or page_size:
-			# Registry-style paging; converted to limit / start for the cache path.
-			page = cint(page or 1)
-			limit = cint(page_size or limit or frappe.form_dict.get("limit") or 50)
-			if page < 1:
-				frappe.throw(_("Page must be >= 1."), frappe.ValidationError)
-			start = (page - 1) * limit
-		else:
-			limit = cint(limit or frappe.form_dict.get("limit") or 50)
-			start = cint(start or frappe.form_dict.get("start") or 0)
-	except ValueError, TypeError:
-		frappe.throw(_("Pagination parameters must be integers."), frappe.ValidationError)
-
-	if limit < 1 or limit > 500:
-		frappe.throw(_("Limit must be between 1 and 500."), frappe.ValidationError)
-	if start < 0:
-		frappe.throw(_("Start must be >= 0."), frappe.ValidationError)
-
-	if search_text:
-		try:
-			found = farmers.search_farmers(
-				search_text=search_text,
-				woreda=woreda,
-				kebele=kebele,
-				state=state,
-				page=start // limit + 1,
-				page_size=limit,
-			)
-		except FarmerRegistryClientError as exc:
-			frappe.throw(str(exc), frappe.ValidationError)
-		except FarmerRegistryServerError:
-			frappe.response["http_status_code"] = 503
-			return error_response(str(_REGISTRY_UNAVAILABLE), "SERVICE_UNAVAILABLE")
-		return success_response(
-			data={
-				"farmers": found["farmers"],
-				"total": found["total"],
-				"page": {
-					"limit": limit,
-					"start": start,
-					"page": found["page"],
-					"page_size": found["page_size"],
-					"number_of_pages": found["number_of_pages"],
-					# True when scope was applied here because the registry ignored the
-					# filter; total / number_of_pages are then the registry's figures.
-					"filtered_client_side": found["filtered_client_side"],
-				},
-				"source": "registry",
-			}
+		client = da_farmer_registry.client_from_settings(token, csrf)
+		payload, pagination = client.search_in_a_register(
+			current_page=current_page, page_size=page_size, filter_by=filter_by, search_text=search_text
 		)
+	except da_farmer_registry.FarmerRegistryError as exc:
+		status, code = _SEARCH_ERRORS.get(exc.kind, _SEARCH_ERRORS["rejected"])
+		# The message can name internal hosts; log it, return a stable one.
+		frappe.log_error(title="Farmer Registry search failed", message=f"{exc.kind}: {exc}")
+		frappe.response["http_status_code"] = status
+		return error_response(str(_(_SEARCH_MESSAGES.get(exc.kind, _SEARCH_MESSAGES["rejected"]))), code)
 
-	# Get farmers
-	farmer_list, total = farmers.list_farmers(
-		woreda=woreda,
-		kebele=kebele,
-		state=state,
-		da_id=da_id,
-		limit=limit,
-		start=start,
-	)
+	return success_response(data=payload, meta=pagination)
 
-	return success_response(
-		data={
-			"farmers": farmer_list,
-			"total": total,
-			"page": {
-				"limit": limit,
-				"start": start,
-				"page": start // limit + 1,
-				"page_size": limit,
-				"number_of_pages": (total + limit - 1) // limit,
-			},
-			"source": "cache",
-		}
-	)
+
+# kind -> (HTTP status, error code)
+_SEARCH_ERRORS = {
+	"config": (500, "FARMER_REGISTRY_NOT_CONFIGURED"),
+	"unauthorized": (401, "AUTHENTICATION_ERROR"),
+	"unavailable": (503, "SERVICE_UNAVAILABLE"),
+	"rejected": (502, "BAD_GATEWAY"),
+}
+_SEARCH_MESSAGES = {
+	"config": "Farmer Registry is not configured.",
+	"unauthorized": "Farmer Registry refused your token. Sign in again.",
+	"unavailable": "Farmer Registry is unavailable. Try again shortly.",
+	"rejected": "Farmer Registry could not complete the request.",
+}
 
 
 @route(

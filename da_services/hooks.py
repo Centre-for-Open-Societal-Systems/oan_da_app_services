@@ -179,6 +179,8 @@ scheduler_events = {
 		"da_services.services.rbac_user_permissions.sync_all_user_permissions",
 		# DA Kebele User Permission for an Effective DA Kebele Assignment from its effective_date.
 		"da_services.services.kebele_user_permissions.sync_all_user_permissions",
+		# User Permissions on User from DA Hierarchy: each user and everyone below them.
+		"da_services.services.hierarchy_user_permissions.sync_all_user_permissions",
 	],
 	"daily_long": [
 		# DA Country / Region / Zone / Woreda / Kebele masters, logged in with the

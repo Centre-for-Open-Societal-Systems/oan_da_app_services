@@ -53,6 +53,7 @@
    "fieldname": "old_parent",
    "fieldtype": "Link",
    "hidden": 1,
+   "ignore_user_permissions": 1,
    "label": "Old Parent",
    "options": "DA Hierarchy"
   },

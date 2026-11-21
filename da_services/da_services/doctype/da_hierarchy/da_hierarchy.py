@@ -12,6 +12,8 @@ import frappe
 from frappe import _
 from frappe.utils.nestedset import NestedSet
 
+from da_services.services import hierarchy_user_permissions
+
 # Not "DA Hierarchy": Frappe refuses a name equal to its doctype (naming.validate_name).
 ROOT = "All DA Hierarchy"
 
@@ -52,6 +54,15 @@ class DAHierarchy(NestedSet):
 					frappe.bold(parent), frappe.bold(self.name or self.user)
 				)
 			)
+
+	def on_update(self):
+		super().on_update()  # NestedSet: place the node in the tree first
+		before = self.get_doc_before_save()
+		old_parent = before.parent_da_hierarchy if before else None
+		hierarchy_user_permissions.sync_for_change(self.user, [self.parent_da_hierarchy, old_parent])
+
+	def after_delete(self):
+		hierarchy_user_permissions.sync_for_change(self.user, [self.parent_da_hierarchy])
 
 
 def on_doctype_update():
