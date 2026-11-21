@@ -89,8 +89,10 @@ class DARegistryClient(ABC):
 			return False
 
 	@abstractmethod
-	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
-		"""DAs posted in a Woreda (or Region). Assignment list, My Teams, Supervisor views.
+	def list_das(
+		self, *, woreda: str | None = None, region: str | None = None, kebele: str | None = None
+	) -> list[DAReference]:
+		"""DAs posted in a Kebele, a Woreda or a Region. Assignment list, My Teams, Supervisor views.
 
 		The registry's "DAs by Woreda" call is still to be confirmed with the registry
 		team; the mock answers from its fixtures.

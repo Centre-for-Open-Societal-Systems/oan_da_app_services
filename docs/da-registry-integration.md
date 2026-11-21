@@ -102,7 +102,7 @@ What the portal gets with these answers, so it repeats none of the rules:
 - **Error codes** (all HTTP 400): `ALREADY_DECIDED` (the request left the state the action needs:
   reload it), `OPEN_REQUEST_EXISTS`, `NOTHING_TO_CHANGE`, and `VALIDATION_ERROR`, with
   `details {field: message}` when one field's value is not acceptable.
-| `GET /agents`, `GET /agents/{da_id}`, `GET /experts`, `GET /assignments` | Search filtered by `woreda_code` / `region_code`, then one `get_tab_records` per DA (8 workers, records cached 5 minutes; a single DA is always read live) |
+| `GET /agents`, `GET /agents/{da_id}`, `GET /experts`, `GET /my-team`, `GET /assignments` | Search filtered by `woreda_code` / `region_code` (`GET /my-team`: by the DA's Kebele, `geo_lowest_level_value_id`), then one `get_tab_records` per DA (8 workers, records cached 5 minutes; a single DA is always read live) |
 | `GET /agent-imports/template`, `POST /agent-imports/validate` | DA Services only |
 | `POST /agent-imports` | `upload_documents`, then `enqueue_import_file` |
 | `GET /agent-imports` | DA Services only (`DA Integration Event`, type `Agent Import`) |

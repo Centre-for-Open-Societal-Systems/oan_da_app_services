@@ -198,14 +198,19 @@ class HttpDARegistryClient(DARegistryClient):
 		self._cache_record(internal_id, record)
 		return registry_record_to_da_reference(record, self._labels())
 
-	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
-		"""Active DAs of a Woreda (or Region), by Master Data P-code.
+	def list_das(
+		self, *, woreda: str | None = None, region: str | None = None, kebele: str | None = None
+	) -> list[DAReference]:
+		"""Active DAs of a Kebele, a Woreda or a Region, by Master Data P-code.
 
 		The search answers a few display fields only, so each DA's record is read once
 		more for its posting and profile: from the short record cache when it is there,
 		otherwise several at a time.
 		"""
-		if woreda:
+		if kebele:
+			# A DA's posting is the lowest geography level on the record: the Kebele.
+			filter_by = {"geo_lowest_level_value_id": {"eq": kebele}}
+		elif woreda:
 			filter_by = {"woreda_code": {"eq": woreda}}
 		elif region:
 			filter_by = {"region_code": {"eq": region}}

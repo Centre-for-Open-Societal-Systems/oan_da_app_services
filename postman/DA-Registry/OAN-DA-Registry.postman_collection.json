@@ -903,6 +903,54 @@
               }
             }
           ]
+        },
+        {
+          "name": "1.7 My Team (DAs of my Kebele)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/my-team",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "my-team"
+              ]
+            },
+            "description": "My Teams screen, Development Agent only. The caller's own DA record first, then the other DAs posted in the same Kebele (by name), read from the DA Registry by posting (search by the DA's Kebele, geo_lowest_level_value_id, then each DA's record); no reporting hierarchy is used. Separated DAs are left out; a DA with no Kebele on record gets the DAs of the Woreda.\n\nRow: { da_id, full_name, specialisation, education_tier, phone, kebele, kebele_name, woreda, woreda_name, active_status, joined_at }. Meta: { total }.\n\n403 for other roles; 404 when the caller's DA-ID is not in the registry."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
