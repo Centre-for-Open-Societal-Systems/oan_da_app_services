@@ -92,17 +92,6 @@ class TestIntakeMapping(IntegrationTestCase):
 		self.assertEqual(options["Farmer"]["gender"][1], {"value": "MALE", "label": "Male"})
 		self.assertIn("CROP_SHARE", [o["value"] for o in options["Land"]["land_ownership_type"]])
 
-	def test_places_walk_the_master_data_hierarchy(self):
-		client = MockFarmerRegistryClient()
-		self.assertEqual(intake.load_places(client, "region"), [{"id": "ET04", "name": "Oromia"}])
-		self.assertEqual(
-			[p["id"] for p in intake.load_places(client, "kebele", "ET040801")], ["ET04080101", "ET04080102"]
-		)
-		with self.assertRaises(intake.IntakeFormError):
-			intake.load_places(client, "woreda")  # needs a parent
-		with self.assertRaises(intake.IntakeFormError):
-			intake.load_places(client, "village", "ET04")
-
 	def test_wizard_extra_fields_reach_the_registry_rows(self):
 		form = {
 			**FORM,

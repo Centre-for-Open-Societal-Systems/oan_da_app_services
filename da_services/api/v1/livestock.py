@@ -1,7 +1,6 @@
 """v1: Livestock for the farmer profile and the Livestock form.
 
 GET  /api/v1/da-services/livestock/intake-form
-GET  /api/v1/da-services/livestock/geo-level-values?level_id=&parent_level_value_id=
 GET  /api/v1/da-services/farmers/{farmer_id}/livestock[?submission_id=]
 POST /api/v1/da-services/farmers/{farmer_id}/livestock
 POST /api/v1/da-services/farmers/{farmer_id}/livestock/{submission_id}/finalize
@@ -120,29 +119,6 @@ def get_livestock_intake_form():
 	except LivestockRegistryServerError:
 		return _unavailable()
 	return success_response(data=described)
-
-
-@route("/livestock/geo-level-values", methods=("GET",), summary="One Livestock geography level")
-@frappe.whitelist()
-@handle_api_errors
-def get_livestock_geo_level_values():
-	"""One geography level from master data: ``level_id`` l1 (region) to l4 (kebele).
-
-	A child level sends ``parent_level_value_id``, the selected parent's
-	``level_value_id``. Save the kebele's ``level_value_id`` as
-	``geo_lowest_level_value_id``.
-	"""
-	level_id = (frappe.form_dict.get("level_id") or "").strip()
-	parent = (frappe.form_dict.get("parent_level_value_id") or "").strip() or None
-	if not level_id:
-		frappe.throw(_("level_id is required."), frappe.ValidationError)
-	try:
-		rows = get_livestock_registry_client().geo_level_values(level_id, parent)
-	except LivestockRegistryClientError as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	except LivestockRegistryServerError:
-		return _unavailable()
-	return success_response(data={"level_id": level_id, "parent_level_value_id": parent, "values": rows})
 
 
 @route("/farmers/<farmer_id>/livestock", methods=("GET",), summary="A farmer's Livestock records")

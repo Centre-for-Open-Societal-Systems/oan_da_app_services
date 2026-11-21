@@ -44,7 +44,6 @@ The envelope sender is `DA_SERVICES`. It includes `instance_id: ""`. An empty fi
 DA routes:
 
 - `GET /api/v1/da-services/crop-sown/intake-form`
-- `GET /api/v1/da-services/crop-sown/geo-level-values`
 - `GET /api/v1/da-services/farmers/{farmer_id}/crops?source=submission|register`
 - `GET /api/v1/da-services/farmers/{farmer_id}/crops?submission_id=`
 - `GET /api/v1/da-services/farmers/{farmer_id}/crops?internal_record_id=&tab_id=`

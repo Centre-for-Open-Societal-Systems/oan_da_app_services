@@ -218,38 +218,6 @@ def load_field_options(client: FarmerRegistryClient) -> dict[str, dict[str, list
 	}
 
 
-def load_places(client: FarmerRegistryClient, level: str, parent: str | None = None) -> list[dict]:
-	"""Master Data places on one level (region, zone, woreda, kebele), under a parent place.
-
-	Returns [{id, name}] sorted by name; ids are what POST /farmers takes as kebele.
-	"""
-	level = (level or "").lower()
-	if level not in GEO_LEVELS:
-		raise IntakeFormError([f"level must be one of {', '.join(GEO_LEVELS)}"])
-	if level != GEO_LEVELS[0] and not parent:
-		raise IntakeFormError([f"parent is required for level {level}"])
-
-	def load_levels() -> dict[str, str]:
-		return {
-			str(lv.get("level_mnemonic") or "").lower(): lv.get("level_id") for lv in client.get_geo_levels()
-		}
-
-	level_ids = _cached(_cache_key(client, "geo-levels"), PLACE_TTL, load_levels)
-	if not level_ids.get(level):
-		raise IntakeFormError([f"Master Data has no '{level}' level"])
-
-	def load() -> list[dict]:
-		rows = client.get_geo_level_values(level_ids[level], parent if level != GEO_LEVELS[0] else None)
-		places = [
-			{"id": r.get("level_value_id"), "name": r.get("level_value_mnemonic") or r.get("level_value_id")}
-			for r in rows
-			if r.get("level_value_id")
-		]
-		return sorted(places, key=lambda p: str(p["name"]).lower())
-
-	return _cached(_cache_key(client, "places", level, parent or "-"), PLACE_TTL, load)
-
-
 def resolve_geo_path(client: FarmerRegistryClient, kebele_id: str) -> list[dict]:
 	"""Region -> kebele path for a Master Data kebele id, checked against Master Data.
 

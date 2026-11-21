@@ -174,9 +174,6 @@ def describe_form(
 				else:
 					described["choices"] = None
 					described["catalog_loaded"] = False
-			geo = _geo_source(source)
-			if geo:
-				described["geo"] = geo
 			fields.append(described)
 		sections.append(
 			{
@@ -396,23 +393,6 @@ def _catalog_choices(rows) -> list[dict]:
 			continue
 		choices.append({"value_id": row.get("value_id"), "value_display": row.get("value_display")})
 	return choices
-
-
-def _geo_source(source: dict) -> dict | None:
-	"""Geography widget settings copied from the rendered form. Levels are not listed here."""
-	params = source.get("params") if isinstance(source.get("params"), dict) else {}
-	endpoint = source.get("endpoint") or params.get("endpoint")
-	kind = str(source.get("type") or "")
-	if endpoint != "geo-level-values" and "geo-level-values" not in kind:
-		return None
-	geo = {"endpoint": "geo-level-values"}
-	if params.get("valueKey"):
-		geo["value_key"] = params["valueKey"]
-	if params.get("labelKey"):
-		geo["label_key"] = params["labelKey"]
-	if params.get("level_id"):
-		geo["level_id"] = params["level_id"]
-	return geo
 
 
 def _check_type(name: str, data_type, value) -> None:

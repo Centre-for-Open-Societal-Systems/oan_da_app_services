@@ -312,35 +312,6 @@ class HTTPLivestockRegistryClient(LivestockRegistryClient):
 		}
 		return describe_form(form, fields, self._catalogs(sections))
 
-	def geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
-		"""One geography level. A child level sends the selected parent's ``level_value_id``."""
-		if not self.master_data_url:
-			raise LivestockRegistryClientError("livestock_registry_master_data_url is not configured")
-		level = str(level_id or "").strip()
-		if not level:
-			raise LivestockRegistryClientError("level_id is required")
-		payload: dict = {"level_id": level}
-		parent = str(parent_level_value_id or "").strip()
-		if parent:
-			payload["parent_level_value_id"] = parent
-		rows: list[dict] = []
-		for body in self._pages(
-			"/geo/get_geo_level_values", payload, action="read livestock geography", base=self.master_data_url
-		):
-			if not isinstance(body, list):
-				raise LivestockRegistryClientError("Livestock geography was not a list")
-			for row in body:
-				if not isinstance(row, dict) or not row.get("level_value_id"):
-					continue
-				item = {
-					"level_value_id": row.get("level_value_id"),
-					"level_value_mnemonic": row.get("level_value_mnemonic"),
-				}
-				if row.get("display_name") is not None:
-					item["display_name"] = row.get("display_name")
-				rows.append(item)
-		return rows
-
 	def submit_sections(
 		self,
 		requests: list[dict],

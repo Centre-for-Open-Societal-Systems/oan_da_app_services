@@ -3,7 +3,6 @@
 GET /api/v1/da-services/registries/{registry}/registers
 GET /api/v1/da-services/registries/{registry}/intake-form
 GET /api/v1/da-services/registries/{registry}/field-options
-GET /api/v1/da-services/registries/{registry}/places?level=&parent=
 
 Only ``farmer`` is wired today. The ids come from the registry itself
 (get_all_registers, get_all_intake_forms, render_intake_form) and are cached,
@@ -128,34 +127,3 @@ def get_field_options(registry: str):
 	except FarmerRegistryError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	return success_response(data={"registry": registry.lower(), "options": options})
-
-
-@route(
-	"/registries/<registry>/places", methods=("GET",), summary="Master Data places for the location picker"
-)
-@frappe.whitelist()
-@handle_api_errors
-def list_places(registry: str, level=None, parent=None):
-	"""Region > Zone > Woreda > Kebele, one level at a time (Master Data).
-
-	Query: level=region|zone|woreda|kebele, parent=<id of the place above> (not
-	for region). Returns {"level", "parent", "places": [{"id", "name"}]}; the
-	kebele id (for example ET04080101) is what POST /farmers takes as kebele.
-	Cached for a day.
-	"""
-	_check_registry(registry)
-	level = (level or frappe.form_dict.get("level") or "region").strip().lower()
-	parent = (parent or frappe.form_dict.get("parent") or "").strip() or None
-	client = get_farmer_registry_client()
-	try:
-		places = intake.load_places(client, level, parent)
-	except intake.IntakeFormError as exc:
-		frappe.throw("; ".join(exc.problems), frappe.ValidationError)
-	except FarmerRegistryClientError as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	except FarmerRegistryServerError:
-		frappe.response["http_status_code"] = 503
-		return error_response(str(_UNAVAILABLE), "SERVICE_UNAVAILABLE")
-	except FarmerRegistryError as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	return success_response(data={"level": level, "parent": parent, "places": places})

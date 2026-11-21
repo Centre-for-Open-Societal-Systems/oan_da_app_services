@@ -292,7 +292,6 @@ def _describe_widget(widget: dict, types: dict, catalogs: dict[str, list]) -> di
 	}
 	if kind in _GEO_WIDGETS:
 		described["writes"] = paths
-		described["geo"] = {"endpoint": "geo-level-values", "levels": [level for level, _id in _GEO_LEVELS]}
 	optional = {
 		"placeholder": widget.get("widget-data-placeholder"),
 		"pattern": (widget.get("widget-data-validation") or {}).get("pattern"),

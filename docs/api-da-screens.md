@@ -177,7 +177,6 @@ Exact form field names (`name=` attributes):
 
 | Element | API | Source |
 |---|---|---|
-| Cascading dropdowns | `GET /master/regions`, `/master/zones?region=`, `/master/woredas?zone=`, `/master/kebeles?woreda=` | ours: DA Administrative Area |
 | Reference lists (gender, id type, language, education tier, specialization, certificate type) | `GET /master/reference-values?type=` | ours: DA Reference Value |
 | File uploads | `POST /files` (returns `file_url`, `content_hash`) | Frappe File |
 | Submit | `POST /farmers` with the steps as nested objects + `client_op_id` → Farmer Registry create → `DA Farmer Link` (Automatic) → returns `{farmer_id, ticket_number, status}` | Farmer Registry + ours |

@@ -1,14 +1,10 @@
-"""v1 agent assignments and administrative-area master (docs/api-da-screens.md 1.1, 2.2; DA-37, DA-38).
+"""v1 agent assignments (docs/api-da-screens.md 1.1, 2.2; DA-37, DA-38).
 
 GET  /api/v1/da-services/assignments?woreda=&status=&assignment_status=&q=&limit=&start=
 GET  /api/v1/da-services/assignments/coverage?woreda=
 POST /api/v1/da-services/assignments  {da_id, kebele, effective_date, reason, mode, da_location {lat, lng}, client_op_id}
-GET  /api/v1/da-services/master/areas?level=&parent=&q=
-GET  /api/v1/da-services/master/kebeles?woreda=
 
 A Supervisor lists and assigns within their Woreda; an Executive reads their Region.
-The Kebele list comes from DA Administrative Area, which is
-seeded until the master source is wired.
 """
 
 from __future__ import annotations
@@ -102,21 +98,3 @@ def assign(**kwargs):
 		return _registry_unavailable(exc)
 	msg = "Assignment flagged (out-of-bounds)" if out["state"] == "Flagged" else "Assignment effective"
 	return success_response(data=out, message=msg)
-
-
-@route("/master/areas", methods=("GET",), summary="Administrative areas (Region/Zone/Woreda/Kebele)")
-@frappe.whitelist()
-@handle_api_errors
-def master_areas(**kwargs):
-	q = request_fields(kwargs, "level", "parent", "q")
-	return success_response(data=svc.areas(level=q.get("level"), parent=q.get("parent"), q=q.get("q")))
-
-
-@route("/master/kebeles", methods=("GET",), summary="Kebeles of a Woreda")
-@frappe.whitelist()
-@handle_api_errors
-def master_kebeles(**kwargs):
-	q = request_fields(kwargs, "woreda", "q")
-	if not q.get("woreda"):
-		frappe.throw("woreda is required.", frappe.ValidationError)
-	return success_response(data=svc.areas(level="Kebele", parent=q["woreda"].upper(), q=q.get("q")))

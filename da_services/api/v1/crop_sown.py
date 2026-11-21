@@ -227,31 +227,6 @@ def get_crop_intake_form():
 	return success_response(data=described)
 
 
-@route("/crop-sown/geo-level-values", methods=("GET",), summary="One Crop Sown geography level")
-@frappe.whitelist()
-@handle_api_errors
-def get_crop_geo_level_values():
-	"""Return one geography level from master data.
-
-	Query ``level_id`` is the staff level id, forwarded unchanged. The planning
-	run used ``l1`` (region), then ``l2``, ``l3``, and ``l4`` with
-	``parent_level_value_id`` set to the selected parent's ``level_value_id``.
-	This route does not load every kebele.
-	"""
-	level_id = (frappe.form_dict.get("level_id") or "").strip()
-	parent = (frappe.form_dict.get("parent_level_value_id") or "").strip() or None
-	if not level_id:
-		frappe.throw(_("level_id is required."), frappe.ValidationError)
-	try:
-		rows = get_crop_registry_client().geo_level_values(level_id, parent)
-	except CropRegistryClientError as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	except CropRegistryServerError:
-		frappe.response["http_status_code"] = 503
-		return error_response(str(_UNAVAILABLE), "SERVICE_UNAVAILABLE")
-	return success_response(data={"level_id": level_id, "parent_level_value_id": parent, "values": rows})
-
-
 def _request_body() -> dict:
 	request_data = None
 	try:
