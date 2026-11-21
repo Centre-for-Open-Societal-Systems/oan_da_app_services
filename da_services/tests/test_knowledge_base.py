@@ -362,7 +362,7 @@ class TestKnowledgeBase(IntegrationTestCase):
 				if r["title"].startswith(TAG)
 			}
 
-		self.assertEqual(visible(READER_W01), {"everyone"})  # area-targeted items: writers only
+		self.assertEqual(visible(READER_W01), {"everyone", "woreda", "region"})
 		self.assertEqual(visible(READER_W02), {"everyone"})  # another Region and Woreda
 		self.assertEqual(visible(COMMS), {"everyone"})  # read-only role with no area grant
 		self.assertEqual(visible(EXECUTIVE), {"everyone", "woreda", "region"})  # writers see every audience
@@ -376,10 +376,26 @@ class TestKnowledgeBase(IntegrationTestCase):
 		frappe.set_user(WRITER)
 		vid = _video(status="Published", audience_scopes=[W01_PATH])["data"]["name"]
 		frappe.set_user(READER_W01)
-		self.assertEqual(_code(video_api.get_video(vid)), "NOT_FOUND")
+		self.assertEqual(_code(video_api.get_video(vid)), "ok")
 		frappe.set_user(READER_W02)
 		self.assertEqual(_code(video_api.get_video(vid)), "NOT_FOUND")
 		self.assertNotIn(vid, [r["name"] for r in video_api.list_videos()["data"]])
+
+	def test_narrowest_grant_wins_when_reaching_areas(self):
+		with as_user(READER_W01):
+			woreda_user = common._reach()
+		self.assertIn("ET04-W01", woreda_user)
+		self.assertIn("ET04-Z01", woreda_user)  # ancestor: content aimed at the Zone reaches the Woreda
+		self.assertIn("ET04", woreda_user)
+		self.assertIn("ET04-W01-K01", woreda_user)  # descendant: the Woreda's Kebeles
+		self.assertNotIn("ET04-W09", woreda_user)  # the Region on the assignment is not a Region grant
+		self.assertNotIn("ET04-Z02", woreda_user)
+		with as_user(EXECUTIVE):
+			region_user = common._reach()
+		self.assertTrue(
+			{"ET04", "ET04-Z01", "ET04-W01", "ET04-Z02", "ET04-W09", "ET04-W01-K01"} <= region_user
+		)
+		self.assertNotIn("ET03", region_user)
 
 	# -- API: list behaviour -------------------------------------------------------
 
