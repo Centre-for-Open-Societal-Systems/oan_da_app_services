@@ -41,13 +41,6 @@ from da_services.integrations.farmer_registry.schemas import FarmerRegistrationF
 from da_services.services import constants as C
 from da_services.services import farmers
 from da_services.services import visits as visit_svc
-from da_services.utils.permissions import require_roles
-
-# Roles that may read farmers
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-
-# Roles that may register a new farmer (Executive is read-only)
-REGISTER_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 
 _REGISTRY_UNAVAILABLE = _("Farmer Registry is unavailable. Try again shortly.")
 
@@ -83,10 +76,9 @@ def list_farmers(
 	- start: Offset (default 0)
 	- page / page_size: 1-based alternative to limit / start (registry style)
 	- search_text: Free text (name, Farmer-ID, phone). When given, the live
-	  Farmer register is searched inside the caller's scope instead of the
-	  DA Farmer Reference cache, so newly registered farmers are found too.
-	  Supervisors of several Woredas, Zone and Region officers must pass
-	  ``woreda`` with it. ``da_id`` does not apply to a live search.
+	  Farmer register is searched in ``woreda`` (required with it) instead of
+	  the DA Farmer Reference cache, so newly registered farmers are found too.
+	  ``da_id`` does not apply to a live search.
 
 	Returns:
 	    {
@@ -122,7 +114,6 @@ def list_farmers(
 	- pending_action_priority: "high" | "medium" | "low"
 	- pending_action_reason: Optional description
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	# Parse params
 	woreda = woreda or frappe.form_dict.get("woreda")
@@ -156,7 +147,6 @@ def list_farmers(
 	if search_text:
 		try:
 			found = farmers.search_farmers(
-				ctx,
 				search_text=search_text,
 				woreda=woreda,
 				kebele=kebele,
@@ -189,7 +179,6 @@ def list_farmers(
 
 	# Get farmers
 	farmer_list, total = farmers.list_farmers(
-		ctx,
 		woreda=woreda,
 		kebele=kebele,
 		state=state,
@@ -240,7 +229,6 @@ def get_farmer_change_requests(farmer_id: str, status=None, tab=None):
 
 	404 when the farmer does not exist, 403 when outside the caller's scope.
 	"""
-	ctx = require_roles(*READ_ROLES)
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 	status = (status or frappe.form_dict.get("status") or "").strip().upper() or None
@@ -249,7 +237,7 @@ def get_farmer_change_requests(farmer_id: str, status=None, tab=None):
 		frappe.throw(_("status must be PENDING, APPROVED or REJECTED."), frappe.ValidationError)
 
 	try:
-		data = farmers.get_farmer_change_requests(farmer_id, ctx, status=status, tab=tab)
+		data = farmers.get_farmer_change_requests(farmer_id, status=status, tab=tab)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryServerError:
@@ -300,13 +288,12 @@ def get_farmer_profile(farmer_id: str):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id or not isinstance(farmer_id, str):
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	# The path may carry the Farmer-ID people see (FR-…); the registry wants the internal id.
-	profile = farmers.get_farmer_profile(farmers.resolve_farmer_id(farmer_id), ctx)
+	profile = farmers.get_farmer_profile(farmers.resolve_farmer_id(farmer_id))
 	return success_response(data=profile)
 
 
@@ -343,7 +330,6 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
@@ -351,7 +337,7 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 	# Scope check: Ensure farmer is in user's scope before showing visits
 	# This prevents a DA from reading another DA's farmer visits
 	farmer_id = farmers.resolve_farmer_id(farmer_id)
-	farmers.get_farmer_profile(farmer_id, ctx)
+	farmers.get_farmer_profile(farmer_id)
 
 	# Validate pagination
 	try:
@@ -430,12 +416,11 @@ def check_farmer_permissions(farmer_id: str):
 	        }
 	    }
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
-	permissions = farmers.check_farmer_edit_permissions(farmers.resolve_farmer_id(farmer_id), ctx)
+	permissions = farmers.check_farmer_edit_permissions(farmers.resolve_farmer_id(farmer_id))
 	return success_response(data=permissions)
 
 
@@ -470,14 +455,13 @@ def get_farmer_plots(farmer_id: str):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	# Scope check: Ensure farmer is in user's scope before showing plots
 	farmer_id = farmers.resolve_farmer_id(farmer_id)
-	farmers.get_farmer_profile(farmer_id, ctx)
+	farmers.get_farmer_profile(farmer_id)
 
 	# Get plots from Farmer Registry
 	client = get_farmer_registry_client()
@@ -507,13 +491,12 @@ def get_farmer_photo(farmer_id: str):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	farmer_id = farmers.resolve_farmer_id(farmer_id)
-	farmers.get_farmer_profile(farmer_id, ctx)
+	farmers.get_farmer_profile(farmer_id)
 
 	photo = get_farmer_registry_client().get_farmer_photo(farmer_id) or {}
 	return success_response(data={"photo_url": photo.get("url"), "document_id": photo.get("document_id")})
@@ -586,7 +569,6 @@ def register_farmer():
 	registry's status and error code, and for intake the section that failed;
 	the registry's own message (e.g. a household rule) is in "message".
 	"""
-	ctx = require_roles(*REGISTER_ROLES)
 
 	# Parse JSON body (silent=True avoids a 500 on malformed JSON)
 	request_data = frappe.request.get_json(silent=True) if frappe.request else None
@@ -607,7 +589,7 @@ def register_farmer():
 		)
 		frappe.throw(_("Invalid registration form: {0}").format(problems), frappe.ValidationError)
 
-	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True), ctx)
+	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True))
 
 	# The registry answered but did not accept the submission (e.g. SYS-ERR-001):
 	# nothing was registered, so this must not read as a success to the DA.
@@ -666,11 +648,10 @@ def get_registration(submission_id: str):
 	Admin reads any submission; other roles only ones made through DA
 	Services, and a DA only their own. 404 when unknown.
 	"""
-	ctx = require_roles(*READ_ROLES)
 	if not submission_id:
 		frappe.throw(_("submission_id is required."), frappe.ValidationError)
 	try:
-		data = farmers.get_registration(submission_id, ctx)
+		data = farmers.get_registration(submission_id)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryServerError:
@@ -694,12 +675,11 @@ def upload_registration_document(**kwargs):
 	Returns {"document_id", "file_name", "size"}; send document_id as
 	identity_document_id in POST /farmers. Needed for intake-mode registration.
 	"""
-	ctx = require_roles(*REGISTER_ROLES)
 	request = getattr(frappe.local, "request", None)
 	upload = request.files.get("file") if request is not None and request.files else None
 	if upload is None:
 		frappe.throw(_("file is required (multipart/form-data)."), frappe.ValidationError)
 	out = farmers.upload_registration_document(
-		upload.read(), upload.filename, upload.mimetype or upload.content_type, ctx
+		upload.read(), upload.filename, upload.mimetype or upload.content_type
 	)
 	return success_response(data=out, message=_("Document uploaded."))

@@ -16,20 +16,6 @@ ROLE_COMMS = "Communications Officer"
 # DA Kebele row created on migrate (setup/install.py) for "no Kebele"; it keeps this spelling.
 NOT_ASSIGNED_KEBELE = "Not Assigned"
 
-DA_SERVICES_ROLES = (ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN, ROLE_COMMS)
-
-# Grievance access: Comms is excluded — FSD Appendix D forbids Comms seeing DA identity.
-GRIEVANCE_ROLES = (ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN)
-
-# Roles whose scope is the whole country. Everyone else is bounded by the Region /
-# Woreda on their DA RBAC Assignment rows.
-UNRESTRICTED_ROLES = frozenset({ROLE_ADMIN, "System Manager", "Administrator"})
-
-# Roles that may read DA records at all. Communications Officer is deliberately absent:
-# FSD Appendix D gives it no access to DA identity.
-DA_READ_ROLES = frozenset(
-	{ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN, "System Manager", "Administrator"}
-)
 
 # Registry-owned vocabulary mirrored here so code does not scatter string literals.
 # Active Status (FSD 3.2.1 column 5) is set by Part 2 lifecycle outcomes.

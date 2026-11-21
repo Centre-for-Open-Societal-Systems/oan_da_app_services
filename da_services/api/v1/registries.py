@@ -25,9 +25,7 @@ from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryServerError,
 )
 from da_services.services import constants as C
-from da_services.utils.permissions import require_roles
 
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 REGISTRIES = ("farmer",)
 _UNAVAILABLE = _("Farmer Registry is unavailable. Try again shortly.")
 
@@ -62,7 +60,6 @@ def list_registers(registry: str):
 	FarmerPhone, Land, Crop, Livestock, FarmInputs, MembershipDetails, Score.
 	The ids are what every other registry call keys on; cached for an hour.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	client = get_farmer_registry_client()
 	try:
@@ -88,7 +85,6 @@ def get_intake_form(registry: str):
 	register_mnemonic, is_list, order, has_identity_document}]}. The form id is
 	discovered from get_all_intake_forms when it is not configured.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	client = get_farmer_registry_client()
 	try:
@@ -120,7 +116,6 @@ def get_field_options(registry: str):
 	dropdowns without hard-coded values. Send the chosen value back to POST /farmers.
 	Cached for an hour.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	client = get_farmer_registry_client()
 	try:
@@ -148,7 +143,6 @@ def list_places(registry: str, level=None, parent=None):
 	kebele id (for example ET04080101) is what POST /farmers takes as kebele.
 	Cached for a day.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	level = (level or frappe.form_dict.get("level") or "region").strip().lower()
 	parent = (parent or frappe.form_dict.get("parent") or "").strip() or None

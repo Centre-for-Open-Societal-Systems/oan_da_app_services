@@ -7,7 +7,6 @@ from frappe import _
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext
 
 AREA_DOCTYPE = "DA Administrative Area"
 LEVELS = ("Region", "Zone", "Woreda", "Kebele")
@@ -58,7 +57,6 @@ def _check_supplied(supplied: str | None, resolved: str | None, label: str) -> N
 
 
 def resolve_area_filters(
-	ctx: ScopeContext,
 	*,
 	region: str | None = None,
 	zone: str | None = None,
@@ -119,22 +117,6 @@ def resolve_area_filters(
 
 	if not selected_level:
 		return {}
-
-	if not ctx.unrestricted:
-		if not ctx.covers(resolved["region"], resolved["woreda"], resolved["zone"]):
-			frappe.throw(
-				_("{0} {1} is outside your scope.").format(_(selected_level.title()), selected_code),
-				frappe.PermissionError,
-			)
-		if (
-			selected_level == "kebele"
-			and ctx.has_any_role(C.ROLE_DA)
-			and selected_code not in _assigned_kebeles(ctx.da_ids)
-		):
-			frappe.throw(
-				_("Kebele {0} is not in your assigned Kebeles.").format(selected_code),
-				frappe.PermissionError,
-			)
 
 	out = {key: value for key, value in resolved.items() if value}
 	if selected_level == "kebele":

@@ -1,7 +1,7 @@
 {
  "app": "da_services",
  "charts": [],
- "content": "[{\"id\": \"dasvcmstr\", \"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}, {\"id\": \"dasvc0000\", \"type\": \"card\", \"data\": {\"card_name\": \"Knowledge Base\", \"col\": 4}}, {\"id\": \"dasvc0001\", \"type\": \"card\", \"data\": {\"card_name\": \"Others\", \"col\": 4}}, {\"id\": \"dasvcbnfg\", \"type\": \"card\", \"data\": {\"card_name\": \"Beneficiary\", \"col\": 4}}, {\"id\": \"dasvc0002\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}]",
+ "content": "[{\"id\": \"dasvcmstr\", \"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}, {\"id\": \"dasvc0000\", \"type\": \"card\", \"data\": {\"card_name\": \"Knowledge Base\", \"col\": 4}}, {\"id\": \"dasvc0001\", \"type\": \"card\", \"data\": {\"card_name\": \"Others\", \"col\": 4}}, {\"id\": \"dasvcbnfg\", \"type\": \"card\", \"data\": {\"card_name\": \"Beneficiary\", \"col\": 4}}, {\"id\": \"dasvcusrm\", \"type\": \"card\", \"data\": {\"card_name\": \"User Management\", \"col\": 4}}, {\"id\": \"dasvc0002\", \"type\": \"card\", \"data\": {\"card_name\": \"Settings\", \"col\": 4}}]",
  "creation": "2026-11-09 12:00:00.000000",
  "custom_blocks": [],
  "docstatus": 0,
@@ -133,7 +133,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Others",
-   "link_count": 12,
+   "link_count": 10,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -200,16 +200,6 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "DA Kebele Assignment",
-   "link_count": 0,
-   "link_to": "DA Kebele Assignment",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
    "label": "DA Notification",
    "link_count": 0,
    "link_to": "DA Notification",
@@ -223,16 +213,6 @@
    "label": "DA Profile Change Request",
    "link_count": 0,
    "link_to": "DA Profile Change Request",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
-   "label": "DA RBAC Assignment",
-   "link_count": 0,
-   "link_to": "DA RBAC Assignment",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
@@ -288,6 +268,64 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "onboard": 0,
+   "label": "User Management",
+   "link_count": 5,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "onboard": 0,
+   "label": "User",
+   "link_count": 0,
+   "link_to": "User",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "onboard": 0,
+   "label": "User Permission",
+   "link_count": 0,
+   "link_to": "User Permission",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "onboard": 0,
+   "label": "DA Hierarchy",
+   "link_count": 0,
+   "link_to": "DA Hierarchy",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "onboard": 0,
+   "label": "DA RBAC Assignment",
+   "link_count": 0,
+   "link_to": "DA RBAC Assignment",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "onboard": 0,
+   "label": "DA Kebele Assignment",
+   "link_count": 0,
+   "link_to": "DA Kebele Assignment",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "Settings",
    "link_count": 1,
    "onboard": 0,
@@ -304,7 +342,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-11-17 13:30:00.000000",
+ "modified": "2026-11-21 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services",

@@ -1,11 +1,9 @@
 {
  "actions": [],
- "allow_rename": 0,
  "autoname": "format:DA-BCT-{YYYY}-{#######}",
- "creation": "2026-10-26 12:00:00.000000",
+ "creation": "2026-10-26 12:00:00",
  "description": "One broadcast sent by a Communications Officer (or Administrator) to every DA in a scope. The row is written before the per-DA notifications; its unique client_op_id is the idempotency guard, so a replayed request can never notify everyone twice.",
  "doctype": "DocType",
- "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
   "title",
@@ -115,48 +113,49 @@
    "unique": 1
   }
  ],
- "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-17 13:00:00.000000",
+ "modified": "2026-11-21 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Broadcast",
- "naming_rule": "Expression",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
    "create": 1,
-   "delete": 0,
    "email": 1,
    "export": 1,
    "print": 1,
    "read": 1,
    "report": 1,
    "role": "OAN Administrator",
-   "share": 1,
-   "write": 0
+   "share": 1
   },
   {
    "create": 1,
-   "delete": 0,
    "email": 1,
    "export": 1,
    "print": 1,
    "read": 1,
    "report": 1,
    "role": "System Manager",
-   "share": 1,
-   "write": 0
+   "share": 1
   },
   {
    "read": 1,
    "report": 1,
-   "role": "Communications Officer"
+   "role": "Communications Officer",
+   "create": 1
+  },
+  {
+   "role": "Development Agent",
+   "read": 1,
+   "create": 1
   }
  ],
  "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 0
+ "track_changes": 1
 }

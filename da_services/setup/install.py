@@ -23,6 +23,7 @@ ROLES = [
 
 def after_install():
 	seed_roles()
+	seed_not_assigned_kebele()
 
 
 def after_migrate():

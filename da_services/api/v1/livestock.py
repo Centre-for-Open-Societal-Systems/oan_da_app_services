@@ -31,10 +31,7 @@ from da_services.integrations.livestock_registry.client import (
 from da_services.integrations.livestock_registry.schemas import LivestockSubmission
 from da_services.services import constants as C
 from da_services.services import farmers
-from da_services.utils.permissions import require_roles
 
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 _UNAVAILABLE = _("Livestock Registry is currently unavailable. Try again shortly.")
 _FRAMEWORK_KEYS = {"cmd", "_", "sid"}
 
@@ -44,7 +41,7 @@ def _unavailable():
 	return error_response(str(_UNAVAILABLE), "SERVICE_UNAVAILABLE")
 
 
-def _farmer_reg_id(farmer_id: str, ctx) -> str:
+def _farmer_reg_id(farmer_id: str) -> str:
 	"""Farmer-ID (``FR-…``) for the path id, after the caller's scope check.
 
 	Livestock records name the farmer by Farmer-ID. The path may hold it, or
@@ -56,7 +53,7 @@ def _farmer_reg_id(farmer_id: str, ctx) -> str:
 	if not frappe.db.exists("DA Farmer Reference", farmer_id):
 		internal_id = frappe.db.get_value("DA Farmer Reference", {"reg_id": farmer_id}, "name") or farmer_id
 	try:
-		farmers.get_farmer_profile(internal_id, ctx)
+		farmers.get_farmer_profile(internal_id)
 	except frappe.DoesNotExistError:
 		frappe.local.message_log = []
 		response = getattr(frappe.local, "response", None)
@@ -116,7 +113,6 @@ def get_livestock_intake_form():
 	A list section (``is_list``) is a table: ``table`` has its label and
 	dialog titles, and ``fields`` are its columns.
 	"""
-	require_roles(*READ_ROLES)
 	try:
 		described = get_livestock_registry_client().describe_intake_form()
 	except LivestockRegistryClientError as exc:
@@ -136,7 +132,6 @@ def get_livestock_geo_level_values():
 	``level_value_id``. Save the kebele's ``level_value_id`` as
 	``geo_lowest_level_value_id``.
 	"""
-	require_roles(*READ_ROLES)
 	level_id = (frappe.form_dict.get("level_id") or "").strip()
 	parent = (frappe.form_dict.get("parent_level_value_id") or "").strip() or None
 	if not level_id:
@@ -163,10 +158,9 @@ def get_farmer_livestock(farmer_id: str):
 	these values with labels from ``GET /livestock/intake-form``. With
 	``submission_id`` the route returns that one submission.
 	"""
-	ctx = require_roles(*READ_ROLES)
 	submission_id = (frappe.form_dict.get("submission_id") or "").strip()
 	try:
-		reg_id = _farmer_reg_id(farmer_id, ctx)
+		reg_id = _farmer_reg_id(farmer_id)
 		client = get_livestock_registry_client()
 		if not submission_id:
 			return success_response(data={"farmer_id": reg_id, "livestock": client.list_for_farmer(reg_id)})
@@ -203,13 +197,12 @@ def save_farmer_livestock(farmer_id: str):
 	Field names, required flags, rules and allowed values come from the live
 	form; the error names the section, row and field that failed.
 	"""
-	ctx = require_roles(*WRITE_ROLES)
 	body = _request_body()
 	submission_id = body.get("submission_id") or None
 	subject_record_id = body.get("subject_record_id") or None
 	requests = _section_requests(body)
 	try:
-		reg_id = _farmer_reg_id(farmer_id, ctx)
+		reg_id = _farmer_reg_id(farmer_id)
 		client = get_livestock_registry_client()
 		if submission_id:
 			_check_owner(client.get_submission(submission_id), submission_id, reg_id)
@@ -235,9 +228,8 @@ def save_farmer_livestock(farmer_id: str):
 @handle_api_errors
 def finalize_farmer_livestock(farmer_id: str, submission_id: str):
 	"""Send the draft for approval. A successful finalize is ``FINAL`` and ``PENDING``."""
-	ctx = require_roles(*WRITE_ROLES)
 	try:
-		reg_id = _farmer_reg_id(farmer_id, ctx)
+		reg_id = _farmer_reg_id(farmer_id)
 		client = get_livestock_registry_client()
 		_check_owner(client.get_submission(submission_id), submission_id, reg_id)
 		finalized = client.finalize_submission(submission_id)

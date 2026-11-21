@@ -37,7 +37,6 @@ class DARBACAssignment(Document):
 		for field in ("da_id", "region_scope", "zone_scope", "woreda_scope"):
 			if self.get(field):
 				self.set(field, self.get(field).strip())
-		self._validate_role()
 		self._validate_scope()
 		self._validate_window()
 
@@ -81,14 +80,6 @@ class DARBACAssignment(Document):
 
 	def _snapshot(self) -> dict:
 		return _jsonable({f: self.get(f) for f in AUDITED_FIELDS})
-
-	def _validate_role(self):
-		if self.role not in C.DA_SERVICES_ROLES:
-			frappe.throw(
-				_("Role {0} is not a DA Services role. Choose one of: {1}").format(
-					self.role, ", ".join(C.DA_SERVICES_ROLES)
-				)
-			)
 
 	def _validate_scope(self):
 		if self.role == C.ROLE_DA and not self.da_id:

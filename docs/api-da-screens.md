@@ -29,7 +29,7 @@ Administrator, Communications Officer). The auth store keeps `user {id, name, em
 | Field | Type | Why |
 |---|---|---|
 | `role` | one of the five codes above | the frontend switches dashboards and nav on a single role |
-| `scope_label` | string, e.g. "Own record · Bako Tibe", "Woreda · Bako Tibe", "Region · Oromia (read)" | sidebar footer (`ROLE_SCOPES`) |
+| `scope_label` | string by role: "All regions", "Broadcast domain", "Own record", "Read only", or "" | sidebar footer (`ROLE_SCOPES`) |
 | `agent.da_id`, `agent.full_name`, `agent.kebele`, `agent.woreda`, `agent.region`, `agent.phone`, `agent.specialisation`, `agent.education_tier`, `agent.joined_at`, `agent.farmer_count`, `agent.active_status` | from Registry projection | header, footer, My Teams, Assignments |
 | `menu` | list of nav hrefs | must use the frontend's hrefs (next table), not our current section names |
 
@@ -123,7 +123,7 @@ status (`On track` | `Watch` | `At risk`), search + advanced filters (Kebele / S
 | Status thresholds | server: `visit_pct >= 80` On track · `60–79` Watch · `< 60` At risk (same as FE `statusFor`) | derived from visit completion in range |
 | Avg data quality (interim) | `stats.data_quality` = round(mean of kebele `visit_pct`) | no dedicated quality DocType yet |
 | Filters | `kebele`, `status`, `agents` (exact count), `q`; apply to **kebeles only**; stats stay full-woreda | – |
-| Scope | Caller's `woreda_scopes` only; foreign woreda/kebele → 403/400. Multi-woreda supervisors must pass `woreda=` | DA RBAC Assignment |
+| Scope | `woreda=` is required for the woreda view; foreign kebele → 400 | – |
 
 `GET /dashboard/today` stays DA/agent day plan only. Executive / Admin / Comms roll-up dashboards
 (`WOREDA_ROLLUPS`, `REGION_SUMMARY`, `ADMIN_STATS`, …) remain out of scope here.
@@ -563,7 +563,7 @@ two types.
 | 9 | `GET /visits`, `GET /visits/{id}`, `POST /visits`, `/reschedule`, `/start`, `/submit`, `/attachments` | visits | Nikky |
 | 10 | `GET /tasks`, `POST /tasks/{id}/done` | dashboard tasks | Nikky |
 | 11 | `GET /reports/activity`, `/export` | outcome page | Nikky |
-| 12 | `GET /assignments/me`, `GET /assignments`, `GET /assignments/coverage` | assignments | Nikky |
+| 12 | `GET /assignments`, `GET /assignments/coverage` | assignments | Nikky |
 | 13 | `GET /beneficiaries/segments`, `GET /beneficiaries`, `POST /beneficiaries/link`, `POST /beneficiaries/{id}/remove` | beneficiaries | Nikky |
 | 14 | Grievances (list, detail, raise, sync-status, retry) | grievances | Pushkar (ticket written) |
 | 15 | `GET /my-team` | my teams | Nikky |

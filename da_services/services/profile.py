@@ -3,8 +3,7 @@
 The DA Registry owns the DA record. Nobody edits it from DA Services directly: each edit
 is a `DA Profile Change Request`.
 
-1. The DA asks for a change to their own profile, or their Woreda Supervisor asks for one
-   on a DA of their Woreda.
+1. A Supervisor asks for a change on a DA of their Woreda.
 2. Level 1: a Supervisor of the DA's Woreda approves, rejects or asks for changes. A
    Supervisor's own request has its level 1 already (the Supervisor who sent it).
 3. Level 2: an OAN Administrator approves or rejects; never the person who gave level 1.
@@ -14,11 +13,9 @@ is a `DA Profile Change Request`.
    holds it at its own stages); DA Services reads the answer back.
 
 No registry write is ever made in a DA's or a Supervisor's request: with the planned
-registry roles their tokens can read only. Nobody decides a request for their own DA
-record or one they sent.
+registry roles their tokens can read only. Nobody decides a request they sent.
 
 Who may do what:
-- Development Agent: view own profile, send / cancel own requests, list own requests.
 - Supervisor: view the DAs of their Woreda, send a request for one, decide level 1 for
   the DAs of their Woreda.
 - OAN Administrator: decide level 2, retry or close a request the registry did not take.
@@ -50,14 +47,9 @@ from da_services.services import profile_fields, profile_lists
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.notifications import notify, notify_da
 from da_services.utils import audit
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.utils.permissions import require_permission
 
 DOCTYPE = "DA Profile Change Request"
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-SUBMIT_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR)
-DECIDE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
-AGENT_PROFILE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-DOCUMENT_ROLES = (C.ROLE_DA, *AGENT_PROFILE_ROLES)
 DECISIONS = {"Approve": "Approved", "Reject": "Rejected", "Request changes": "Changes requested"}
 LEVEL2_DECISIONS = ("Approve", "Reject")
 NOTE_MIN_LENGTH = 5
@@ -159,8 +151,8 @@ def _full_names(rows) -> dict[str, str]:
 	return {u.name: u.full_name for u in found if u.full_name}
 
 
-def serialize(row, ctx: ScopeContext, names: dict[str, str] | None = None) -> dict:
-	"""One change request as the API answers it, for the caller ``ctx``.
+def serialize(row, names: dict[str, str] | None = None) -> dict:
+	"""One change request as the API answers it, for the session user.
 
 	``names`` is ``_full_names`` of a whole list, so a list costs one query.
 	"""
@@ -178,29 +170,27 @@ def serialize(row, ctx: ScopeContext, names: dict[str, str] | None = None) -> di
 	for f in _PEOPLE:
 		# A staff user id is an opaque IAM id: the screen shows the name.
 		out[f"{f}_name"] = names.get(out[f]) if out.get(f) else None
-	out.update(_actions(out, ctx))
+	out.update(_actions(out))
 	return out
 
 
-def serialize_many(rows, ctx: ScopeContext) -> list[dict]:
+def serialize_many(rows) -> list[dict]:
 	names = _full_names(rows)
-	return [serialize(row, ctx, names) for row in rows]
+	return [serialize(row, names) for row in rows]
 
 
-def _actions(row: dict, ctx: ScopeContext) -> dict:
+def _actions(row: dict) -> dict:
 	"""What this caller may do with the request now, by the same rules the actions apply."""
-	admin = ctx.has_any_role(C.ROLE_ADMIN)
+	admin = _administers()
 	failed = row.get("status") == states.REGISTRY_FAILED
-	allowed = _allowed_decisions(row, ctx)
+	allowed = _allowed_decisions(row)
 	return {
 		"can_decide": bool(allowed),
 		"allowed_decisions": allowed,
 		"can_cancel": (
-			ctx.has_any_role(*SUBMIT_ROLES)
-			and row.get("requested_by") == ctx.user
-			and row.get("status") in states.PENDING_STATES
+			row.get("requested_by") == frappe.session.user and row.get("status") in states.PENDING_STATES
 		),
-		"can_retry": admin and failed and not ctx.owns_da(row.get("da_id")),
+		"can_retry": admin and failed,
 		"can_close": admin and failed,
 		"can_sync_local": admin and _local_update_failed(row),
 	}
@@ -215,11 +205,16 @@ def _local_update_failed(row) -> bool:
 	)
 
 
-def _own_da_id(ctx: ScopeContext) -> str:
-	own = sorted(ctx.da_ids)
-	if not own:
-		frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
-	return own[0]
+def _administers() -> bool:
+	"""The Administrator level (level 2, retry, close): `write` on the request doctype."""
+	return frappe.has_permission(DOCTYPE, "write", user=frappe.session.user)
+
+
+def _named_da(target: str) -> DAReference:
+	"""The DA named; a DA-ID is required."""
+	if not target:
+		frappe.throw(_("da_id is required."), frappe.ValidationError)
+	return get_da_reference(target)
 
 
 def _changes(doc) -> dict:
@@ -291,7 +286,7 @@ def _reports_to_person(da_id: str | None) -> tuple[str | None, str | None]:
 	return boss.full_name or None, boss.position
 
 
-def _profile_view(ref: DAReference, ctx: ScopeContext) -> dict:
+def _profile_view(ref: DAReference) -> dict:
 	open_rows = frappe.get_all(
 		DOCTYPE,
 		filters={"da_id": ref.da_id, "status": ("in", list(OPEN_STATES))},
@@ -312,32 +307,21 @@ def _profile_view(ref: DAReference, ctx: ScopeContext) -> dict:
 		"note_min_length": profile_fields.NOTE_MIN_LENGTH,
 		"list_options": profile_lists.form_options(get_client()),
 		"locked_fields": [],
-		"pending_requests": serialize_many(open_rows, ctx),
+		"pending_requests": serialize_many(open_rows),
 	}
 
 
-def my_profile(ctx: ScopeContext | None = None) -> dict:
-	"""The DA's profile as the Registry holds it, plus open change requests."""
-	ctx = ctx or require_roles(C.ROLE_DA)
-	da_id = _own_da_id(ctx)
-	ref = get_da_reference(da_id, ctx)
-	if _refresh_registry_results(da_id):
-		ref = get_da_reference(da_id, ctx)  # a change just landed: show it
-	return _profile_view(ref, ctx)
-
-
-def agent_profile(da_id: str, ctx: ScopeContext | None = None) -> dict:
+def agent_profile(da_id: str) -> dict:
 	"""A DA's profile for a Supervisor, Executive or Administrator in scope, with open requests.
 
 	``can_request`` says whether this caller may send a change request for the DA: only
 	a Supervisor of the DA's Woreda may.
 	"""
-	ctx = ctx or require_roles(*AGENT_PROFILE_ROLES)
-	ref = get_da_reference(da_id, ctx)  # scope: the registry's own posting of the DA
+	ref = get_da_reference(da_id)  # scope: the registry's own posting of the DA
 	if _refresh_registry_results(ref.da_id):
-		ref = get_da_reference(da_id, ctx)
-	out = _profile_view(ref, ctx)
-	out["can_request"] = _supervises(ctx, ref.woreda) and not ctx.owns_da(ref.da_id)
+		ref = get_da_reference(da_id)
+	out = _profile_view(ref)
+	out["can_request"] = _supervises(ref.woreda)
 	return out
 
 
@@ -360,21 +344,13 @@ def _document_url(document_id: str) -> str | None:
 		return None
 
 
-def document_link(document_id: str, *, da_id: str | None = None, ctx: ScopeContext | None = None) -> dict:
+def document_link(document_id: str, *, da_id: str | None = None) -> dict:
 	"""A short-lived link to one of a DA's registry documents: a certificate or the photo.
 
-	A DA opens their own; a Supervisor, Executive or Administrator one of a DA in their
-	scope (``da_id``). Only a document on that DA's record opens, so a guessed id leads
-	nowhere.
+	The caller names the DA (``da_id``). Registry documents are not scoped. Only a document on that DA's record opens, so a guessed id leads nowhere.
 	"""
-	ctx = ctx or require_roles(*DOCUMENT_ROLES)
 	target = (da_id or "").strip()
-	if target and ctx.has_any_role(*AGENT_PROFILE_ROLES):
-		ref = get_da_reference(target, ctx)  # scope: the registry's own posting of the DA
-	elif ctx.has_any_role(C.ROLE_DA):
-		ref = get_da_reference(_own_da_id(ctx), ctx)
-	else:
-		frappe.throw(_("da_id is required: name a DA in your scope."), frappe.ValidationError)
+	ref = _named_da(target)  # scope: the registry's own posting of the DA
 	names = _documents_of(ref)
 	if document_id not in names:
 		raise frappe.DoesNotExistError(_("DA {0} has no document {1}.").format(ref.da_id, document_id))
@@ -387,9 +363,14 @@ def document_link(document_id: str, *, da_id: str | None = None, ctx: ScopeConte
 	return {"da_id": ref.da_id, "document_id": document_id, "name": names[document_id], "url": url}
 
 
-def _supervises(ctx: ScopeContext, woreda: str | None) -> bool:
-	"""A Supervisor grant on exactly this Woreda (Supervisor grants are Woreda grants)."""
-	return ctx.has_any_role(C.ROLE_SUPERVISOR) and bool(woreda) and woreda in ctx.woreda_scopes
+def _supervises(woreda: str | None) -> bool:
+	"""Level-1 decider for this Woreda: a User Permission on exactly this DA Woreda.
+	Explicit, not "no User Permission at all": a user with none (an Administrator) would
+	otherwise cover every Woreda and could give level 1 in place of the Supervisor."""
+	if not woreda:
+		return False
+	allowed = frappe.permissions.get_user_permissions(frappe.session.user).get("DA Woreda", [])
+	return any(row.get("doc") == woreda for row in allowed)
 
 
 # -- submit / cancel -----------------------------------------------------------------
@@ -401,55 +382,36 @@ def submit_change_request(
 	reason: str | None = None,
 	client_op_id: str | None = None,
 	da_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
-	"""A DA asks to change their own profile, or a Supervisor asks for a DA of their Woreda.
-
-	A DA's ``da_id`` always comes from their own DA RBAC assignment: one sent in the
-	request is ignored. A Supervisor names the DA; the DA must be posted in their Woreda.
-	"""
-	ctx = ctx or require_roles(*SUBMIT_ROLES)
-	if not ctx.has_any_role(*SUBMIT_ROLES):
-		frappe.throw(
-			_("Only a Development Agent or their Supervisor can request a profile change."),
-			frappe.PermissionError,
-		)
+	"""A Supervisor asks for a change on a DA of their Woreda (``da_id``)."""
+	require_permission("DA Profile Change Request", "create")
 	client_op_id = (client_op_id or "").strip() or None
 	if client_op_id:
 		existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
 		if existing:
-			return serialize(frappe.get_doc(DOCTYPE, existing), ctx)
+			return serialize(frappe.get_doc(DOCTYPE, existing))
 
-	ref, as_supervisor = _target(ctx, da_id)
+	ref, as_supervisor = _target(da_id)
 	section, diff = profile_fields.validate_changes(
 		changes, ref=ref, reason=reason, client=get_client(), as_supervisor=as_supervisor
 	)
-	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+	return _submit(ref, as_supervisor, section, diff, reason, client_op_id)
 
 
-def _target(ctx: ScopeContext, da_id: str | None) -> tuple[DAReference, bool]:
-	"""(the DA a request is about, whether a Supervisor asks for them), checked for scope.
+def _target(da_id: str | None) -> tuple[DAReference, bool]:
+	"""(the DA a request is about, True: a Supervisor asks), checked for scope.
 
-	A DA's ``da_id`` always comes from their own DA RBAC assignment: one sent in the
-	request is ignored. A Supervisor names the DA; the DA must be posted in their Woreda.
+	The caller names the DA and must supervise their Woreda (``_supervises``).
 	"""
-	target = (da_id or "").strip()
-	as_supervisor = bool(target) and ctx.has_any_role(C.ROLE_SUPERVISOR) and not ctx.owns_da(target)
-	if as_supervisor:
-		ref = get_da_reference(target, ctx)
-		if not _supervises(ctx, ref.woreda):
-			frappe.throw(_("DA {0} is not posted in your Woreda.").format(ref.da_id), frappe.PermissionError)
-	elif ctx.has_any_role(C.ROLE_DA):
-		ref = get_da_reference(_own_da_id(ctx), ctx)
-	else:
-		frappe.throw(_("da_id is required: name a DA of your Woreda."), frappe.ValidationError)
+	ref = _named_da((da_id or "").strip())
+	if not _supervises(ref.woreda):
+		frappe.throw(_("DA {0} is not posted in your Woreda.").format(ref.da_id), frappe.PermissionError)
 	if _refresh_registry_results(ref.da_id):
-		ref = get_da_reference(ref.da_id, ctx)  # an earlier change just landed: diff against it
-	return ref, as_supervisor
+		ref = get_da_reference(ref.da_id)  # an earlier change just landed: diff against it
+	return ref, True
 
 
 def _submit(
-	ctx: ScopeContext,
 	ref: DAReference,
 	as_supervisor: bool,
 	section: str,
@@ -465,28 +427,21 @@ def _submit(
 	if client_op_id:
 		existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
 		if existing:
-			return serialize(frappe.get_doc(DOCTYPE, existing), ctx)  # the same operation, sent twice
-	out = _create_request(ctx, ref, section, diff, reason, client_op_id, as_supervisor, on_created)
+			return serialize(frappe.get_doc(DOCTYPE, existing))  # the same operation, sent twice
+	out = _create_request(ref, section, diff, reason, client_op_id, as_supervisor, on_created)
 	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 	return out
 
 
-def _submitter(
-	ctx: ScopeContext | None, client_op_id: str | None
-) -> tuple[ScopeContext, str | None, dict | None]:
-	"""(caller, client_op_id, the request it already made with that id or None)."""
-	ctx = ctx or require_roles(*SUBMIT_ROLES)
-	if not ctx.has_any_role(*SUBMIT_ROLES):
-		frappe.throw(
-			_("Only a Development Agent or their Supervisor can request a profile change."),
-			frappe.PermissionError,
-		)
+def _submitter(client_op_id: str | None) -> tuple[str | None, dict | None]:
+	"""(client_op_id, the request it already made with that id or None)."""
+	require_permission("DA Profile Change Request", "create")
 	client_op_id = (client_op_id or "").strip() or None
 	if client_op_id:
 		existing = frappe.db.get_value(DOCTYPE, {"client_op_id": client_op_id}, "name")
 		if existing:
-			return ctx, client_op_id, serialize(frappe.get_doc(DOCTYPE, existing), ctx)
-	return ctx, client_op_id, None
+			return client_op_id, serialize(frappe.get_doc(DOCTYPE, existing))
+	return client_op_id, None
 
 
 # -- lists, certificates, photo (DA Registry #66; services/profile_lists.py) ---------------
@@ -500,17 +455,16 @@ def submit_record_change(
 	reason: str | None = None,
 	client_op_id: str | None = None,
 	da_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Add, change or remove one of a DA's Education & Professional records."""
-	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	client_op_id, done = _submitter(client_op_id)
 	if done:
 		return done
-	ref, as_supervisor = _target(ctx, da_id)
+	ref, as_supervisor = _target(da_id)
 	section, diff = profile_lists.record_change(
 		ref, get_client(), action=action, record_id=record_id, values=values or {}
 	)
-	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+	return _submit(ref, as_supervisor, section, diff, reason, client_op_id)
 
 
 def submit_family_change(
@@ -521,17 +475,16 @@ def submit_family_change(
 	reason: str | None = None,
 	client_op_id: str | None = None,
 	da_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Add, change or remove one of a DA's family members."""
-	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	client_op_id, done = _submitter(client_op_id)
 	if done:
 		return done
-	ref, as_supervisor = _target(ctx, da_id)
+	ref, as_supervisor = _target(da_id)
 	section, diff = profile_lists.member_change(
 		ref, get_client(), action=action, member_id=member_id, values=values or {}
 	)
-	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+	return _submit(ref, as_supervisor, section, diff, reason, client_op_id)
 
 
 def submit_certificate(
@@ -547,18 +500,17 @@ def submit_certificate(
 	reason: str | None = None,
 	client_op_id: str | None = None,
 	da_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Add a certificate to an Education & Professional record, or a new file in place of one.
 
 	The file stays in DA Services, private, until the request is approved at both levels;
 	the certificate counts as verified once the registry holds it.
 	"""
-	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	client_op_id, done = _submitter(client_op_id)
 	if done:
 		return done
 	file_name, _type = profile_lists.check_file(filename, content, photo=False)
-	ref, as_supervisor = _target(ctx, da_id)
+	ref, as_supervisor = _target(da_id)
 	section, diff = profile_lists.certificate_change(
 		ref,
 		record_id=record_id,
@@ -575,7 +527,7 @@ def submit_certificate(
 		profile_lists.attach_file(doc, file_name, content)
 		profile_lists.save_certificate(doc, entry)
 
-	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id, keep)
+	return _submit(ref, as_supervisor, section, diff, reason, client_op_id, keep)
 
 
 def submit_certificate_removal(
@@ -585,15 +537,14 @@ def submit_certificate_removal(
 	reason: str | None = None,
 	client_op_id: str | None = None,
 	da_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Take a certificate off an Education & Professional record (the registry keeps the file)."""
-	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	client_op_id, done = _submitter(client_op_id)
 	if done:
 		return done
-	ref, as_supervisor = _target(ctx, da_id)
+	ref, as_supervisor = _target(da_id)
 	section, diff = profile_lists.certificate_removal(ref, record_id=record_id, document_id=document_id)
-	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id)
+	return _submit(ref, as_supervisor, section, diff, reason, client_op_id)
 
 
 def submit_photo(
@@ -604,23 +555,22 @@ def submit_photo(
 	reason: str | None = None,
 	client_op_id: str | None = None,
 	da_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Set the DA's photo (a new file) or, with ``remove``, take it off."""
-	ctx, client_op_id, done = _submitter(ctx, client_op_id)
+	client_op_id, done = _submitter(client_op_id)
 	if done:
 		return done
 	file_name = None
 	if not remove:
 		file_name, _type = profile_lists.check_file(filename, content, photo=True)
-	ref, as_supervisor = _target(ctx, da_id)
+	ref, as_supervisor = _target(da_id)
 	section, diff = profile_lists.photo_change(ref, file_name=file_name)
 
 	def keep(doc):
 		if file_name:
 			profile_lists.attach_file(doc, file_name, content)
 
-	return _submit(ctx, ref, as_supervisor, section, diff, reason, client_op_id, keep)
+	return _submit(ref, as_supervisor, section, diff, reason, client_op_id, keep)
 
 
 CERTIFICATE_STATUS = {
@@ -634,17 +584,12 @@ CERTIFICATE_STATUS = {
 }
 
 
-def list_certificates(da_id: str | None = None, ctx: ScopeContext | None = None) -> list[dict]:
+def list_certificates(da_id: str | None = None) -> list[dict]:
 	"""A DA's certificates: the ones the registry holds (verified), each with the details DA
 	Services keeps, then the ones still waiting for verification or rejected."""
-	ctx = ctx or require_roles(*DOCUMENT_ROLES)
+	require_permission("DA Certificate", "read")
 	target = (da_id or "").strip()
-	if target and ctx.has_any_role(*AGENT_PROFILE_ROLES):
-		ref = get_da_reference(target, ctx)
-	elif ctx.has_any_role(C.ROLE_DA):
-		ref = get_da_reference(_own_da_id(ctx), ctx)
-	else:
-		frappe.throw(_("da_id is required: name a DA in your scope."), frappe.ValidationError)
+	ref = _named_da(target)
 	ours = frappe.get_all(
 		profile_lists.CERTIFICATE,
 		filters={"da_id": ref.da_id},
@@ -714,12 +659,12 @@ def list_certificates(da_id: str | None = None, ctx: ScopeContext | None = None)
 	return out
 
 
-def request_file(name: str, ctx: ScopeContext | None = None) -> tuple[str, bytes, str]:
+def request_file(name: str) -> tuple[str, bytes, str]:
 	"""(file name, bytes, content type) of the file a certificate or photo request carries,
 	for whoever may read the request (to look at it before deciding)."""
-	ctx = ctx or require_roles(*READ_ROLES)
+	require_permission("DA Profile Change Request", "read")
 	doc = frappe.get_doc(DOCTYPE, name)
-	_check_read(doc, ctx)
+	_check_read(doc)
 	f = profile_lists.request_file(doc) if doc.section in profile_lists.FILE_SECTIONS else None
 	if not f:
 		raise frappe.DoesNotExistError(_("Change request {0} carries no file.").format(name))
@@ -739,7 +684,7 @@ def _content_type(file_name: str) -> str:
 	)
 
 
-def _push_list_change(doc, ctx: ScopeContext, client):
+def _push_list_change(doc, client):
 	"""Upload the request's file (once: a retry reuses the id), then the change request."""
 	ref = client.get_da(doc.da_id)
 	entry = next(iter(_changes(doc).values()))
@@ -754,7 +699,7 @@ def _push_list_change(doc, ctx: ScopeContext, client):
 			raise profile_fields.InvalidProfileChange(_("The file of this request is missing."))
 		document_id = client.upload_document(f.file_name, _bytes(f), _content_type(f.file_name))
 		doc.db_set("uploaded_document_id", document_id, update_modified=False)
-	change = profile_lists.registry_change(doc, ref, document_id=document_id, approver=ctx.user)
+	change = profile_lists.registry_change(doc, ref, document_id=document_id, approver=frappe.session.user)
 	return client.push_section_change(change)
 
 
@@ -775,7 +720,6 @@ def _in_own_transaction(action):
 
 
 def _create_request(
-	ctx: ScopeContext,
 	ref: DAReference,
 	section: str,
 	diff: dict,
@@ -811,7 +755,7 @@ def _create_request(
 			"section": section,
 			"status": states.PENDING_ADMINISTRATOR if as_supervisor else states.PENDING_SUPERVISOR,
 			"initiated_by_role": C.ROLE_SUPERVISOR if as_supervisor else C.ROLE_DA,
-			"requested_by": ctx.user,
+			"requested_by": frappe.session.user,
 			"reason": (reason or "").strip() or None,
 			"no_supervisor_found": 0 if as_supervisor or supervisors else 1,
 			"changes": frappe.as_json(diff),
@@ -827,7 +771,7 @@ def _create_request(
 	)
 	if as_supervisor:
 		# The Supervisor who asks is the request's level 1.
-		doc.update({"l1_by": ctx.user, "l1_at": now, "l1_note": _("Requested by the Supervisor")})
+		doc.update({"l1_by": frappe.session.user, "l1_at": now, "l1_note": _("Requested by the Supervisor")})
 	doc.insert(ignore_permissions=True)
 	if on_created:
 		on_created(doc)
@@ -844,25 +788,25 @@ def _create_request(
 	elif supervisors:
 		label = _("Profile change of DA {0} ({1}) waits for your approval").format(doc.da_id, section)
 		for user in supervisors:
-			if user != ctx.user:
+			if user != frappe.session.user:
 				_send(user, doc, label, event="profile_change_waiting")
 	else:
 		frappe.log_error(
 			title=f"{DOCTYPE} {doc.name}: no Supervisor for Woreda {doc.woreda}",
 			message=f"No active Supervisor assignment has woreda_scope {doc.woreda!r}; the request waits.",
 		)
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 @_in_own_transaction
-def cancel_change_request(name: str, ctx: ScopeContext | None = None) -> dict:
+def cancel_change_request(name: str) -> dict:
 	"""Whoever sent a request (the DA, or the Supervisor) withdraws it while it waits for a decision.
 
 	A DA cannot cancel a request their Supervisor sent about them.
 	"""
-	ctx = ctx or require_roles(*SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	doc = frappe.get_doc(DOCTYPE, name, for_update=True)
-	if doc.requested_by != ctx.user:
+	if doc.requested_by != frappe.session.user:
 		frappe.throw(_("You can only cancel a change request you sent."), frappe.PermissionError)
 	if doc.status not in states.PENDING_STATES:
 		raise AlreadyDecided(_("Only a request waiting for a decision can be cancelled."))
@@ -870,20 +814,15 @@ def cancel_change_request(name: str, ctx: ScopeContext | None = None) -> dict:
 	doc.flags.ignore_permissions = True
 	doc.save()
 	audit.record("profile_change_cancelled", entity_type=doc.doctype, entity_name=doc.name, details={})
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 # -- list / get ----------------------------------------------------------------------
 
 
-def _check_read(doc, ctx: ScopeContext) -> None:
-	if ctx.unrestricted:
-		return
-	if ctx.has_any_role(C.ROLE_DA) and ctx.owns_da(doc.da_id):
-		return
-	if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(doc.region, doc.woreda, doc.zone):
-		return
-	frappe.throw(_("Change request {0} is outside your scope.").format(doc.name), frappe.PermissionError)
+def _check_read(doc) -> None:
+	"""Role permission and the caller's User Permissions on this request."""
+	require_permission(DOCTYPE, "read", doc=doc, user=frappe.session.user)
 
 
 def _many(value) -> list[str]:
@@ -895,7 +834,6 @@ def _many(value) -> list[str]:
 
 
 def list_change_requests(
-	ctx: ScopeContext | None = None,
 	*,
 	status: str | list | None = None,
 	da_id: str | None = None,
@@ -906,7 +844,7 @@ def list_change_requests(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""DA: own. Supervisor / Executive: their Woreda / Region (scope via the query hook).
+	"""DA: own. Supervisor / Executive: their Woreda / Region (scope from their User Permissions).
 
 	``status`` and ``woreda`` take one value or several (comma-separated); the scope
 	rule still applies on top, so a Woreda outside the caller's scope lists nothing.
@@ -915,7 +853,7 @@ def list_change_requests(
 	``no_supervisor_found`` keeps the requests still waiting for a Supervisor in a Woreda
 	that had none when they were sent: an Administrator has to assign one.
 	"""
-	ctx = ctx or require_roles(*READ_ROLES)
+	require_permission("DA Profile Change Request", "read")
 	filters: dict = {}
 	statuses = _many(status)
 	unknown = sorted(set(statuses) - set(STATUS_LABELS))
@@ -934,7 +872,7 @@ def list_change_requests(
 	if da_id:
 		filters["da_id"] = da_id
 	if mine:
-		filters["requested_by"] = ctx.user
+		filters["requested_by"] = frappe.session.user
 	if no_supervisor_found:
 		filters["no_supervisor_found"] = 1
 		if not statuses:
@@ -951,24 +889,26 @@ def list_change_requests(
 		limit_start=start,
 	)
 	total = len(frappe.get_list(DOCTYPE, filters=filters, pluck="name", limit_page_length=0))
-	return serialize_many(rows, ctx), total
+	return serialize_many(rows), total
 
 
-def get_change_request(name: str, ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(*READ_ROLES)
+def get_change_request(name: str) -> dict:
+	require_permission("DA Profile Change Request", "read")
 	doc = frappe.get_doc(DOCTYPE, name)
-	_check_read(doc, ctx)
-	if doc.status == states.SENT_TO_REGISTRY and ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN):
+	_check_read(doc)
+	if doc.status == states.SENT_TO_REGISTRY and any(
+		frappe.has_permission(DOCTYPE, ptype, user=frappe.session.user) for ptype in ("create", "write")
+	):
 		# Ask the registry with the caller's own token whether it has applied the change.
 		_read_back(doc, get_client(), notify_outcome=True)
 		doc.reload()
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 # -- decide --------------------------------------------------------------------------
 
 
-def _decision_level(row, ctx: ScopeContext) -> int:
+def _decision_level(row) -> int:
 	"""1 or 2: the approval this caller may give on the request now. Raises why not.
 
 	Level 1 is a Supervisor of the DA's Woreda; level 2 an OAN Administrator who did
@@ -976,10 +916,10 @@ def _decision_level(row, ctx: ScopeContext) -> int:
 	sent. ``decide`` acts on this and the ``can_decide`` flag reports it.
 	"""
 	name, status = row.get("name"), row.get("status")
-	if ctx.owns_da(row.get("da_id")) or row.get("requested_by") == ctx.user:
+	if row.get("requested_by") == frappe.session.user:
 		raise frappe.PermissionError(_("You cannot decide your own change request."))
 	if status == states.PENDING_SUPERVISOR:
-		if not _supervises(ctx, row.get("woreda")):
+		if not _supervises(row.get("woreda")):
 			raise frappe.PermissionError(
 				_("Only a Supervisor of Woreda {0} can give the first approval of {1}.").format(
 					row.get("woreda"), name
@@ -987,13 +927,13 @@ def _decision_level(row, ctx: ScopeContext) -> int:
 			)
 		return 1
 	if status == states.PENDING_ADMINISTRATOR:
-		if not ctx.has_any_role(C.ROLE_ADMIN):
+		if not _administers():
 			raise frappe.PermissionError(
 				_(
 					"Change request {0} was already approved by {1} and waits for an OAN Administrator."
 				).format(name, row.get("l1_by"))
 			)
-		if row.get("l1_by") == ctx.user:
+		if row.get("l1_by") == frappe.session.user:
 			raise frappe.PermissionError(
 				_("You gave the first approval of {0}; another person must give the second.").format(name)
 			)
@@ -1003,10 +943,10 @@ def _decision_level(row, ctx: ScopeContext) -> int:
 	)
 
 
-def _allowed_decisions(row, ctx: ScopeContext) -> list[str]:
+def _allowed_decisions(row) -> list[str]:
 	"""The decisions this caller may give on the request now; none when they may not decide."""
 	try:
-		level = _decision_level(row, ctx)
+		level = _decision_level(row)
 	except frappe.ValidationError, frappe.PermissionError:
 		return []
 	return list(DECISIONS) if level == 1 else list(LEVEL2_DECISIONS)
@@ -1018,7 +958,6 @@ def decide(
 	*,
 	decision: str,
 	note: str | None = None,
-	ctx: ScopeContext | None = None,
 	wait_for_registry: bool = True,
 ) -> dict:
 	"""Level 1 (Woreda Supervisor) or level 2 (OAN Administrator), by the request's state.
@@ -1027,7 +966,6 @@ def decide(
 	after the create instead of waiting a few seconds for it; a change still PENDING is
 	picked up on a later call.
 	"""
-	ctx = ctx or require_roles(*DECIDE_ROLES)
 	if decision not in DECISIONS:
 		frappe.throw(_("decision must be one of {0}.").format(", ".join(DECISIONS)), frappe.ValidationError)
 	note = (note or "").strip()
@@ -1041,13 +979,13 @@ def decide(
 
 	# Locked: two Supervisors (or two Administrators) of the same queue cannot both decide.
 	doc = frappe.get_doc(DOCTYPE, name, for_update=True)
-	level = _decision_level(doc, ctx)
+	level = _decision_level(doc)
 	if level == 2 and decision not in LEVEL2_DECISIONS:
 		frappe.throw(_("The Administrator can approve or reject."), frappe.ValidationError)
 
 	now = now_datetime()
-	doc.update({f"l{level}_by": ctx.user, f"l{level}_at": now, f"l{level}_note": note or None})
-	doc.update({"approver": ctx.user, "decided_at": now, "decision_note": note or None})
+	doc.update({f"l{level}_by": frappe.session.user, f"l{level}_at": now, f"l{level}_note": note or None})
+	doc.update({"approver": frappe.session.user, "decided_at": now, "decision_note": note or None})
 	if decision != "Approve":
 		doc.status = DECISIONS[decision]
 	elif level == 1:
@@ -1062,29 +1000,26 @@ def decide(
 	)
 
 	if level == 2 and decision == "Approve":
-		_send_to_registry(doc, ctx, wait=wait_for_registry)
+		_send_to_registry(doc, wait=wait_for_registry)
 		doc.reload()
 	elif level == 1 and decision == "Approve":
 		_tell_administrators(doc)
 	_tell_da_outcome(doc)
 	doc.reload()
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 # Each approval is a few registry calls: keep one request well under the gateway timeout.
 BULK_LIMIT = 20
 
 
-def decide_many(
-	names: list[str], *, decision: str, note: str | None = None, ctx: ScopeContext | None = None
-) -> dict:
+def decide_many(names: list[str], *, decision: str, note: str | None = None) -> dict:
 	"""The same decision on several requests (the Approvals screen's bulk Approve / Reject).
 
 	Each request is decided on its own, with every rule of ``decide``; one that cannot
 	be decided is reported and the others go on. The registry's answer is not waited
 	for: a change still PENDING shows as Sent to registry and is read back later.
 	"""
-	ctx = ctx or require_roles(*DECIDE_ROLES)
 	names = list(dict.fromkeys(_many(names)))
 	if not names:
 		frappe.throw(_("ids must name at least one change request."), frappe.ValidationError)
@@ -1095,7 +1030,7 @@ def decide_many(
 	results = []
 	for name in names:
 		try:
-			row = decide(name, decision=decision, note=note, ctx=ctx, wait_for_registry=False)
+			row = decide(name, decision=decision, note=note, wait_for_registry=False)
 		except (frappe.ValidationError, frappe.PermissionError, frappe.DoesNotExistError) as exc:
 			frappe.db.rollback()  # only this request: the ones before it are committed
 			frappe.clear_messages()  # frappe.throw queued the message for the response; it goes in results
@@ -1156,14 +1091,14 @@ def decision_message(row: dict) -> str:
 # -- the registry push (level-2 approval, retry) -------------------------------------
 
 
-def _send_to_registry(doc, ctx: ScopeContext, *, wait: bool = True) -> None:
+def _send_to_registry(doc, *, wait: bool = True) -> None:
 	"""Create the registry change request with the Administrator's token; record the answer.
 
 	Only an OAN Administrator's request reaches this. Nothing is retried in the
 	background: a refusal or an outage leaves the row at Registry failed for the
 	Administrator to retry or close.
 	"""
-	if not ctx.has_any_role(C.ROLE_ADMIN) or ctx.user != frappe.session.user:
+	if not _administers() or frappe.session.user != frappe.session.user:
 		frappe.throw(
 			_("Only an OAN Administrator can send a change to the DA Registry."), frappe.PermissionError
 		)
@@ -1174,11 +1109,13 @@ def _send_to_registry(doc, ctx: ScopeContext, *, wait: bool = True) -> None:
 	)
 	try:
 		if doc.section in profile_lists.SECTIONS:
-			result = _push_list_change(doc, ctx, client)
+			result = _push_list_change(doc, client)
 		else:
 			changes = profile_fields.registry_changes(doc.section, _changes(doc), client)
 			result = client.push_profile_update(
-				ProfileUpdate(da_id=doc.da_id, changes=changes, approver=ctx.user, reference=doc.name)
+				ProfileUpdate(
+					da_id=doc.da_id, changes=changes, approver=frappe.session.user, reference=doc.name
+				)
 			)
 	except DARegistryUnavailable as exc:
 		_push_failed(doc, "Unavailable", None, str(exc))
@@ -1211,7 +1148,11 @@ def _send_to_registry(doc, ctx: ScopeContext, *, wait: bool = True) -> None:
 		"profile_change_registry_result",
 		entity_type=doc.doctype,
 		entity_name=doc.name,
-		details={"outcome": "sent", "change_request_id": result.external_reference, "by": ctx.user},
+		details={
+			"outcome": "sent",
+			"change_request_id": result.external_reference,
+			"by": frappe.session.user,
+		},
 	)
 	_persist()
 	_settle(doc, client, wait=wait)
@@ -1266,11 +1207,9 @@ def _settle(doc, client, *, wait: bool = True) -> None:
 
 
 @_in_own_transaction
-def retry_registry_push(name: str, ctx: ScopeContext | None = None) -> dict:
+def retry_registry_push(name: str) -> dict:
 	"""An Administrator sends a request the registry refused or could not take again."""
-	ctx = ctx or require_roles(C.ROLE_ADMIN)
-	if not ctx.has_any_role(C.ROLE_ADMIN):
-		frappe.throw(_("Only an OAN Administrator can retry."), frappe.PermissionError)
+	require_permission("DA Profile Change Request", "write")
 	doc = frappe.get_doc(DOCTYPE, name, for_update=True)
 	if doc.status != states.REGISTRY_FAILED:
 		raise AlreadyDecided(
@@ -1278,8 +1217,6 @@ def retry_registry_push(name: str, ctx: ScopeContext | None = None) -> dict:
 				name, STATUS_LABELS.get(doc.status, doc.status)
 			)
 		)
-	if ctx.owns_da(doc.da_id):
-		frappe.throw(_("You cannot send a change to your own DA record."), frappe.PermissionError)
 	audit.record(
 		"profile_change_retried",
 		entity_type=doc.doctype,
@@ -1294,10 +1231,10 @@ def retry_registry_push(name: str, ctx: ScopeContext | None = None) -> dict:
 		_persist()
 	else:
 		doc.db_set({"registry_reference": None, "registry_approval": None}, update_modified=False)
-		_send_to_registry(doc, ctx)
+		_send_to_registry(doc)
 	doc.reload()
 	_tell_da_outcome(doc)
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 def _registry_already_has(doc) -> bool:
@@ -1312,26 +1249,22 @@ def _registry_already_has(doc) -> bool:
 
 
 @_in_own_transaction
-def sync_local_after_transfer(name: str, ctx: ScopeContext | None = None) -> dict:
+def sync_local_after_transfer(name: str) -> dict:
 	"""An Administrator repeats the DA Services follow-up of an applied location change
 	(the move of the DA's DA RBAC grant) after it failed."""
-	ctx = ctx or require_roles(C.ROLE_ADMIN)
-	if not ctx.has_any_role(C.ROLE_ADMIN):
-		frappe.throw(_("Only an OAN Administrator can repeat this."), frappe.PermissionError)
+	require_permission("DA Profile Change Request", "write")
 	doc = frappe.get_doc(DOCTYPE, name, for_update=True)
 	if not _local_update_failed(doc):
 		raise AlreadyDecided(_("Change request {0} has no failed local update to repeat.").format(name))
 	_follow_transfer(doc)
 	doc.reload()
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 @_in_own_transaction
-def close_change_request(name: str, *, note: str | None = None, ctx: ScopeContext | None = None) -> dict:
+def close_change_request(name: str, *, note: str | None = None) -> dict:
 	"""An Administrator closes a request the registry did not apply; the DA may send a new one."""
-	ctx = ctx or require_roles(C.ROLE_ADMIN)
-	if not ctx.has_any_role(C.ROLE_ADMIN):
-		frappe.throw(_("Only an OAN Administrator can close a request."), frappe.PermissionError)
+	require_permission("DA Profile Change Request", "write")
 	note = (note or "").strip()
 	if len(note) < NOTE_MIN_LENGTH:
 		frappe.throw(
@@ -1346,7 +1279,12 @@ def close_change_request(name: str, *, note: str | None = None, ctx: ScopeContex
 			)
 		)
 	doc.update(
-		{"status": states.CLOSED, "closed_by": ctx.user, "closed_at": now_datetime(), "close_note": note}
+		{
+			"status": states.CLOSED,
+			"closed_by": frappe.session.user,
+			"closed_at": now_datetime(),
+			"close_note": note,
+		}
 	)
 	doc.flags.ignore_permissions = True
 	doc.save()
@@ -1359,7 +1297,7 @@ def close_change_request(name: str, *, note: str | None = None, ctx: ScopeContex
 		body=note,
 		event="profile_change_closed",
 	)
-	return serialize(doc, ctx)
+	return serialize(doc)
 
 
 # -- registry read-back ----------------------------------------------------------------

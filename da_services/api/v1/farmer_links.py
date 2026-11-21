@@ -17,7 +17,7 @@ from da_services.api.router import route
 from da_services.api.v1.common import request_fields
 from da_services.services import constants as C
 from da_services.services import farmer_links as svc
-from da_services.utils.permissions import require_roles
+from da_services.utils.permissions import require_permission
 
 
 @route("/farmer-links", methods=("POST",), status=201, summary="Create manual farmer-to-DA link")
@@ -50,7 +50,7 @@ def create_farmer_link(**kwargs):
 		400: Invalid input, DA has no assignment, mode is Automatic, duplicate link
 		403: Supervisor scope violation
 	"""
-	ctx = require_roles(C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
+	require_permission("DA Farmer Link", "create")
 
 	body = request_fields(kwargs, "da_id", "farmer_id", "client_op_id")
 
@@ -58,7 +58,6 @@ def create_farmer_link(**kwargs):
 		da_id=(body.get("da_id") or "").strip(),
 		farmer_id=(body.get("farmer_id") or "").strip(),
 		client_op_id=body.get("client_op_id"),
-		ctx=ctx,
 	)
 
 	return success_response(data=result, message="Farmer linked successfully")
@@ -91,7 +90,7 @@ def list_farmer_links(**kwargs):
 			]
 		}
 	"""
-	ctx = require_roles(C.ROLE_SUPERVISOR, C.ROLE_ADMIN, C.ROLE_DA)
+	require_permission("DA Farmer Link", "read")
 
 	query = request_fields(kwargs, "da_id", "farmer_id", "link_type", "is_active")
 
@@ -104,7 +103,6 @@ def list_farmer_links(**kwargs):
 		farmer_id=query.get("farmer_id"),
 		link_type=query.get("link_type"),
 		is_active=is_active,
-		ctx=ctx,
 	)
 
 	return success_response(data=links)

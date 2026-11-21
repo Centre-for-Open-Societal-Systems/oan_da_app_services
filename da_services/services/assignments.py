@@ -44,10 +44,7 @@ from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.notifications import notify_da
 from da_services.utils import geofence
-from da_services.utils.permissions import ScopeContext, require_roles
-
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-WRITE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
+from da_services.utils.permissions import require_permission
 
 ASSIGNMENT_FIELDS = [
 	"name",
@@ -186,28 +183,17 @@ def _row(ref: DAReference, live: dict | None, names: dict[str, str]) -> dict:
 	}
 
 
-def _resolve_officer_scope(ctx: ScopeContext, woreda: str | None) -> tuple[str | None, str | None]:
-	"""(woreda, region) an officer may list. A Supervisor defaults to their only Woreda."""
-	if ctx.unrestricted:
-		return woreda, None
-	if woreda:
-		tree = ancestors_of(woreda)
-		if tree["woreda"] != woreda:
-			frappe.throw(_("{0} is not a Woreda in the administrative area master.").format(woreda))
-		if not ctx.covers(tree["region"], woreda, tree["zone"]):
-			frappe.throw(_("Woreda {0} is outside your scope.").format(woreda), frappe.PermissionError)
-		return woreda, None
-	if len(ctx.woreda_scopes) == 1:
-		return next(iter(ctx.woreda_scopes)), None
-	if ctx.woreda_scopes:
-		frappe.throw(_("woreda is required (you hold more than one)."), frappe.ValidationError)
-	if len(ctx.region_scopes) == 1:
-		return None, next(iter(ctx.region_scopes))
-	frappe.throw(_("woreda is required."), frappe.ValidationError)
+def _resolve_officer_scope(woreda: str | None) -> tuple[str | None, str | None]:
+	"""(woreda, region) to list: the Woreda asked for. Required."""
+	if not woreda:
+		frappe.throw(_("woreda is required."), frappe.ValidationError)
+	tree = ancestors_of(woreda)
+	if tree["woreda"] != woreda:
+		frappe.throw(_("{0} is not a Woreda in the administrative area master.").format(woreda))
+	return woreda, None
 
 
 def list_assignments(
-	ctx: ScopeContext | None = None,
 	*,
 	woreda: str | None = None,
 	status: str | None = None,
@@ -221,10 +207,8 @@ def list_assignments(
 	Raises DARegistryUnavailable / DARegistryContractPending when the registry cannot
 	answer; the API layer turns those into 503.
 	"""
-	ctx = ctx or require_roles(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
-		frappe.throw(_("Use /assignments/me."), frappe.PermissionError)
-	woreda, region = _resolve_officer_scope(ctx, woreda)
+	require_permission("DA Kebele Assignment", "read")
+	woreda, region = _resolve_officer_scope(woreda)
 	refs = get_client().list_das(woreda=woreda, region=region)
 	live = _live_assignments([r.da_id for r in refs])
 	codes = {r.kebele for r in refs}
@@ -256,43 +240,17 @@ def list_assignments(
 	return rows[start : start + limit], total, summary
 
 
-def my_assignment(ctx: ScopeContext | None = None) -> dict:
-	"""The signed-in DA's own row (Assignments tab on My Farmers)."""
-	ctx = ctx or require_roles(*READ_ROLES)
-	own = sorted(ctx.da_ids)
-	if not own:
-		frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
-	ref = get_da_reference(own[0], ctx)
-	live = _live_assignments([ref.da_id])
-	slot = live.get(ref.da_id) or {"current": None, "flagged": None}
-	names = _area_names(
-		{ref.kebele, (slot["current"] or {}).get("kebele"), (slot["flagged"] or {}).get("kebele")}
-	)
-	row = _row(ref, slot, names)
-	row["history"] = [
-		serialize(r)
-		for r in frappe.get_all(
-			"DA Kebele Assignment",
-			filters={"da_id": ref.da_id},
-			fields=ASSIGNMENT_FIELDS,
-			order_by="effective_date desc, creation desc",
-			limit_page_length=20,
-		)
-	]
-	return row
-
-
-def coverage(ctx: ScopeContext | None = None, *, woreda: str | None = None) -> dict:
+def coverage(*, woreda: str | None = None) -> dict:
 	"""Kebele coverage tiles for a Woreda (DA-37): agents per Kebele and a coverage state.
 
 	Agents are counted on the posting in force; a Kebele that is the target of a pending
 	Flagged decision is shown as Flagged so the Supervisor sees what needs a look.
 	"""
-	ctx = ctx or require_roles(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-	woreda, _region = _resolve_officer_scope(ctx, woreda)
+	require_permission("DA Kebele Assignment", "read")
+	woreda, _region = _resolve_officer_scope(woreda)
 	if not woreda:
 		frappe.throw(_("woreda is required for coverage."), frappe.ValidationError)
-	rows, _total, _summary = list_assignments(ctx, woreda=woreda, limit=500)
+	rows, _total, _summary = list_assignments(woreda=woreda, limit=500)
 	kebeles = areas(level="Kebele", parent=woreda)
 	by_kebele: dict[str, list[dict]] = {}
 	flagged_targets: set[str] = set()
@@ -362,12 +320,9 @@ def assign(
 	mode: str = "Automatic",
 	da_location: dict | None = None,
 	client_op_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Assign or reassign a DA to a Kebele with geofence validation (DA-38)."""
-	ctx = ctx or require_roles(*WRITE_ROLES)
-	if not ctx.unrestricted and not ctx.has_any_role(*WRITE_ROLES):
-		frappe.throw(_("Only a Supervisor or Administrator can assign a Kebele."), frappe.PermissionError)
+	require_permission("DA Kebele Assignment", "create")
 	if not da_id or not kebele:
 		frappe.throw(_("da_id and kebele are required."), frappe.ValidationError)
 	if mode not in ("Automatic", "Manual"):
@@ -386,7 +341,7 @@ def assign(
 		if existing:
 			return serialize(frappe.get_doc("DA Kebele Assignment", existing))
 
-	ref = get_da_reference(da_id, ctx)  # the DA must be inside the officer's scope
+	ref = get_da_reference(da_id)  # the DA must be inside the officer's scope
 	if ref.active_status == C.ACTIVE_STATUS_SEPARATED:
 		frappe.throw(_("DA {0} is separated and cannot be assigned.").format(da_id), frappe.ValidationError)
 	# The assignment belongs to the User whose DA Registry ID is this DA-ID (its da_id is fetched from it).
@@ -404,9 +359,10 @@ def assign(
 	)
 	if not area or area.level != "Kebele":
 		frappe.throw(_("{0} is not a Kebele in the administrative area master.").format(kebele))
-	tree = ancestors_of(kebele)
-	if not ctx.unrestricted and not ctx.covers(tree["region"], tree["woreda"], tree["zone"]):
-		frappe.throw(_("Kebele {0} is outside your Woreda.").format(kebele), frappe.PermissionError)
+	# Scope: the officer's User Permissions (DA Woreda, through DA Kebele.woreda) must
+	# reach the Kebele. The row itself is inserted with ignore_permissions below.
+	if frappe.db.exists("DA Kebele", kebele):
+		require_permission("DA Kebele", "read", doc=kebele)
 
 	boundary = area.boundary_geojson
 	if isinstance(boundary, str):
@@ -429,7 +385,7 @@ def assign(
 			"mode": mode,
 			"effective_date": getdate(effective_date) if effective_date else getdate(),
 			"reason": reason,
-			"assigned_by": ctx.user,
+			"assigned_by": frappe.session.user,
 			"geofence_result": result,
 			"geofence_reason": why,
 			"da_lat": loc.get("lat"),
@@ -447,7 +403,7 @@ def assign(
 	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
 
 	if state == "Effective":
-		_push_to_registry(doc, ref, reason, ctx)
+		_push_to_registry(doc, ref, reason)
 	_notify(doc, ref, area.name_en, state, why, reason)
 	doc.reload()
 	return serialize(doc)
@@ -474,14 +430,14 @@ def _notify(doc, ref: DAReference, kebele_name: str, state: str, why: str, reaso
 		frappe.log_error(title=f"DA Kebele Assignment {doc.name}: notification failed")
 
 
-def _push_to_registry(doc, ref: DAReference, reason: str | None, ctx: ScopeContext) -> None:
+def _push_to_registry(doc, ref: DAReference, reason: str | None) -> None:
 	outcome = LifecycleOutcome(
 		da_id=ref.da_id,
 		transition_type="Transfer",
 		new_active_status=None,
 		effective_date=str(doc.effective_date),
 		reason=reason or "Kebele assignment",
-		approver=ctx.user,
+		approver=frappe.session.user,
 		reference=doc.name,
 		target_kebele=doc.kebele,
 	)

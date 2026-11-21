@@ -41,7 +41,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-17 12:55:00.745637",
+ "modified": "2026-11-20 22:01:14.717498",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "Beneficiary Segment",
@@ -98,5 +98,6 @@
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
- "title_field": "title"
+ "title_field": "title",
+ "track_changes": 1
 }

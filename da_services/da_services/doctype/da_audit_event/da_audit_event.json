@@ -1,11 +1,9 @@
 {
  "actions": [],
- "allow_rename": 0,
  "autoname": "format:DA-AUD-{YYYY}-{#######}",
- "creation": "2026-10-06 00:00:00.000000",
+ "creation": "2026-10-06 00:00:00",
  "description": "Immutable record of a security-relevant action: who, what, on which record, allowed or denied, and why. FSD section 5 'Audit event'; HLD 10.3 audit minimum.",
  "doctype": "DocType",
- "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
   "action",
@@ -128,13 +126,12 @@
   }
  ],
  "in_create": 1,
- "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-06 00:00:00.000000",
+ "modified": "2026-11-20 22:01:19.269798",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Audit Event",
- "naming_rule": "Expression",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
@@ -154,5 +151,5 @@
  "sort_field": "occurred_at",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 0
+ "track_changes": 1
 }

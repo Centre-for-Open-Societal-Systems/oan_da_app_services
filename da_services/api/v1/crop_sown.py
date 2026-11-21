@@ -33,15 +33,12 @@ from da_services.integrations.farmer_registry.client import (
 )
 from da_services.services import constants as C
 from da_services.services import farmers
-from da_services.utils.permissions import require_roles
 
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-WRITE_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 _UNAVAILABLE = _("Crop Sown Registry is currently unavailable. Try again shortly.")
 _FRAMEWORK_KEYS = {"cmd", "_", "sid"}
 
 
-def _farmer_is_in_registry(farmer_id: str, ctx) -> bool:
+def _farmer_is_in_registry(farmer_id: str) -> bool:
 	"""True when this id is a Farmer Registry subject in the caller's scope.
 
 	A Crop Sown Farmer-ID (``FR-…``) is often the submission name, not a Farmer
@@ -49,7 +46,7 @@ def _farmer_is_in_registry(farmer_id: str, ctx) -> bool:
 	raises, so that text is cleared and the Crop Sown call continues.
 	"""
 	try:
-		farmers.get_farmer_profile(farmer_id, ctx)
+		farmers.get_farmer_profile(farmer_id)
 	except frappe.DoesNotExistError:
 		frappe.local.message_log = []
 		response = getattr(frappe.local, "response", None)
@@ -114,7 +111,6 @@ def get_farmer_crops(farmer_id: str):
 
 	``reg_id`` is the Farmer-ID for submission search; it must match this farmer.
 	"""
-	ctx = require_roles(*READ_ROLES)
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
@@ -128,7 +124,7 @@ def get_farmer_crops(farmer_id: str):
 	requested_id = farmer_id
 	try:
 		resolved_id = _internal_farmer_id(farmer_id)
-		in_registry = _farmer_is_in_registry(resolved_id, ctx)
+		in_registry = _farmer_is_in_registry(resolved_id)
 		if in_registry:
 			farmer_id = resolved_id
 		client = get_crop_registry_client()
@@ -218,7 +214,6 @@ def get_crop_intake_form():
 	Catalog rows load when ``crop_registry_master_data_url`` is set. Geography is
 	a separate call.
 	"""
-	require_roles(*READ_ROLES)
 	form_name = (frappe.form_dict.get("form") or "").strip()
 	if not form_name:
 		frappe.throw(_("form is required."), frappe.ValidationError)
@@ -243,7 +238,6 @@ def get_crop_geo_level_values():
 	``parent_level_value_id`` set to the selected parent's ``level_value_id``.
 	This route does not load every kebele.
 	"""
-	require_roles(*READ_ROLES)
 	level_id = (frappe.form_dict.get("level_id") or "").strip()
 	parent = (frappe.form_dict.get("parent_level_value_id") or "").strip() or None
 	if not level_id:
@@ -271,9 +265,9 @@ def _request_body() -> dict:
 	return request_data
 
 
-def _open_crop_client(farmer_id: str, ctx):
+def _open_crop_client(farmer_id: str):
 	"""Resolve the farmer and return (requested id, crop client). Scope applies when the farmer exists."""
-	_farmer_is_in_registry(_internal_farmer_id(farmer_id), ctx)
+	_farmer_is_in_registry(_internal_farmer_id(farmer_id))
 	return farmer_id, get_crop_registry_client()
 
 
@@ -314,7 +308,6 @@ def save_farmer_crop(farmer_id: str):
 	``section_mnemonic`` or ``section_register_id`` may be sent instead of ``section_id``. ``section_payload``
 	is accepted as another name for ``records``.
 	"""
-	ctx = require_roles(*WRITE_ROLES)
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 	body = _request_body()
@@ -323,7 +316,7 @@ def save_farmer_crop(farmer_id: str):
 		frappe.throw(_("form must be a string."), frappe.ValidationError)
 	submission_id, subject_record_id, requests = _section_requests(body)
 	try:
-		requested_id, client = _open_crop_client(farmer_id, ctx)
+		requested_id, client = _open_crop_client(farmer_id)
 		saved = client.submit_sections(
 			requests,
 			submission_id=submission_id,
@@ -354,11 +347,10 @@ def finalize_farmer_crop(farmer_id: str, submission_id: str):
 	Staff call: ``POST /intake-form-data/finalize_intake_form_submission``
 	with ``{submission_id}``. A successful finalize is ``FINAL`` and ``PENDING``.
 	"""
-	ctx = require_roles(*WRITE_ROLES)
 	if not farmer_id or not submission_id:
 		frappe.throw(_("Farmer ID and submission ID are required."), frappe.ValidationError)
 	try:
-		requested_id, client = _open_crop_client(farmer_id, ctx)
+		requested_id, client = _open_crop_client(farmer_id)
 		finalized = client.finalize_submission(submission_id)
 	except CropRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)

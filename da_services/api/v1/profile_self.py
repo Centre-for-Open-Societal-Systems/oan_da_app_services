@@ -1,8 +1,7 @@
 """v1 DA profile and profile change requests (FSD 3.7; docs/api-da-screens.md 2.18).
 
-GET  /api/v1/da-services/profile/me
 GET  /api/v1/da-services/profile/agents/<da_id>                 Supervisor / Executive / Administrator
-GET  /api/v1/da-services/profile/documents/<document_id>         ?da_id= (not for a DA's own) -> {url}
+GET  /api/v1/da-services/profile/documents/<document_id>         ?da_id= -> {url}
 POST /api/v1/da-services/profile/qualifications                 {action, record_id, values, reason, da_id}
 POST /api/v1/da-services/profile/family-members                 {action, member_id, values, reason, da_id}
 GET  /api/v1/da-services/profile/certificates                   ?da_id=
@@ -22,8 +21,7 @@ POST /api/v1/da-services/profile/change-requests/<id>/sync-local Administrator (
 POST /api/v1/da-services/profile/change-requests/<id>/retry     Administrator
 POST /api/v1/da-services/profile/change-requests/<id>/close     Administrator {note}
 
-A DA asks for a change to their own profile; a Supervisor may ask for one on a DA of
-their Woreda (``da_id``). Every section can be changed: Contact, Qualifications,
+A Supervisor asks for a change on a DA of their Woreda (``da_id``). Every section can be changed: Contact, Qualifications,
 Identity and Location (services/profile_fields.py). A change reaches the DA Registry only
 after the Woreda Supervisor (level 1) and then an OAN Administrator (level 2) approve it,
 and it is sent in the Administrator's request with the Administrator's token.
@@ -48,7 +46,7 @@ from da_services.api.v1.common import request_fields, truthy
 from da_services.services import constants as C
 from da_services.services import profile as svc
 from da_services.services import profile_lists
-from da_services.utils.permissions import require_roles
+from da_services.utils.permissions import require_permission
 
 
 def coded_refusals(endpoint):
@@ -76,20 +74,11 @@ def coded_refusals(endpoint):
 	return wrapper
 
 
-@route("/profile/me", methods=("GET",), summary="My profile and open change requests")
-@frappe.whitelist()
-@handle_api_errors
-def my_profile():
-	ctx = require_roles(C.ROLE_DA)
-	return success_response(data=svc.my_profile(ctx))
-
-
 @route("/profile/agents/<da_id>", methods=("GET",), summary="A DA's profile and open change requests")
 @frappe.whitelist()
 @handle_api_errors
 def agent_profile(da_id: str):
-	ctx = require_roles(*svc.AGENT_PROFILE_ROLES)
-	return success_response(data=svc.agent_profile(da_id, ctx))
+	return success_response(data=svc.agent_profile(da_id))
 
 
 @route(
@@ -100,9 +89,8 @@ def agent_profile(da_id: str):
 @frappe.whitelist()
 @handle_api_errors
 def document(document_id: str, **kwargs):
-	ctx = require_roles(*svc.DOCUMENT_ROLES)
 	q = request_fields(kwargs, "da_id")
-	return success_response(data=svc.document_link(document_id, da_id=q.get("da_id"), ctx=ctx))
+	return success_response(data=svc.document_link(document_id, da_id=q.get("da_id")))
 
 
 def _upload(field: str = "file") -> tuple[str, bytes]:
@@ -134,7 +122,7 @@ def _created(out: dict) -> dict:
 @handle_api_errors
 @coded_refusals
 def qualification_change(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	b = request_fields(
 		kwargs, "action", "record_id", "values", "reason", "client_op_id", "da_id", json_keys=("values",)
 	)
@@ -146,7 +134,6 @@ def qualification_change(**kwargs):
 			reason=b.get("reason"),
 			client_op_id=b.get("client_op_id"),
 			da_id=b.get("da_id"),
-			ctx=ctx,
 		)
 	)
 
@@ -158,7 +145,7 @@ def qualification_change(**kwargs):
 @handle_api_errors
 @coded_refusals
 def family_change(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	b = request_fields(
 		kwargs, "action", "member_id", "values", "reason", "client_op_id", "da_id", json_keys=("values",)
 	)
@@ -170,7 +157,6 @@ def family_change(**kwargs):
 			reason=b.get("reason"),
 			client_op_id=b.get("client_op_id"),
 			da_id=b.get("da_id"),
-			ctx=ctx,
 		)
 	)
 
@@ -179,9 +165,9 @@ def family_change(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def certificates(**kwargs):
-	ctx = require_roles(*svc.DOCUMENT_ROLES)
+	require_permission("DA Certificate", "read")
 	q = request_fields(kwargs, "da_id")
-	return success_response(data=svc.list_certificates(q.get("da_id"), ctx))
+	return success_response(data=svc.list_certificates(q.get("da_id")))
 
 
 @route(
@@ -191,7 +177,7 @@ def certificates(**kwargs):
 @handle_api_errors
 @coded_refusals
 def certificate_upload(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	filename, content = _upload()
 	b = request_fields(
 		kwargs,
@@ -218,7 +204,6 @@ def certificate_upload(**kwargs):
 			reason=b.get("reason"),
 			client_op_id=b.get("client_op_id"),
 			da_id=b.get("da_id"),
-			ctx=ctx,
 		)
 	)
 
@@ -230,7 +215,7 @@ def certificate_upload(**kwargs):
 @handle_api_errors
 @coded_refusals
 def certificate_remove(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	b = request_fields(kwargs, "record_id", "document_id", "reason", "client_op_id", "da_id")
 	return _created(
 		svc.submit_certificate_removal(
@@ -239,7 +224,6 @@ def certificate_remove(**kwargs):
 			reason=b.get("reason"),
 			client_op_id=b.get("client_op_id"),
 			da_id=b.get("da_id"),
-			ctx=ctx,
 		)
 	)
 
@@ -249,7 +233,7 @@ def certificate_remove(**kwargs):
 @handle_api_errors
 @coded_refusals
 def photo_upload(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	filename, content = _upload()
 	b = request_fields(kwargs, "reason", "client_op_id", "da_id")
 	return _created(
@@ -259,7 +243,6 @@ def photo_upload(**kwargs):
 			reason=b.get("reason"),
 			client_op_id=b.get("client_op_id"),
 			da_id=b.get("da_id"),
-			ctx=ctx,
 		)
 	)
 
@@ -269,7 +252,7 @@ def photo_upload(**kwargs):
 @handle_api_errors
 @coded_refusals
 def photo_remove(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	b = request_fields(kwargs, "reason", "client_op_id", "da_id")
 	return _created(
 		svc.submit_photo(
@@ -277,7 +260,6 @@ def photo_remove(**kwargs):
 			reason=b.get("reason"),
 			client_op_id=b.get("client_op_id"),
 			da_id=b.get("da_id"),
-			ctx=ctx,
 		)
 	)
 
@@ -291,8 +273,8 @@ def photo_remove(**kwargs):
 @handle_api_errors
 def request_file(request_id: str):
 	"""A raw download, not a JSON envelope (see api/v1/surveys.py export_responses)."""
-	ctx = require_roles(*svc.READ_ROLES)
-	filename, content, content_type = svc.request_file(request_id, ctx)
+	require_permission("DA Profile Change Request", "read")
+	filename, content, content_type = svc.request_file(request_id)
 	frappe.response["type"] = "download"
 	frappe.response["filename"] = filename
 	frappe.response["filecontent"] = content
@@ -305,14 +287,13 @@ def request_file(request_id: str):
 @handle_api_errors
 @coded_refusals
 def submit(**kwargs):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
+	require_permission("DA Profile Change Request", "create")
 	b = request_fields(kwargs, "changes", "reason", "client_op_id", "da_id", json_keys=("changes",))
 	out = svc.submit_change_request(
 		changes=b.get("changes") or {},
 		reason=b.get("reason"),
 		client_op_id=b.get("client_op_id"),
 		da_id=b.get("da_id"),
-		ctx=ctx,
 	)
 	message = (
 		"Change request sent to an OAN Administrator"
@@ -326,14 +307,13 @@ def submit(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def list_requests(**kwargs):
-	ctx = require_roles(*svc.READ_ROLES)
+	require_permission("DA Profile Change Request", "read")
 	q = request_fields(
 		kwargs, "status", "da_id", "woreda", "section", "mine", "no_supervisor_found", "limit", "start"
 	)
 	limit = int(q.get("limit") or 50)
 	start = int(q.get("start") or 0)
 	rows, total = svc.list_change_requests(
-		ctx,
 		status=q.get("status"),
 		da_id=q.get("da_id"),
 		woreda=q.get("woreda"),
@@ -350,8 +330,8 @@ def list_requests(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_request(request_id: str):
-	ctx = require_roles(*svc.READ_ROLES)
-	return success_response(data=svc.get_change_request(request_id, ctx))
+	require_permission("DA Profile Change Request", "read")
+	return success_response(data=svc.get_change_request(request_id))
 
 
 @route("/profile/change-requests/<request_id>/cancel", methods=("POST",), summary="Cancel a waiting request")
@@ -359,10 +339,8 @@ def get_request(request_id: str):
 @handle_api_errors
 @coded_refusals
 def cancel(request_id: str):
-	ctx = require_roles(*svc.SUBMIT_ROLES)
-	return success_response(
-		data=svc.cancel_change_request(request_id, ctx), message="Change request cancelled"
-	)
+	require_permission("DA Profile Change Request", "create")
+	return success_response(data=svc.cancel_change_request(request_id), message="Change request cancelled")
 
 
 @route(
@@ -374,9 +352,8 @@ def cancel(request_id: str):
 @handle_api_errors
 @coded_refusals
 def decide(request_id: str, **kwargs):
-	ctx = require_roles(*svc.DECIDE_ROLES)
 	b = request_fields(kwargs, "decision", "note")
-	out = svc.decide(request_id, decision=(b.get("decision") or "").strip(), note=b.get("note"), ctx=ctx)
+	out = svc.decide(request_id, decision=(b.get("decision") or "").strip(), note=b.get("note"))
 	return success_response(data=out, message=svc.decision_message(out))
 
 
@@ -388,11 +365,8 @@ def decide(request_id: str, **kwargs):
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def bulk_decide(**kwargs):
-	ctx = require_roles(*svc.DECIDE_ROLES)
 	b = request_fields(kwargs, "ids", "decision", "note", json_keys=("ids",))
-	out = svc.decide_many(
-		b.get("ids") or [], decision=(b.get("decision") or "").strip(), note=b.get("note"), ctx=ctx
-	)
+	out = svc.decide_many(b.get("ids") or [], decision=(b.get("decision") or "").strip(), note=b.get("note"))
 	return success_response(data=out, message=f"{out['decided']} decided, {out['failed']} not decided")
 
 
@@ -405,8 +379,8 @@ def bulk_decide(**kwargs):
 @handle_api_errors
 @coded_refusals
 def retry(request_id: str):
-	ctx = require_roles(C.ROLE_ADMIN)
-	out = svc.retry_registry_push(request_id, ctx)
+	require_permission("DA Profile Change Request", "write")
+	out = svc.retry_registry_push(request_id)
 	return success_response(data=out, message=svc.decision_message(out))
 
 
@@ -419,8 +393,8 @@ def retry(request_id: str):
 @handle_api_errors
 @coded_refusals
 def sync_local(request_id: str):
-	ctx = require_roles(C.ROLE_ADMIN)
-	out = svc.sync_local_after_transfer(request_id, ctx)
+	require_permission("DA Profile Change Request", "write")
+	out = svc.sync_local_after_transfer(request_id)
 	done = out.get("local_sync_state") == "Done"
 	return success_response(
 		data=out, message="DA Services scope updated" if done else "The local update failed again"
@@ -436,7 +410,7 @@ def sync_local(request_id: str):
 @handle_api_errors
 @coded_refusals
 def close(request_id: str, **kwargs):
-	ctx = require_roles(C.ROLE_ADMIN)
+	require_permission("DA Profile Change Request", "write")
 	b = request_fields(kwargs, "note")
-	out = svc.close_change_request(request_id, note=b.get("note"), ctx=ctx)
+	out = svc.close_change_request(request_id, note=b.get("note"))
 	return success_response(data=out, message=svc.decision_message(out))

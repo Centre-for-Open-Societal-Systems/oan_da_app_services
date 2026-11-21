@@ -26,7 +26,6 @@ from frappe.utils import cint, now_datetime
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.client import FarmerRegistryError
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext
 
 # ============================================================================
 # CONSTANTS
@@ -83,7 +82,6 @@ MAX_RETRY_ATTEMPTS = 5
 def queue_farmer_update(
 	farmer_id: str,
 	updates: dict,
-	ctx: ScopeContext,
 	client_op_id: str | None = None,
 ) -> str:
 	"""Queue farmer profile update for offline sync (DA-41).
@@ -94,7 +92,6 @@ def queue_farmer_update(
 	Args:
 	    farmer_id: Farmer Registry internal_record_id
 	    updates: Dict of field:value pairs to update
-	    ctx: User scope context (for audit trail)
 	    client_op_id: Optional idempotency key
 
 	Returns:
@@ -102,7 +99,6 @@ def queue_farmer_update(
 
 	Raises:
 	    ValidationError: Invalid fields or values
-	    PermissionError: Farmer not linked to DA
 	"""
 	# Validate farmer exists and get current version
 	client = get_farmer_registry_client()
@@ -110,20 +106,10 @@ def queue_farmer_update(
 	if not farmer:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 
-	# Validate permissions: linked to the DA or in their assigned Kebele (DA-41, DA-211)
-	from da_services.services.farmers import _is_farmer_in_da_kebele, _is_farmer_linked_to_da
+	# Keep the farmer's cached reference in step (no edit permission check).
+	from da_services.services.farmers import _get_or_sync_farmer_reference
 
-	da_ids = list(ctx.da_ids) if ctx.da_ids else []
-	if not da_ids or not (
-		_is_farmer_linked_to_da(farmer_id, da_ids) or _is_farmer_in_da_kebele(farmer_id, da_ids)
-	):
-		frappe.throw(
-			_(
-				"You do not have permission to update this farmer. "
-				"Farmer must be linked to you or in your assigned Kebele."
-			),
-			frappe.PermissionError,
-		)
+	_get_or_sync_farmer_reference(farmer_id)
 
 	# Validate fields
 	_validate_update_fields(updates)
@@ -140,7 +126,6 @@ def queue_farmer_update(
 		"farmer_id": farmer_id,  # Farmer ID stays in payload
 		"updates": updates,
 		"expected_version": getattr(farmer, "version", 1),
-		"da_id": da_ids[0] if da_ids else None,
 		"updated_by": frappe.session.user,
 		"client_op_id": op_id,  # For reference in error messages
 	}

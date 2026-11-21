@@ -27,10 +27,10 @@ from da_services.integrations.farmer_registry.mapper import (
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.pending_actions import derive_pending_actions_batch
-from da_services.utils.permissions import ScopeContext
+from da_services.utils.permissions import require_permission
 
 
-def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
+def get_farmer_profile(farmer_id: str) -> dict:
 	"""Get complete farmer profile for DA-40 profile screen.
 
 	Combines:
@@ -40,7 +40,6 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 
 	Args:
 	    farmer_id: Farmer Registry internal_record_id
-	    ctx: Scope context with user permissions
 
 	Returns:
 	    Complete profile dict for frontend
@@ -49,27 +48,23 @@ def get_farmer_profile(farmer_id: str, ctx: ScopeContext) -> dict:
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ref = _require_farmer_in_scope(farmer_id, ctx)
+	ref = _require_farmer_in_scope(farmer_id)
 
 	# Get visit data (last visit, pending tasks)
 	visit_data = _get_farmer_visit_data(farmer_id)
-
-	# Check if farmer is editable by current DA
-	can_edit = _can_edit_farmer(farmer_id, ctx)
 
 	# Merge all data into profile
 	profile = reference_dict_to_profile(ref, visit_data)
 	# Sections the registry could not deliver on a fresh fetch (empty on cache hits
 	# and complete reads); the UI can show "partial data" instead of blanks.
 	profile["incomplete_sections"] = list(ref.get("incomplete_sections") or [])
-	profile["can_edit"] = can_edit
-	da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-	profile["is_linked"] = _is_farmer_linked_to_da(farmer_id, da_ids_list)
+	profile["can_edit"] = True  # no edit permission check
+	profile["is_linked"] = False  # no caller DA-ID to link against
 
 	return profile
 
 
-def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
+def _require_farmer_in_scope(farmer_id: str) -> dict:
 	"""The cached farmer reference, after the 404 / 403 checks every farmer read shares.
 
 	Raises:
@@ -81,35 +76,12 @@ def _require_farmer_in_scope(farmer_id: str, ctx: ScopeContext) -> dict:
 	if not ref:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 
-	# Check scope: Different rules for DA vs Supervisor/Executive
-	if not ctx.unrestricted:
-		if ctx.has_any_role(C.ROLE_DA):
-			# A DA reads farmers linked to them or in their assigned Kebeles: the same
-			# farmers their list shows (FR-05, DA-211).
-			da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-			if not (
-				_is_farmer_linked_to_da(farmer_id, da_ids_list)
-				or _is_farmer_in_da_kebele(farmer_id, da_ids_list, kebele=ref.get("kebele"))
-			):
-				frappe.throw(_("Farmer is not linked or assigned to you."), frappe.PermissionError)
-		else:
-			# Supervisors/Executives check region/woreda scope
-			farmer_region = ref.get("region")
-			farmer_woreda = ref.get("woreda")
-			farmer_zone = ref.get("zone")
-
-			covered, reason = ctx.scope_decision(region=farmer_region, woreda=farmer_woreda, zone=farmer_zone)
-
-			if not covered:
-				from da_services.utils.permissions import SCOPE_UNRESOLVED
-
-				if reason == SCOPE_UNRESOLVED:
-					frappe.throw(
-						_("Cannot verify farmer scope: missing Woreda or Zone data."),
-						frappe.PermissionError,
-					)
-				else:
-					frappe.throw(_("Farmer is not in your scope."), frappe.PermissionError)
+	# Role permission, then the farmer is inside the caller's User Permissions (DA Kebele /
+	# Woreda / Zone / Region) or linked to the caller's own DA-ID (DA Farmer Link).
+	if not _farmer_permitted(farmer_id, "read"):
+		require_permission(
+			"DA Farmer Reference", "read", doc=ref.get("name") or farmer_id, user=frappe.session.user
+		)
 
 	return ref
 
@@ -138,7 +110,6 @@ def resolve_farmer_id(farmer_id: str) -> str:
 
 def resolve_farmer_for_capture(
 	farmer_id: str,
-	ctx: ScopeContext,
 	collector_da_id: str | None = None,
 	*,
 	survey_woreda: str | None = None,
@@ -151,7 +122,6 @@ def resolve_farmer_for_capture(
 
 	Args:
 	    farmer_id: Registry internal id or the Farmer-ID shown in the UI (``FR-…``).
-	    ctx: Caller's scope context.
 	    collector_da_id: DA whose Kebeles must contain the farmer. A Development
 	        Agent defaults to their own DA-ID.
 	    survey_woreda: Woreda stamped on the survey template, when it has one.
@@ -170,7 +140,7 @@ def resolve_farmer_for_capture(
 		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
 
 	canonical_id = resolve_farmer_id(farmer_id)
-	ref = _require_farmer_in_scope(canonical_id, ctx)
+	ref = _require_farmer_in_scope(canonical_id)
 	ref = dict(ref)
 	ref["farmer_id"] = canonical_id
 
@@ -181,8 +151,6 @@ def resolve_farmer_for_capture(
 			frappe.ValidationError,
 		)
 
-	if collector_da_id is None and ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
-		collector_da_id = next(iter(sorted(ctx.da_ids)), None)
 	collector_da_id = (collector_da_id or "").strip() or None
 
 	if collector_da_id:
@@ -194,7 +162,7 @@ def resolve_farmer_for_capture(
 
 		# The collector's own Woreda must agree with the farmer's, so a response is
 		# never filed against a DA that does not cover the farmer's Woreda.
-		da_ref = get_da_reference(collector_da_id, ctx=ctx)
+		da_ref = get_da_reference(collector_da_id)
 		farmer_woreda = ref.get("woreda")
 		if farmer_woreda and da_ref.woreda and farmer_woreda != da_ref.woreda:
 			frappe.throw(
@@ -225,16 +193,14 @@ def resolve_farmer_for_capture(
 	return ref
 
 
-def get_farmer_change_requests(
-	farmer_id: str, ctx: ScopeContext, *, status: str | None = None, tab: str | None = None
-) -> dict:
+def get_farmer_change_requests(farmer_id: str, *, status: str | None = None, tab: str | None = None) -> dict:
 	"""Change requests the registry holds for a farmer (DA-272).
 
 	The farmer must be readable by the caller (same 404 / 403 rules as the
 	profile). ``status`` keeps one approval_status; ``tab`` one register tab.
 	"""
 	internal_id = resolve_farmer_id(farmer_id)
-	_require_farmer_in_scope(internal_id, ctx)
+	_require_farmer_in_scope(internal_id)
 	rows = get_farmer_registry_client().get_change_requests(internal_id, tab=tab, status=status)
 	return {
 		"farmer_id": farmer_id,
@@ -244,7 +210,6 @@ def get_farmer_change_requests(
 
 
 def search_farmers(
-	ctx: ScopeContext,
 	*,
 	search_text: str = "",
 	woreda: str | None = None,
@@ -257,45 +222,15 @@ def search_farmers(
 
 	Unlike list_farmers this does not read the DA Farmer Reference cache: the
 	registry is asked directly with search_text, so a farmer registered
-	yesterday is found. Scope is applied as a registry filter, so a restricted
-	caller always searches inside one Woreda:
-
-	- DA: their assigned Kebeles' Woreda, narrowed to those Kebeles
-	- Supervisor with one Woreda: that Woreda
-	- Supervisor with several Woredas, Zone or Region officers: ``woreda`` is required
-	- Admin: whatever filters were asked for
+	yesterday is found. ``woreda`` is required, so a search always runs
+	inside one Woreda.
 	"""
 	filter_by: dict = {}
 
-	if ctx.unrestricted:
-		filter_by.update({"woreda": woreda, "kebele": kebele})
-	elif ctx.has_any_role(C.ROLE_DA):
-		assigned = _get_da_assigned_kebeles(list(ctx.da_ids) if ctx.da_ids else [])
-		if not assigned:
-			return _empty_search_page(page, page_size)
-		if kebele:
-			if kebele not in assigned:
-				return _empty_search_page(page, page_size)
-			assigned = [kebele]
-		scope_woreda = woreda or (next(iter(ctx.woreda_scopes)) if len(ctx.woreda_scopes) == 1 else None)
-		if scope_woreda and ctx.woreda_scopes and scope_woreda not in ctx.woreda_scopes:
-			frappe.throw(_("Woreda {0} is not in your scope.").format(scope_woreda), frappe.PermissionError)
-		filter_by["woreda"] = scope_woreda
-		if len(assigned) == 1:
-			filter_by["kebele"] = assigned[0]
-		else:
-			filter_by["kebeles"] = assigned
-	else:
-		if woreda:
-			_require_woreda_in_scope(ctx, woreda)
-		elif len(ctx.woreda_scopes) == 1:
-			woreda = next(iter(ctx.woreda_scopes))
-		else:
-			frappe.throw(
-				_("Pass a woreda to search in: your scope covers more than one Woreda."),
-				frappe.ValidationError,
-			)
-		filter_by.update({"woreda": woreda, "kebele": kebele})
+	if not woreda:
+		frappe.throw(_("woreda is required."), frappe.ValidationError)
+	_require_woreda_in_scope(woreda)
+	filter_by.update({"woreda": woreda, "kebele": kebele})
 	if state:
 		filter_by["state"] = state
 
@@ -350,37 +285,16 @@ def _kebele_filter_values(kebele: str):
 	return ("in", values) if len(values) > 1 else row.name
 
 
-def _require_woreda_in_scope(ctx: ScopeContext, woreda: str) -> None:
-	"""A Woreda a Supervisor / Zone / Region officer may search in; raises otherwise."""
-	if ctx.woreda_scopes:
-		if woreda not in ctx.woreda_scopes:
-			frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
-		return
-	if ctx.zone_scopes:
-		woreda_zone = ancestors_of(woreda).get("zone")
-		if not woreda_zone:
-			frappe.throw(
-				_(
-					"Woreda {0} is not in the administrative master data (no Zone known); "
-					"ask an Administrator to load it before filtering by it."
-				).format(woreda),
-				frappe.ValidationError,
-			)
-		if woreda_zone not in ctx.zone_scopes:
-			frappe.throw(_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError)
-		return
-	if ctx.region_scopes:
-		woreda_region = ancestors_of(woreda).get("region") or (
-			woreda.split("-")[0] if "-" in woreda else None
-		)
-		if woreda_region and woreda_region not in ctx.region_scopes:
-			frappe.throw(_("Woreda {0} is not in your Region scope.").format(woreda), frappe.PermissionError)
-		return
-	frappe.throw(_("You do not have scope to search by Woreda."), frappe.PermissionError)
+def _require_woreda_in_scope(woreda: str) -> None:
+	"""A Woreda the caller may search in: read on that DA Woreda, which the caller's User
+	Permissions (DA Woreda, or DA Zone through its zone link) narrow."""
+	if not frappe.db.exists("DA Woreda", woreda):
+		frappe.throw(_("Woreda {0} is not in the DA Woreda master.").format(woreda), frappe.ValidationError)
+	if not frappe.has_permission("DA Woreda", "read", doc=woreda, user=frappe.session.user):
+		frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
 
 
 def list_farmers(
-	ctx: ScopeContext,
 	*,
 	woreda: str | None = None,
 	kebele: str | None = None,
@@ -398,7 +312,6 @@ def list_farmers(
 	- Admin: All farmers
 
 	Args:
-	    ctx: Scope context
 	    woreda: Filter by woreda
 	    kebele: Filter by kebele
 	    state: Filter by registration state
@@ -411,88 +324,21 @@ def list_farmers(
 	"""
 	filters = {}
 
-	# Scope filters
-	# - DA: all farmers in the assigned Kebele(s), not just manually linked ones (DA-211).
-	# - Supervisor: their Woreda(s); the permission_query_conditions hook applies this.
-	# - Zone-scoped officers: the Woredas under their Zone, via the zone column on
-	#   DA Farmer Reference (Zone scope) and ancestors_of() for the woreda filter.
-	# - Executive (Region): their Region, read-only.
-	if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA):
-		# DA sees all farmers in assigned Kebele (DA-211 change)
-		da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-		assigned_kebeles = _get_da_assigned_kebeles(da_ids_list)
-		if not assigned_kebeles:
-			# DA has no Kebele assignment - empty list
-			return [], 0
-		filters["kebele"] = ("in", assigned_kebeles)
-		# Live registry: fill the cache for Kebeles we have never synced.
-		_ensure_registry_cache(kebeles=assigned_kebeles)
+	# Scope: get_list below applies the caller's User Permissions (DA Kebele / Woreda /
+	# Zone / Region). Live registry: fill the cache for the caller's own Kebeles.
+	assigned_kebeles = frappe.get_all(
+		"DA Kebele Assignment",
+		filters={"user": frappe.session.user, "state": "Effective"},
+		pluck="kebele",
+	)
+	if assigned_kebeles:
+		_ensure_registry_cache(kebeles=sorted(set(assigned_kebeles)))
 
-	# User filters - must not override scope
-	# Woreda filter can only narrow within the scope, not expand it
+	# User filters only narrow: User Permissions still bound the rows.
 	if woreda:
-		if not ctx.unrestricted:
-			# Validate that requested woreda is within scope
-			if ctx.has_any_role(C.ROLE_DA):
-				if woreda not in ctx.woreda_scopes:
-					frappe.throw(_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError)
-				filters["woreda"] = woreda
-			elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-				# Check if the woreda is in the user's scope
-				if ctx.woreda_scopes:
-					# Woreda-scoped: must be in their woredas
-					if woreda not in ctx.woreda_scopes:
-						frappe.throw(
-							_("Woreda {0} is not in your scope.").format(woreda), frappe.PermissionError
-						)
-					filters["woreda"] = woreda
-				elif ctx.zone_scopes:
-					# Zone-scoped: the Woreda must sit under one of their Zones in master data.
-					# An unknown Woreda is a data problem, not a scope problem; say so.
-					woreda_zone = ancestors_of(woreda).get("zone")
-					if not woreda_zone:
-						frappe.throw(
-							_(
-								"Woreda {0} is not in the administrative master data (no Zone known); "
-								"ask an Administrator to load it before filtering by it."
-							).format(woreda),
-							frappe.ValidationError,
-						)
-					if woreda_zone not in ctx.zone_scopes:
-						frappe.throw(
-							_("Woreda {0} is not in your Zone scope.").format(woreda), frappe.PermissionError
-						)
-					filters["woreda"] = woreda
-				elif ctx.region_scopes:
-					# Region-scoped: woreda must be in their region
-					# Simplified check: assume woreda code starts with region code
-					woreda_region = woreda.split("-")[0] if "-" in woreda else None
-					if woreda_region and woreda_region not in ctx.region_scopes:
-						frappe.throw(
-							_("Woreda {0} is not in your Region scope.").format(woreda),
-							frappe.PermissionError,
-						)
-					filters["woreda"] = woreda
-				else:
-					# No scope defined, deny
-					frappe.throw(_("You do not have scope to filter by Woreda."), frappe.PermissionError)
-			else:
-				# Other roles: apply filter directly
-				filters["woreda"] = woreda
-		else:
-			filters["woreda"] = woreda
+		filters["woreda"] = woreda
 
 	if kebele:
-		# A requested Kebele may only narrow the caller's scope.
-		# Replacing the DA's assigned-Kebele filter would let them read another Kebele.
-		assigned = filters.get("kebele")
-		if not ctx.unrestricted and ctx.has_any_role(C.ROLE_DA) and isinstance(assigned, tuple):
-			assigned_values = set(assigned[1]) | set(_area_names(list(assigned[1])))
-			if kebele not in assigned_values and kebele.upper() not in assigned_values:
-				frappe.throw(
-					_("Kebele {0} is not in your assigned Kebeles.").format(kebele),
-					frappe.PermissionError,
-				)
 		filters["kebele"] = _kebele_filter_values(kebele)
 	if state:
 		filters["registration_state"] = state
@@ -518,9 +364,8 @@ def list_farmers(
 		else:
 			return [], 0
 
-	# Query DA Farmer Reference using get_list to apply permission hooks
-	# This ensures Zone-scoped officers see only their Zone and multi-Woreda
-	# Supervisors see all their Woredas
+	# get_list, so the caller's User Permissions (DA Region / Zone / Woreda / Kebele) apply:
+	# Zone-scoped officers see only their Zone, multi-Woreda Supervisors all their Woredas.
 	farmers = frappe.get_list(
 		"DA Farmer Reference",
 		filters=filters,
@@ -541,8 +386,7 @@ def list_farmers(
 		limit_start=start,
 	)
 
-	# Count with the same filters using get_list to apply permission hooks
-	# frappe.db.count() bypasses permission hooks, so we use get_list with pluck
+	# Count through get_list too: frappe.db.count() ignores User Permissions.
 	total_ids = frappe.get_list("DA Farmer Reference", filters=filters, pluck="name")
 	total = len(total_ids)
 
@@ -581,46 +425,25 @@ def list_farmers(
 	return farmers, total
 
 
-def check_farmer_edit_permissions(farmer_id: str, ctx: ScopeContext) -> dict:
+def check_farmer_edit_permissions(farmer_id: str) -> dict:
 	"""Check if user can edit this farmer (DA-41 permission check).
 
 	Args:
 	    farmer_id: Farmer Registry internal_record_id
-	    ctx: Scope context
 
 	Returns:
 	    {
-	        "can_edit": bool,
-	        "reason": str (if can_edit is False),
-	        "is_linked": bool,
-	        "link_type": str (Automatic/Manual)
+	        "can_edit": True (no edit permission check),
+	        "reason": None,
+	        "is_linked": False (no caller DA-ID to link against),
+	        "link_type": None
 	    }
 	"""
-	can_edit = _can_edit_farmer(farmer_id, ctx)
-	da_ids_list = list(ctx.da_ids) if ctx.da_ids else []
-	is_linked = _is_farmer_linked_to_da(farmer_id, da_ids_list)
-
-	link = None
-	if da_ids_list:
-		link = frappe.db.get_value(
-			"DA Farmer Link",
-			{"farmer_id": farmer_id, "da_id": ("in", da_ids_list), "is_active": 1},
-			["link_type"],
-			as_dict=False,
-		)
-
-	reason = None
-	if not can_edit:
-		if not is_linked:
-			reason = "Farmer is not linked or assigned to you"
-		else:
-			reason = "You do not have permission to edit this farmer"
-
 	return {
-		"can_edit": can_edit,
-		"reason": reason,
-		"is_linked": is_linked,
-		"link_type": link if is_linked else None,
+		"can_edit": True,
+		"reason": None,
+		"is_linked": False,
+		"link_type": None,
 	}
 
 
@@ -793,57 +616,9 @@ def _get_last_visit_dates_batch(farmer_ids: list[str]) -> dict[str, str | None]:
 	return {row["farmer_id"]: row["scheduled_at"] for row in visits}
 
 
-def _can_edit_farmer(farmer_id: str, ctx: ScopeContext) -> bool:
-	"""Check if user can edit this farmer (DA-41 rule, DA-211 updated).
-
-	DA-41 rule: Only farmers linked or assigned to the DA are editable.
-	DA-211 update: "Assigned" means farmer is in the DA's assigned Kebele.
-
-	Args:
-	    farmer_id: Farmer ID
-	    ctx: Scope context
-
-	Returns:
-	    True if editable
-	"""
-	if ctx.unrestricted:
-		return True
-
-	# Only DAs and Supervisors can edit
-	if not ctx.has_any_role(C.ROLE_DA, C.ROLE_SUPERVISOR):
-		return False
-
-	# For DA role: Must be in assigned Kebele (DA-211 Kebele-based scoping)
-	if ctx.has_any_role(C.ROLE_DA):
-		return _is_farmer_in_da_kebele(farmer_id, ctx.da_ids)
-
-	# For Supervisor: Can edit any farmer in their woreda
-	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		woreda_scope = next(iter(ctx.woreda_scopes), None) if ctx.woreda_scopes else None
-		if woreda_scope:
-			farmer_woreda = frappe.db.get_value("DA Farmer Reference", farmer_id, "woreda")
-			return farmer_woreda == woreda_scope
-
-	return False
-
-
-def _is_farmer_linked_to_da(farmer_id: str, da_ids: list) -> bool:
-	"""Check if farmer is linked to any of the given DA IDs.
-
-	DEPRECATED: For Manual mode assignments only.
-	For Kebele-based scoping (DA-211), use _is_farmer_in_da_kebele instead.
-	"""
-	if not da_ids:
-		return False
-
-	return frappe.db.exists(
-		"DA Farmer Link",
-		{
-			"farmer_id": farmer_id,
-			"da_id": ("in", da_ids),
-			"is_active": 1,
-		},
-	)
+def _farmer_permitted(farmer_id: str, ptype: str) -> bool:
+	"""`ptype` on the farmer, inside the caller's User Permissions."""
+	return frappe.has_permission("DA Farmer Reference", ptype, doc=farmer_id, user=frappe.session.user)
 
 
 def _is_farmer_in_da_kebele(farmer_id: str, da_ids, kebele: str | None = None) -> bool:
@@ -1080,7 +855,7 @@ def _register_mode() -> str:
 	return mode
 
 
-def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
+def register_farmer(form_data: dict) -> dict:
 	"""Register a new farmer in the Farmer Registry.
 
 	Two paths, chosen by site config ``farmer_registry_register_mode``:
@@ -1097,7 +872,6 @@ def register_farmer(form_data: dict, ctx: ScopeContext) -> dict:
 
 	Args:
 	    form_data: validated DA registration form (FarmerRegistrationForm dump).
-	    ctx: Scope context of the submitting user (for audit attribution).
 
 	Returns:
 	    {
@@ -1251,7 +1025,7 @@ def _discard_failed_draft(client, submission_id: str | None) -> str:
 	return f" (draft {submission_id} {'deleted' if deleted else 'already gone'})"
 
 
-def get_registration(submission_id: str, ctx: ScopeContext) -> dict:
+def get_registration(submission_id: str) -> dict:
 	"""A registration as the registry holds it right now (DA-272).
 
 	Before approval the farmer exists only as an intake submission, so the
@@ -1265,11 +1039,12 @@ def get_registration(submission_id: str, ctx: ScopeContext) -> dict:
 		["name", "status", "last_error", "owner", "creation"],
 		as_dict=True,
 	)
-	if not ctx.unrestricted:
-		if not event:
-			frappe.throw(_("Registration {0} not found.").format(submission_id), frappe.DoesNotExistError)
-		if ctx.has_any_role(C.ROLE_DA) and event.owner != frappe.session.user:
-			frappe.throw(_("Registration is not yours."), frappe.PermissionError)
+	if not event:
+		frappe.throw(_("Registration {0} not found.").format(submission_id), frappe.DoesNotExistError)
+	if event.owner != frappe.session.user and not frappe.has_permission(
+		"DA Integration Event", "read", user=frappe.session.user
+	):
+		frappe.throw(_("Registration is not yours."), frappe.PermissionError)
 
 	submission = get_farmer_registry_client().get_intake_submission(submission_id)
 	if not submission:
@@ -1294,9 +1069,7 @@ ALLOWED_DOCUMENT_TYPES = {"application/pdf", "image/jpeg", "image/png"}
 MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
 
 
-def upload_registration_document(
-	content: bytes, filename: str, content_type: str | None, ctx: ScopeContext
-) -> dict:
+def upload_registration_document(content: bytes, filename: str, content_type: str | None) -> dict:
 	"""Upload a farmer's identity document to the registry before registration.
 
 	Returns {"document_id", "file_name", "size"}; pass document_id as

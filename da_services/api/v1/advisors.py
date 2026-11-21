@@ -15,7 +15,7 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.api.v1.common import request_fields
 from da_services.services import advisors as svc
-from da_services.utils.permissions import require_roles
+from da_services.utils.permissions import require_permission
 
 
 @route("/advisors", methods=("POST",), status=201, summary="Admin: add an advisor to the directory")
@@ -23,7 +23,7 @@ from da_services.utils.permissions import require_roles
 @handle_api_errors
 def create_advisor(**kwargs):
 	"""Body: name, expertise, unit, region, woreda, phone, email, status?, availability?."""
-	require_roles(*svc.WRITE_ROLES)
+	require_permission("DA Advisor", "create")
 	b = request_fields(
 		kwargs, "name", "expertise", "unit", "region", "woreda", "phone", "email", "status", "availability"
 	)
@@ -35,7 +35,7 @@ def create_advisor(**kwargs):
 @handle_api_errors
 def list_advisors(**kwargs):
 	"""The whole directory, for every role that can read DA data (Development Agents included)."""
-	require_roles(*svc.READ_ROLES)
+	require_permission("DA Advisor", "read")
 	q = request_fields(kwargs, "q", "expertise", "region", "woreda", "status", "limit", "start")
 	limit = svc.int_param("limit", q.get("limit"), 50)
 	start = svc.int_param("start", q.get("start"), 0)
@@ -55,5 +55,5 @@ def list_advisors(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def get_advisor(advisor_id: str):
-	require_roles(*svc.READ_ROLES)
+	require_permission("DA Advisor", "read")
 	return success_response(data=svc.get_advisor(advisor_id))

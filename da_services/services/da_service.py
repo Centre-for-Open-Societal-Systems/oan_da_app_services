@@ -14,11 +14,9 @@ from frappe import _
 
 from da_services.integrations.da_registry.client import DANotFound, get_client
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext
 
 
 def list_agents(
-	ctx: ScopeContext,
 	*,
 	woreda: str | None = None,
 	kebele: str | None = None,
@@ -32,14 +30,9 @@ def list_agents(
 ) -> tuple[list[dict], int]:
 	"""List Development Agents visible to the user with RBAC scope enforcement.
 
-	Scope enforcement (DA-226). The widest grant wins:
-	- Admin: All DAs (unrestricted), even when the user also holds Development Agent
-	- Supervisor: All DAs in their Woreda(s)
-	- Executive: All DAs in their Region(s)
-	- DA: Only their own record
+	Not scoped: every DA the registry returns, narrowed by the filters.
 
 	Args:
-	    ctx: Scope context with user permissions
 	    woreda: Filter by woreda code
 	    kebele: Filter by kebele code
 	    region: Filter by region code
@@ -54,79 +47,13 @@ def list_agents(
 	    Tuple of (list of DA dicts, total count)
 
 	Example:
-	    >>> agents, total = list_agents(ctx, woreda="ET04-W01", limit=20)
+	    >>> agents, total = list_agents(woreda="ET04-W01", limit=20)
 	    >>> print(f"Found {total} agents, showing {len(agents)}")
 	"""
 	registry_client = get_client()
 
-	# Widest grant wins. The Administrator user holds every Frappe role, including
-	# Development Agent, so the DA branch must not run ahead of an unrestricted role.
-	if ctx.unrestricted:
-		all_das = registry_client.list_das()
-
-	elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-		# Supervisors/Executives see DAs in their scope
-		all_das = []
-
-		# Fetch by woreda scope (narrowest, most common)
-		if ctx.woreda_scopes:
-			for woreda_code in ctx.woreda_scopes:
-				das = registry_client.list_das(woreda=woreda_code)
-				all_das.extend(das)
-		# Fetch by zone scope (medium breadth)
-		elif ctx.zone_scopes:
-			# Registry list_das doesn't support zone parameter directly
-			# Derive regions from zone codes (zone format: REGION-Z##)
-			regions_to_fetch = set()
-			for zone_code in ctx.zone_scopes:
-				# Extract region from zone code (e.g., "ET04-Z01" -> "ET04")
-				if zone_code and "-Z" in zone_code:
-					region = zone_code.split("-Z")[0]
-					regions_to_fetch.add(region)
-
-			# Fetch by regions and filter to zones
-			if regions_to_fetch:
-				for region_code in regions_to_fetch:
-					das = registry_client.list_das(region=region_code)
-					# Filter to only DAs in the granted zones
-					all_das.extend([da for da in das if da.zone in ctx.zone_scopes])
-			else:
-				# Cannot derive region from zone, fetch all and filter
-				all_das_unfiltered = registry_client.list_das()
-				all_das = [da for da in all_das_unfiltered if da.zone in ctx.zone_scopes]
-		# Fetch by region scope (broadest)
-		elif ctx.region_scopes:
-			for region_code in ctx.region_scopes:
-				das = registry_client.list_das(region=region_code)
-				all_das.extend(das)
-		else:
-			# No scope assigned (shouldn't happen)
-			return [], 0
-
-		# Deduplicate (a DA might appear in multiple woredas if scope overlaps)
-		seen_ids = set()
-		unique_das = []
-		for da in all_das:
-			if da.da_id not in seen_ids:
-				seen_ids.add(da.da_id)
-				unique_das.append(da)
-		all_das = unique_das
-
-	elif ctx.has_any_role(C.ROLE_DA):
-		# A Development Agent with no wider grant sees only their own record.
-		if not ctx.da_ids:
-			return [], 0
-
-		all_das = []
-		for da_id in ctx.da_ids:
-			try:
-				all_das.append(registry_client.get_da(da_id))
-			except DANotFound:
-				# DA not found in registry - skip
-				continue
-
-	else:
-		frappe.throw(_("You do not have permission to view Development Agents."), frappe.PermissionError)
+	# Unscoped: the registry's list (restricting it is for later).
+	all_das = registry_client.list_das()
 
 	# Step 2: Apply filters
 	filtered_das = all_das

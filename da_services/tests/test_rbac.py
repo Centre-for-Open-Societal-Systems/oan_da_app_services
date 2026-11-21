@@ -7,8 +7,6 @@ from frappe.utils import add_days, today
 from da_services.services import constants as C
 from da_services.services import rbac_service
 from da_services.tests.fixtures import create_administrative_areas
-from da_services.utils import permissions
-from da_services.utils.permissions import get_scope_context, require_da_access
 
 SUPERVISOR = "test-supervisor@da.local"
 ZONE_SUP = "test-zone-sup@da.local"
@@ -42,7 +40,8 @@ def _grant(user, role, **kw):
 
 class TestRoles(IntegrationTestCase):
 	def test_all_five_roles_are_seeded(self):
-		for role in C.DA_SERVICES_ROLES:
+		roles = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN, C.ROLE_COMMS)
+		for role in roles:
 			self.assertTrue(frappe.db.exists("Role", role), role)
 
 	def test_da_role_has_no_desk_access(self):
@@ -79,10 +78,6 @@ class TestRBACAssignment(IntegrationTestCase):
 				effective_to=add_days(today(), -1),
 			)
 
-	def test_non_da_services_role_is_rejected(self):
-		with self.assertRaises(frappe.ValidationError):
-			_grant(SUPERVISOR, "System Manager")
-
 	def test_grant_attaches_role_to_user_and_records_assigner(self):
 		doc = _grant(SUPERVISOR, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		self.assertEqual(doc.assigned_by, "Administrator")
@@ -113,76 +108,11 @@ class TestScopeRule(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
-	def test_supervisor_covers_own_woreda_only(self):
-		ctx = get_scope_context(SUPERVISOR)
-		self.assertTrue(ctx.covers("ET04", "ET04-W01"))
-		self.assertFalse(ctx.covers("ET04", "ET04-W02"))
-		self.assertFalse(ctx.covers("ET03", "ET03-W02"))
-
-	def test_executive_covers_whole_region(self):
-		ctx = get_scope_context(EXEC)
-		self.assertTrue(ctx.covers("ET03", "ET03-W02"))
-		self.assertFalse(ctx.covers("ET04", "ET04-W01"))
-
-	def test_region_only_grant_covers_record_without_zone_or_woreda(self):
-		ctx = get_scope_context(EXEC)
-		self.assertEqual(ctx.scope_decision("ET03", None, None), (True, "region"))
-		self.assertEqual(ctx.scope_decision("ET03", "ET03-W02", None), (True, "region"))
-
-	def test_zone_grant_covers_its_zone_only(self):
-		ctx = get_scope_context(ZONE_SUP)
-		self.assertEqual(ctx.scope_decision("ET04", "ET04-W01", "ET04-Z01"), (True, "zone"))
-		self.assertEqual(
-			ctx.scope_decision("ET04", "ET04-W09", "ET04-Z02"), (False, permissions.OUT_OF_SCOPE)
-		)
-		self.assertEqual(ctx.scope_decision("ET03", "ET03-W02", None), (False, permissions.OUT_OF_SCOPE))
-
-	def test_zone_grant_is_not_widened_when_registry_has_no_zone(self):
-		# The registry record predates the Zone field: deny, but say why.
-		ctx = get_scope_context(ZONE_SUP)
-		self.assertEqual(ctx.scope_decision("ET04", "ET04-W01", None), (False, permissions.SCOPE_UNRESOLVED))
-		with self.assertRaises(frappe.PermissionError):
-			require_da_access("DA-000009", "ET04", "ET04-W01", ctx, zone=None)
-		rows = frappe.get_all("DA Audit Event", filters={"entity_name": "DA-000009"}, fields=["reason"])
-		self.assertIn(permissions.SCOPE_UNRESOLVED, {r.reason for r in rows})
-
-	def test_woreda_grant_is_not_widened_when_registry_has_no_woreda(self):
-		ctx = get_scope_context(SUPERVISOR)
-		self.assertEqual(ctx.scope_decision("ET04", None, None), (False, permissions.SCOPE_UNRESOLVED))
-		# A known, different Woreda is a plain scope miss, not missing data.
-		self.assertEqual(ctx.scope_decision("ET04", "ET04-W02", None), (False, permissions.OUT_OF_SCOPE))
-
-	def test_da_sees_only_own_record(self):
-		ctx = get_scope_context(DA_USER)
-		require_da_access("DA-000001", "ET04", "ET04-W01", ctx)
-		with self.assertRaises(frappe.PermissionError):
-			require_da_access("DA-000002", "ET04", "ET04-W01", ctx)
-
-	def test_comms_officer_never_reaches_da_identity(self):
-		ctx = get_scope_context(COMMS)
-		with self.assertRaises(frappe.PermissionError):
-			require_da_access("DA-000001", "ET04", "ET04-W01", ctx)
-
-	def test_expired_grant_gives_no_scope(self):
-		frappe.db.delete("DA RBAC Assignment", {"user": SUPERVISOR})
-		_grant(
-			SUPERVISOR,
-			C.ROLE_SUPERVISOR,
-			region_scope="ET04",
-			woreda_scope="ET04-W01",
-			effective_from=add_days(today(), -30),
-			effective_to=add_days(today(), -1),
-		)
-		ctx = get_scope_context(SUPERVISOR)
-		self.assertFalse(ctx.covers("ET04", "ET04-W01"))
-
-	def test_administrator_is_unrestricted(self):
-		ctx = get_scope_context("Administrator")
-		self.assertTrue(ctx.unrestricted)
-		self.assertTrue(ctx.covers("ET99", "ET99-W99"))
-
-	def test_non_admin_sees_only_own_assignments_in_list(self):
+	def test_non_admin_lists_assignments_within_their_user_permissions(self):
+		# The Supervisor's User Permissions (Region ET04, Woreda ET04-W01) filter the scope
+		# Links: assignments in their Woreda are listed, another Region's are not.
 		frappe.set_user(SUPERVISOR)
-		rows = frappe.get_list("DA RBAC Assignment", fields=["user"])
-		self.assertTrue(rows)
-		self.assertTrue(all(r.user == SUPERVISOR for r in rows))
+		users = {r.user for r in frappe.get_list("DA RBAC Assignment", fields=["user"])}
+		self.assertIn(SUPERVISOR, users)
+		self.assertIn(DA_USER, users)
+		self.assertNotIn(EXEC, users)

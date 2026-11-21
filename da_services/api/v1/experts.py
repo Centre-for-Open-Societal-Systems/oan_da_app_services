@@ -16,11 +16,8 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.services import constants as C
 from da_services.services import experts as svc
-from da_services.utils.permissions import require_roles
 
 # Communications Officer is excluded on purpose: FSD Appendix D gives it no access
-# to DA identity.
-READ_ROLES = C.DA_READ_ROLES
 
 
 def _int_param(name: str, value, default: int) -> int:
@@ -59,7 +56,6 @@ def list_experts(specialisation=None, q=None, limit=None, start=None):
 	        "meta": {"total", "limit", "start", "by_specialisation": {"Crop production": 3, ...}}
 	    }
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	specialisation = specialisation or frappe.form_dict.get("specialisation")
 	q = q or frappe.form_dict.get("q")
@@ -70,5 +66,5 @@ def list_experts(specialisation=None, q=None, limit=None, start=None):
 	if start < 0:
 		frappe.throw(_("Start must be >= 0."), frappe.ValidationError)
 
-	rows, meta = svc.list_experts(ctx, specialisation=specialisation, q=q, limit=limit, start=start)
+	rows, meta = svc.list_experts(specialisation=specialisation, q=q, limit=limit, start=start)
 	return success_response(data=rows, meta=meta)

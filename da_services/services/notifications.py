@@ -13,7 +13,7 @@ from frappe.utils import now_datetime, today
 
 from da_services.services import constants as C
 from da_services.utils import audit as audit_log
-from da_services.utils.permissions import ScopeContext, require_roles
+from da_services.utils.permissions import require_permission
 
 KINDS = (
 	"Visit",
@@ -114,12 +114,10 @@ def notify_da(da_id: str, **kwargs) -> str | None:
 	return notify(user, da_id=da_id, **kwargs)
 
 
-def list_notifications(
-	ctx: ScopeContext | None = None, *, unread: bool = False, limit: int = 20, start: int = 0
-) -> tuple[list[dict], dict]:
+def list_notifications(*, unread: bool = False, limit: int = 20, start: int = 0) -> tuple[list[dict], dict]:
 	"""A user's own notifications, newest first, plus meta {unread_count, limit, start}."""
-	ctx = ctx or require_roles(*C.DA_SERVICES_ROLES)
-	filters: dict = {"user": ctx.user}
+	require_permission("DA Notification", "read")
+	filters: dict = {"user": frappe.session.user}
 	if unread:
 		filters["read"] = 0
 	limit = max(1, min(int(limit), 100))
@@ -132,14 +130,14 @@ def list_notifications(
 		limit_page_length=limit,
 		limit_start=start,
 	)
-	unread_count = frappe.db.count("DA Notification", {"user": ctx.user, "read": 0})
+	unread_count = frappe.db.count("DA Notification", {"user": frappe.session.user, "read": 0})
 	return [serialize(r) for r in rows], {"unread_count": unread_count, "limit": limit, "start": start}
 
 
-def mark_read(name: str, ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(*C.DA_SERVICES_ROLES)
+def mark_read(name: str) -> dict:
+	require_permission("DA Notification", "read")
 	doc = frappe.get_doc("DA Notification", name)
-	if doc.user != ctx.user and not ctx.unrestricted:
+	if doc.user != frappe.session.user:
 		frappe.throw(_("Notification {0} is not yours.").format(name), frappe.PermissionError)
 	if not doc.read:
 		doc.read = 1
@@ -149,9 +147,9 @@ def mark_read(name: str, ctx: ScopeContext | None = None) -> dict:
 	return serialize(doc)
 
 
-def mark_all_read(ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(*C.DA_SERVICES_ROLES)
-	names = frappe.get_all("DA Notification", filters={"user": ctx.user, "read": 0}, pluck="name")
+def mark_all_read() -> dict:
+	require_permission("DA Notification", "read")
+	names = frappe.get_all("DA Notification", filters={"user": frappe.session.user, "read": 0}, pluck="name")
 	now = now_datetime()
 	for name in names:
 		frappe.db.set_value("DA Notification", name, {"read": 1, "read_at": now}, update_modified=True)
@@ -168,17 +166,13 @@ BROADCAST_SOURCES = ("Knowledge", "Emergency", "Weather", "Informational")
 BROADCAST_SENT = "notification.broadcast.sent"
 
 
-def own_kebeles(ctx: ScopeContext) -> list[str]:
-	"""The Kebeles a DA is posted to: their Effective DA Kebele Assignment rows (by DA-ID or user)."""
-	if not ctx.da_ids and not ctx.user:
+def own_kebeles() -> list[str]:
+	"""The Kebeles a DA is posted to: their Effective DA Kebele Assignment rows."""
+	if not frappe.session.user:
 		return []
-	or_filters = [["user", "=", ctx.user]] if ctx.user else []
-	if ctx.da_ids:
-		or_filters.append(["da_id", "in", sorted(ctx.da_ids)])
 	rows = frappe.get_all(
 		"DA Kebele Assignment",
-		filters={"state": "Effective"},
-		or_filters=or_filters,
+		filters={"state": "Effective", "user": frappe.session.user},
 		pluck="kebele",
 	)
 	return sorted({k for k in rows if k})
@@ -229,51 +223,39 @@ def _broadcast_recipients(scope: str, scope_value: str | None) -> list[str]:
 	return sorted({r.user for r in rows if r.user})
 
 
-def _assert_broadcast_scope_allowed(ctx: ScopeContext, scope: str, scope_value: str | None) -> None:
-	"""A sender may only target what their own grants cover (deny, never widen).
+AREA_DOCTYPES = {"region": "DA Region", "zone": "DA Zone", "woreda": "DA Woreda", "kebele": "DA Kebele"}
 
-	Admin is unrestricted. A Communications Officer whose grant carries no
-	Region / Zone / Woreda is the national comms desk and may target anything;
-	one with a scoped grant may only broadcast inside that scope. A Development
-	Agent reaches only a Kebele they are posted to (an Effective Kebele assignment).
+
+def _assert_broadcast_scope_allowed(scope: str, scope_value: str | None) -> None:
+	"""A sender may only target an area their User Permissions let them read.
+
+	Who may broadcast at all is DA Broadcast `create` (Role Permission Manager). "all" is
+	for a sender with no User Permission on any area doctype; a named area must be one the
+	sender may read (read on that DA Region / Zone / Woreda / Kebele).
 	"""
-	if ctx.unrestricted:
-		return
-	if not ctx.has_any_role(C.ROLE_COMMS):
-		if ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-			# An officer who also holds the DA role keeps their own Woreda.
-			if scope != "woreda" or not ctx.woreda_scopes:
-				frappe.throw(_("You can only broadcast to your own Woreda."), frappe.PermissionError)
-		else:
-			# A Development Agent reaches their own Kebele only.
-			if scope != "kebele" or scope_value not in own_kebeles(ctx):
-				frappe.throw(_("You can only broadcast to your own Kebele."), frappe.PermissionError)
-			return
-	elif not (ctx.region_scopes or ctx.zone_scopes or ctx.woreda_scopes):
-		return
+	user = frappe.session.user
 	if scope == "all":
-		frappe.throw(
-			_("Your grant is limited to a Region / Zone / Woreda; choose a scope you cover."),
-			frappe.PermissionError,
-		)
-	if scope == "kebele":
-		# A scoped officer covers a Kebele through the Woreda it sits in.
-		woreda = frappe.db.get_value("DA Kebele", scope_value, "woreda")
-		covered = bool(woreda) and ctx.covers(woreda=woreda)
-	else:
-		covered = ctx.covers(
-			region=scope_value if scope == "region" else None,
-			zone=scope_value if scope == "zone" else None,
-			woreda=scope_value if scope == "woreda" else None,
-		)
-	if not covered:
+		restricted = set(frappe.permissions.get_user_permissions(user)) & set(AREA_DOCTYPES.values())
+		if restricted:
+			frappe.throw(
+				_("Your User Permissions limit you to some areas; choose an area you cover."),
+				frappe.PermissionError,
+			)
+		return
+	doctype = AREA_DOCTYPES.get(scope)
+	# An unknown area is left to the recipient check, which refuses a scope with no DA.
+	if (
+		doctype
+		and scope_value
+		and frappe.db.exists(doctype, scope_value)
+		and not frappe.has_permission(doctype, "read", doc=scope_value, user=user)
+	):
 		frappe.throw(
 			_("{0} {1} is not in your scope.").format(scope.capitalize(), scope_value), frappe.PermissionError
 		)
 
 
 def broadcast(
-	ctx: ScopeContext,
 	*,
 	title: str | None,
 	body: str | None = None,
@@ -312,7 +294,7 @@ def broadcast(
 		)
 
 	href = _validate_href(href)
-	_assert_broadcast_scope_allowed(ctx, scope, scope_value)
+	_assert_broadcast_scope_allowed(scope, scope_value)
 
 	# Idempotency at the database: the DA Broadcast row goes in first and its
 	# client_op_id is unique, so two replays racing each other cannot both pass a
@@ -330,7 +312,7 @@ def broadcast(
 			"source": source,
 			"scope": scope,
 			"scope_value": scope_value,
-			"sent_by": ctx.user,
+			"sent_by": frappe.session.user,
 			"sent_at": now_datetime(),
 			"client_op_id": client_op_id,
 		}
@@ -366,7 +348,7 @@ def broadcast(
 				"title": title,
 				"recipients": len(recipients),
 			},
-			user=ctx.user,
+			user=frappe.session.user,
 		)
 	except Exception:
 		frappe.db.rollback(save_point="broadcast")

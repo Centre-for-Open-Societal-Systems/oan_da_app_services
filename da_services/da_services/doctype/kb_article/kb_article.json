@@ -104,7 +104,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-12 16:57:46.751111",
+ "modified": "2026-11-20 22:01:15.385602",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "KB Article",
@@ -166,5 +166,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "title_field": "title"
+ "title_field": "title",
+ "track_changes": 1
 }

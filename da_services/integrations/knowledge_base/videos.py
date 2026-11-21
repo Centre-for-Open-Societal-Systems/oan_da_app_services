@@ -58,10 +58,9 @@ def _full(doc) -> dict:
 @frappe.whitelist()
 @handle_api_errors
 def list_videos(category=None, source=None, status=None, search=None, limit=20, start=0):
-	ctx = common.read_ctx()
+	common.read_ctx("KB Video")
 	rows, meta = common.list_items(
 		DOCTYPE,
-		ctx,
 		fields=LIST_FIELDS,
 		search_fields=("title", "description"),
 		category=category,
@@ -78,15 +77,15 @@ def list_videos(category=None, source=None, status=None, search=None, limit=20, 
 @frappe.whitelist()
 @handle_api_errors
 def get_video(video_id: str):
-	ctx = common.read_ctx()
-	return success_response(data=_full(common.get_item(DOCTYPE, video_id, ctx)))
+	common.read_ctx("KB Video")
+	return success_response(data=_full(common.get_item(DOCTYPE, video_id)))
 
 
 @route(f"{BASE}", methods=("POST",), status=201, summary="Create a knowledge-base video")
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def create_video(**kwargs):
-	common.write_ctx()
+	common.write_ctx("KB Video")
 	data = common.request_body(kwargs)
 	doc = frappe.new_doc(DOCTYPE)
 	common.apply_fields(doc, data, SCALARS, TABLES)
@@ -98,10 +97,10 @@ def create_video(**kwargs):
 @frappe.whitelist(methods=["PATCH", "POST"])
 @handle_api_errors
 def update_video(video_id: str, **kwargs):
-	ctx = common.write_ctx()
+	common.write_ctx("KB Video")
 	data = common.request_body(kwargs)
 	data.pop("video_id", None)
-	doc = common.get_item(DOCTYPE, video_id, ctx)
+	doc = common.get_item(DOCTYPE, video_id)
 	common.apply_fields(doc, data, SCALARS, TABLES)
 	doc.save()
 	return success_response(data=_full(doc), message="Video updated")

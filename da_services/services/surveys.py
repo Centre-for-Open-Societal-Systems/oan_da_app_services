@@ -4,8 +4,8 @@ A Supervisor/Admin publishes a template into a Woreda; DAs in that Woreda list i
 assigned survey and save one response per farmer. Executive reads results.
 
 Thin by design: each function does only its own job (save, read, aggregate, export).
-Who may read or write which row comes from Role DocPerm and the permission hooks in
-``da_services/permissions.py``; field rules come from the DocType meta and controllers.
+Who may read or write which row comes from Role DocPerm and the user's User Permissions
+(DA Region / Zone / Woreda / Kebele); field rules come from the DocType meta and controllers.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from frappe.utils import get_datetime, getdate, today
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.services import constants as C
-from da_services.utils.permissions import get_scope_context
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
@@ -128,14 +127,6 @@ def _options_of(raw) -> list[str]:
 	if isinstance(raw, list):
 		return [str(o).strip() for o in raw if str(o).strip()]
 	return [o.strip() for o in str(raw or "").split(",") if o.strip()]
-
-
-def _own_da_id() -> str | None:
-	"""The session user's DA-ID when they act as a Development Agent (not as an officer)."""
-	roles = set(frappe.get_roles())
-	if C.ROLE_DA not in roles or roles & {C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN}:
-		return None
-	return next(iter(sorted(get_scope_context().da_ids)), None)
 
 
 def _est_minutes(param_count: int) -> int:
@@ -349,12 +340,6 @@ def _parameter_rows(questions) -> list[dict]:
 	return rows
 
 
-def _default_woreda() -> str | None:
-	"""A Supervisor with exactly one Woreda may leave it out of the request."""
-	woredas = get_scope_context().woreda_scopes
-	return next(iter(woredas)) if len(woredas) == 1 else None
-
-
 def create_template(
 	*,
 	name=None,
@@ -370,7 +355,7 @@ def create_template(
 	client_op_id=None,
 ) -> str:
 	"""Insert one template (create = publish). Returns its id."""
-	woreda = (woreda or "").strip() or _default_woreda()
+	woreda = (woreda or "").strip() or None
 	area = ancestors_of(woreda) if woreda else {}
 	params = _parameter_rows(questions)
 	doc = frappe.get_doc(
@@ -476,19 +461,12 @@ def get_template(survey_id: str) -> dict:
 def list_surveys(
 	*, status=None, type=None, language=None, woreda=None, q=None, limit=50, start=0
 ) -> tuple[list[dict], int]:
-	"""Surveys the caller may read. A DA sees the Woreda-wide ones and those assigned to
-	them, with their own collected / answered counts."""
-	collector = _own_da_id()
+	"""Surveys the caller may read."""
 	filters = {k: v for k, v in (("survey_type", type), ("woreda", woreda)) if v}
 	names = frappe.get_list(TEMPLATE_DOCTYPE, filters=filters, pluck="name", order_by="modified desc")
 	rows = []
 	for n in names:
-		assigned = _assigned_da_ids(n)
-		if collector and assigned and collector not in assigned:
-			continue
-		item = serialize_survey(
-			frappe.get_doc(TEMPLATE_DOCTYPE, n), include_parameters=False, collector_da_id=collector
-		)
+		item = serialize_survey(frappe.get_doc(TEMPLATE_DOCTYPE, n), include_parameters=False)
 		if _matches(item, status=status, language=language, q=q):
 			rows.append(item)
 	return rows[start : start + limit], len(rows)
@@ -497,7 +475,7 @@ def list_surveys(
 def get_survey(survey_id: str) -> dict:
 	doc = frappe.get_doc(TEMPLATE_DOCTYPE, survey_id)
 	doc.check_permission("read")
-	return serialize_survey(doc, collector_da_id=_own_da_id())
+	return serialize_survey(doc)
 
 
 # -- responses -------------------------------------------------------------------------------
@@ -539,14 +517,14 @@ def create_response(
 	da_id=None,
 	kebele=None,
 ) -> None:
-	"""Insert one response for the survey. The collector is ``da_id`` or the session DA."""
+	"""Insert one response for the survey, collected by ``da_id``."""
 	survey = frappe.get_doc(TEMPLATE_DOCTYPE, survey_id)
 	frappe.get_doc(
 		{
 			"doctype": RESPONSE_DOCTYPE,
 			"survey": survey_id,
 			"template_version": survey.template_version,
-			"da_id": (da_id or "").strip() or _own_da_id(),
+			"da_id": (da_id or "").strip() or None,
 			"farmer_id": (farmer_id or "").strip() or None,
 			"consent": (consent or "").strip() or None,
 			"sync_state": (sync_state or "").strip() or "Synced",

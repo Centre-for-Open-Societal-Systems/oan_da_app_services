@@ -9,6 +9,7 @@ from frappe.utils import add_days, now_datetime, today
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
 from da_services.tests.fixtures import (
+	as_user,
 	cleanup_test_rows,
 	ensure_administrative_area,
 	ensure_da_user,
@@ -16,7 +17,6 @@ from da_services.tests.fixtures import (
 	ensure_geo_masters,
 	set_da_registry_id,
 )
-from da_services.utils.permissions import get_scope_context
 
 DA1 = "zone-da1@da.local"  # DA-000001: ET04 / ET04-Z01 / ET04-W01
 ZONE_EXEC = "zone-exec@da.local"  # Executive ET04 / ET04-Z01
@@ -77,7 +77,7 @@ def _grant(user, role, **kw):
 
 
 def _ctx(user):
-	return get_scope_context(user)
+	return user
 
 
 class TestZoneScope(IntegrationTestCase):
@@ -146,11 +146,13 @@ class TestZoneScope(IntegrationTestCase):
 
 	def test_visit_task_and_change_request_carry_zone_from_registry(self):
 		self.assertEqual(frappe.db.get_value("DA Visit", self.v1["name"], "zone"), "ET04-Z01")
-		t = tasks.create_task(title="Soil sample", ctx=_ctx(DA1))
+		with as_user(DA1):
+			t = tasks.create_task(title="Soil sample", da_id="DA-000001")
 		self.assertEqual(frappe.db.get_value("DA Task", t["name"], "zone"), "ET04-Z01")
-		req = profile.submit_change_request(
-			changes={"telegram": "+251911222333"}, reason="New Telegram number", ctx=_ctx(DA1)
-		)
+		with as_user(ZONE_SUP):  # the DA's Woreda Supervisor asks for them
+			req = profile.submit_change_request(
+				changes={"telegram": "+251911222333"}, reason="New Telegram number", da_id="DA-000001"
+			)
 		self.assertEqual(req["zone"], "ET04-Z01")
 		self.assertEqual(frappe.db.get_value("DA Profile Change Request", req["name"], "zone"), "ET04-Z01")
 
@@ -205,7 +207,8 @@ class TestZoneScope(IntegrationTestCase):
 		self.assertEqual(self._visible("DA Visit", ZONE_SUP), {"DA-000001"})
 
 	def test_zone_grant_applies_to_tasks_links_and_change_requests(self):
-		tasks.create_task(title="Mine", ctx=_ctx(DA1))
+		with as_user(DA1):
+			tasks.create_task(title="Mine", da_id="DA-000001")
 		frappe.get_doc(
 			{
 				"doctype": "DA Task",
@@ -215,9 +218,10 @@ class TestZoneScope(IntegrationTestCase):
 				**{k: OTHER[k] for k in ("region", "zone", "woreda")},
 			}
 		).insert(ignore_permissions=True)
-		profile.submit_change_request(
-			changes={"telegram": "+251911222444"}, reason="New Telegram number", ctx=_ctx(DA1)
-		)
+		with as_user(ZONE_SUP):
+			profile.submit_change_request(
+				changes={"telegram": "+251911222444"}, reason="New Telegram number", da_id="DA-000001"
+			)
 		frappe.get_doc(
 			{
 				"doctype": "DA Profile Change Request",
@@ -251,8 +255,9 @@ class TestZoneScope(IntegrationTestCase):
 			self.assertEqual(self._visible(dt, OTHER_ZONE_EXEC), {OTHER_DA}, dt)
 			self.assertEqual(self._visible(dt, REGION_EXEC), {"DA-000001", OTHER_DA}, dt)
 
-		frappe.set_user(ZONE_EXEC)  # the list hook scopes by the session user
-		rows, total = profile.list_change_requests(_ctx(ZONE_EXEC))
+		frappe.set_user(ZONE_EXEC)  # User Permissions scope get_list by the session user
+		with as_user(ZONE_EXEC):
+			rows, total = profile.list_change_requests()
 		self.assertEqual(total, 1)
 		self.assertEqual(rows[0]["da_id"], "DA-000001")
 
@@ -286,6 +291,12 @@ class TestZoneScope(IntegrationTestCase):
 	# -- farmers list filter ------------------------------------------------------------
 
 	def test_zone_officer_can_filter_farmers_by_a_woreda_in_their_zone(self):
-		farmers.list_farmers(_ctx(ZONE_EXEC), woreda="ET04-W01")  # under ET04-Z01: allowed
-		with self.assertRaises(frappe.PermissionError):
-			farmers.list_farmers(_ctx(ZONE_EXEC), woreda="ET04-W09")  # under ET04-Z02
+		with as_user(ZONE_EXEC):
+			farmers.list_farmers(woreda="ET04-W01")  # under ET04-Z01: allowed
+		frappe.set_user(ZONE_EXEC)  # User Permissions apply to the session user
+		try:
+			# under ET04-Z02: outside the Zone User Permission, so the filter narrows to nothing
+			with as_user(ZONE_EXEC):
+				self.assertEqual(farmers.list_farmers(woreda="ET04-W09")[1], 0)
+		finally:
+			frappe.set_user("Administrator")

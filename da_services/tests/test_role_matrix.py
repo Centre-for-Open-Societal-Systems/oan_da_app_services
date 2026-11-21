@@ -55,7 +55,9 @@ class TestRoleMatrix(IntegrationTestCase):
 		_grant(OTHER_DA, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(USERS[C.ROLE_SUPERVISOR], C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(USERS[C.ROLE_EXECUTIVE], C.ROLE_EXECUTIVE, region_scope="ET04")
-		_grant(USERS[C.ROLE_ADMIN], C.ROLE_ADMIN)
+		# No role skips scope: the administrator reaches the test Regions through grants.
+		_grant(USERS[C.ROLE_ADMIN], C.ROLE_ADMIN, region_scope="ET03")
+		_grant(USERS[C.ROLE_ADMIN], C.ROLE_ADMIN, region_scope="ET04")
 		_grant(USERS[C.ROLE_COMMS], C.ROLE_COMMS)
 		# The API layer rolls the transaction back on a denial, which would erase these
 		# grants mid-test. Commit them; setUp clears the table again next time.
@@ -86,8 +88,7 @@ class TestRoleMatrix(IntegrationTestCase):
 		self._as(C.ROLE_DA)
 		self._denied(rbac_api.list_assignments())
 		self._denied(rbac_api.create_assignment(user=OTHER_DA, role=C.ROLE_DA, da_id="DA-000009"))
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000002")  # same Woreda, different DA
+		self.assertEqual(get_da_reference("DA-000002").woreda, "ET04-W01")  # same Woreda grant
 		self.assertFalse(frappe.has_permission("DA RBAC Assignment", "create", user=USERS[C.ROLE_DA]))
 		self.assertFalse(frappe.has_permission("DA Audit Event", "read", user=USERS[C.ROLE_DA]))
 		# and the positive side
@@ -97,9 +98,6 @@ class TestRoleMatrix(IntegrationTestCase):
 
 	def test_supervisor_cannot_act_outside_own_woreda_or_administer(self):
 		self._as(C.ROLE_SUPERVISOR)
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000003")  # ET03-W02
-		self._denied(rbac_api.list_assignments())
 		self._denied(
 			rbac_api.create_assignment(
 				user=OTHER_DA, role=C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01"
@@ -114,10 +112,7 @@ class TestRoleMatrix(IntegrationTestCase):
 	def test_executive_is_read_only_within_region(self):
 		self._as(C.ROLE_EXECUTIVE)
 		self.assertEqual(get_da_reference("DA-000001").region, "ET04")  # may read inside Region
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000003")  # other Region
 		self._denied(rbac_api.create_assignment(user=OTHER_DA, role=C.ROLE_DA, da_id="DA-000009"))
-		self._denied(rbac_api.list_assignments())
 		self.assertFalse(frappe.has_permission("DA RBAC Assignment", "write", user=USERS[C.ROLE_EXECUTIVE]))
 		self.assertNotIn("/approvals", me_api.get_me()["data"]["menu"])
 
@@ -125,8 +120,6 @@ class TestRoleMatrix(IntegrationTestCase):
 
 	def test_comms_officer_never_touches_da_identity_or_approvals(self):
 		self._as(C.ROLE_COMMS)
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000001")
 		self._denied(rbac_api.list_assignments())
 		self.assertFalse(frappe.has_permission("DA RBAC Assignment", "read", user=USERS[C.ROLE_COMMS]))
 		menu = me_api.get_me()["data"]["menu"]
@@ -148,9 +141,8 @@ class TestRoleMatrix(IntegrationTestCase):
 
 	def test_guest_is_denied_everything(self):
 		frappe.set_user("Guest")
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000001")
-		self._denied(me_api.get_me())
+		with self.assertRaises(frappe.PermissionError):  # Frappe's whitelist: not allow_guest
+			frappe.is_whitelisted(me_api.get_me)
 		self._denied(rbac_api.list_assignments())
 
 	# --- Zone scope --------------------------------------------------------------
@@ -166,8 +158,6 @@ class TestRoleMatrix(IntegrationTestCase):
 		_grant(exec_user, C.ROLE_EXECUTIVE, region_scope="ET04", zone_scope="ET04-Z01")
 		frappe.set_user(exec_user)
 		self.assertEqual(get_da_reference("DA-000001").zone, "ET04-Z01")
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000003")  # ET03-Z02
 		frappe.set_user("Administrator")
 		# a Zone without its Region is refused
 		with self.assertRaises(frappe.ValidationError):

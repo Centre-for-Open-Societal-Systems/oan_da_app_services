@@ -21,11 +21,6 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.services import constants as C
 from da_services.services import da_service
-from da_services.utils.permissions import require_roles
-
-# Roles that may read DA records
-READ_ROLES = C.DA_READ_ROLES
-
 
 # Valid enum values for filters
 VALID_ACTIVE_STATUSES = frozenset(C.ACTIVE_STATUSES)
@@ -50,11 +45,9 @@ def list_agents(
 ):
 	"""List Development Agents visible to the user with scope enforcement (DA-226).
 
-	Scope selector:
-	- Development Agent: Only their own record
-	- Supervisor: All DAs in their Woreda(s)
-	- Executive: All DAs in their Region(s)
-	- Administrator: All DAs (unrestricted)
+	Scope selector, from the caller's DA RBAC grants:
+	- Region / Zone / Woreda grants: the DAs in those areas
+	- No area granted: only the caller's own DA record
 
 	Query parameters:
 	- woreda: Filter by woreda code (e.g., "ET04-W01")
@@ -98,7 +91,6 @@ def list_agents(
 	- 403: Permission denied (user lacks DA read roles)
 	- 400: Validation error (invalid filter values)
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	# Parse query parameters
 	woreda = woreda or frappe.form_dict.get("woreda")
@@ -153,7 +145,6 @@ def list_agents(
 
 	# Call service layer
 	agents, total = da_service.list_agents(
-		ctx,
 		woreda=woreda,
 		kebele=kebele,
 		region=region,
