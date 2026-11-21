@@ -14,7 +14,12 @@ created with ``da_registry_id`` set or its ``da_registry_id`` changes:
      / ``zone_code`` / ``woreda_code``, effective today;
    - a **DA Kebele Assignment** when the record has a ``kebele_code``: state Effective,
      mode Automatic, effective today. Inserting it supersedes the DA's earlier live
-     Kebele assignments (see DA Kebele Assignment).
+     Kebele assignments (see DA Kebele Assignment);
+   - the User's **DA Hierarchy** node: Region / Zone / Woreda / Kebele from the
+     ``*_code`` fields (designation and country are not set), and the parent from
+     ``reports_to`` (the User whose ``username`` it is). A boss with no node yet gets a
+     group node under the root. Saving the node updates the hierarchy User Permissions on
+     ``User`` (services/hierarchy_user_permissions.py).
 
 An assignment that already says the same thing is not created again. An earlier active
 Development Agent RBAC assignment this sync created for the User, with a different scope,
@@ -32,6 +37,7 @@ import frappe
 from frappe import _
 from frappe.utils import today
 
+from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ROOT, ensure_root
 from da_services.da_services.doctype.da_kebele_assignment.da_kebele_assignment import LIVE_STATES
 from da_services.services import constants as C
 from da_services.services import utils
@@ -41,6 +47,14 @@ API_NOTE = "it is created from api"
 GET_SUBJECT_RECORD = "/register-data/get_subject_record"
 RBAC = "DA RBAC Assignment"
 KEBELE_ASSIGNMENT = "DA Kebele Assignment"
+HIERARCHY = "DA Hierarchy"
+# DA Hierarchy field -> DA Registry record key.
+HIERARCHY_FIELDS = {
+	"region": "region_code",
+	"zone": "zone_code",
+	"woreda": "woreda_code",
+	"kebele": "kebele_code",
+}
 _SAVEPOINT = "da_registry_assignment_sync"
 
 
@@ -78,8 +92,9 @@ def on_user_update(doc, method=None) -> None:
 def sync_user_assignments(user: str, da_id: str, *, fetch=None) -> dict | None:
 	"""Create the assignments for ``user`` from DA Registry record ``da_id``.
 
-	Returns ``{"rbac": name | None, "kebele": name | None}`` (None when nothing new was
-	needed), or None when the sync failed; a failure is logged, shown, and rolled back.
+	Returns ``{"rbac": name | None, "kebele": name | None, "hierarchy": name}`` (rbac /
+	kebele None when nothing new was needed), or None when the sync failed; a failure is
+	logged, shown, and rolled back.
 	``fetch`` replaces the registry call (``fetch(da_id) -> record``), for tests.
 	"""
 	frappe.db.savepoint(_SAVEPOINT)
@@ -88,6 +103,7 @@ def sync_user_assignments(user: str, da_id: str, *, fetch=None) -> dict | None:
 		result = {
 			"rbac": _ensure_rbac_assignment(user, record),
 			"kebele": _ensure_kebele_assignment(user, record),
+			"hierarchy": _ensure_hierarchy(user, record),
 		}
 	except Exception as exc:
 		frappe.db.rollback(save_point=_SAVEPOINT)
@@ -240,3 +256,49 @@ def _supersede_other_da_ids(user: str, new_name: str) -> None:
 		frappe.db.set_value(KEBELE_ASSIGNMENT, name, {"state": "Superseded", "superseded_by": new_name})
 	if stale:
 		sync_user_permissions(user)
+
+
+# ---------------------------------------------------------------- hierarchy
+
+
+def _ensure_hierarchy(user: str, record: dict) -> str:
+	"""Create or update ``user``'s DA Hierarchy node from the record. Returns its name."""
+	ensure_root()
+	values = {field: _code(record, key) for field, key in HIERARCHY_FIELDS.items()}
+	values["parent_da_hierarchy"] = _boss_node(user, _code(record, "reports_to")) or ROOT
+	if frappe.db.exists(HIERARCHY, {"user": user}):
+		doc = frappe.get_doc(HIERARCHY, {"user": user})
+		doc.update(values)
+	else:
+		doc = frappe.get_doc({"doctype": HIERARCHY, "user": user, **values})
+	# A group when anyone reports to the user; a group stays one.
+	doc.is_group = 1 if doc.is_group or _has_reports(user) else 0
+	doc.save(ignore_permissions=True)
+	return doc.name
+
+
+def _boss_node(user: str, reports_to: str | None) -> str | None:
+	"""The DA Hierarchy node of the User whose ``username`` is ``reports_to``, made a group
+	(created under the root when missing). None when there is no such User."""
+	if not reports_to:
+		return None
+	boss = frappe.db.get_value("User", {"username": reports_to})
+	if not boss or boss == user:
+		return None
+	name = frappe.db.get_value(HIERARCHY, {"user": boss})
+	if not name:
+		node = frappe.get_doc(
+			{"doctype": HIERARCHY, "user": boss, "is_group": 1, "parent_da_hierarchy": ROOT}
+		)
+		node.insert(ignore_permissions=True)
+		return node.name
+	if not frappe.db.get_value(HIERARCHY, name, "is_group"):
+		node = frappe.get_doc(HIERARCHY, name)
+		node.is_group = 1
+		node.save(ignore_permissions=True)
+	return name
+
+
+def _has_reports(user: str) -> bool:
+	node = frappe.db.get_value(HIERARCHY, {"user": user})
+	return bool(node and frappe.db.exists(HIERARCHY, {"parent_da_hierarchy": node}))
