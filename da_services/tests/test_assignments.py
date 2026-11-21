@@ -144,10 +144,6 @@ class TestAssignments(IntegrationTestCase):
 		self.assertEqual(
 			tree, {"region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01", "kebele": "ET04-W01-K03"}
 		)
-		frappe.set_user(DA1)
-		out = api.master_kebeles(woreda="et04-w01")
-		self.assertEqual([k["code"] for k in out["data"]], ["ET04-W01-K01", "ET04-W01-K03", "ET04-W01-K07"])
-		self.assertEqual(api.master_areas(level="Woreda")["data"][0]["name_en"], "Ankober")
 
 	# -- list / me / coverage ------------------------------------------------------------
 

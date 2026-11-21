@@ -283,13 +283,6 @@ class HttpDARegistryClient(DARegistryClient):
 			if isinstance(row, dict) and row.get("level_value_id")
 		]
 
-	def geo_level_values_many(self, level_id: str, parents: list[str | None]) -> dict[str | None, list[dict]]:
-		# A full tree is one call per Region, Zone and Woreda: fan out like list_das.
-		self._credentials()  # resolve the token here: the workers have no request context
-		with ThreadPoolExecutor(max_workers=min(LIST_WORKERS, max(1, len(parents)))) as pool:
-			areas = pool.map(lambda parent: self.geo_level_values(level_id, parent), parents)
-			return dict(zip(parents, areas, strict=True))
-
 	def _master_data_pages(self, path: str, payload: dict, *, action: str) -> list:
 		"""Every row of a Master Data list call (the same token as the registry)."""
 		if not self.master_data_url:

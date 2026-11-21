@@ -89,10 +89,6 @@ class CropRegistryClient(ABC):
 		"""
 
 	@abstractmethod
-	def geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
-		"""Values for one geography level. A child level passes the parent ``level_value_id``."""
-
-	@abstractmethod
 	def submit_sections(
 		self,
 		requests: list[dict],

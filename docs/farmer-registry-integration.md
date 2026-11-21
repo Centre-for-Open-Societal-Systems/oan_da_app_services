@@ -63,7 +63,6 @@ Every `{id}` accepts the registry internal id or the Farmer-ID (`FR-…`).
 | GET | `/registries/farmer/registers` | Registers of the Farmer Registry (Farmer, Land, Crop, Livestock …) |
 | GET | `/registries/farmer/intake-form` | The intake form layout |
 | GET | `/registries/farmer/field-options` | Every dropdown's options `{register: {field: [{value, label}]}}`, from the registry's own code lists (cached 1 h) |
-| GET | `/registries/farmer/places?level=region\|zone\|woreda\|kebele&parent=` | Master Data places `[{id, name}]` for the location cascade |
 
 ---
 

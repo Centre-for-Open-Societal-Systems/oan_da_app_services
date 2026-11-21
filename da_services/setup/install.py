@@ -21,14 +21,65 @@ ROLES = [
 ]
 
 
+# Portal sidebar (frontend lib/rbac.ts NAV_GROUPS, FSD 2.4): (route, label, roles), in
+# order. Seeded into DA Portal Menu Item; admins edit the records after that.
+_ALL = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN, C.ROLE_COMMS)
+_OFFICERS = (C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
+PORTAL_MENU = (
+	("/dashboard", "Dashboard", _ALL),
+	("/farmers", "Farmers", (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE)),
+	("/beneficiaries", "Beneficiaries", (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)),
+	("/grievances", "Grievances", (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)),
+	("/my-teams", "My Teams", (C.ROLE_DA,)),
+	("/agents", "Agents", _OFFICERS),
+	("/visits", "Visits", (C.ROLE_SUPERVISOR,)),
+	("/assignments", "Assignments", (C.ROLE_SUPERVISOR,)),
+	# Level 1 (the Woreda's Supervisor) and level 2 (the OAN Administrator) of a profile change
+	("/approvals", "Approvals", (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)),
+	("/registry-sync", "Registry Sync", (C.ROLE_ADMIN,)),
+	("/feedback", "Feedback", (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)),
+	("/knowledge", "Knowledge", _ALL),
+	("/broadcast", "Broadcast", (C.ROLE_DA, C.ROLE_COMMS, C.ROLE_ADMIN)),
+	("/alerts", "Alerts", (C.ROLE_COMMS, C.ROLE_ADMIN, C.ROLE_SUPERVISOR)),
+	("/performance", "Performance", (C.ROLE_DA, C.ROLE_SUPERVISOR)),
+	("/surveys", "Surveys", (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)),
+	("/admin/users", "Users", (C.ROLE_ADMIN,)),
+	("/admin/reports", "Reports", _OFFICERS),
+	("/admin/settings", "Settings", (C.ROLE_ADMIN,)),
+)
+
+
 def after_install():
 	seed_roles()
 	seed_not_assigned_kebele()
+	seed_portal_menu()
 
 
 def after_migrate():
 	seed_roles()
 	seed_not_assigned_kebele()
+	seed_portal_menu()
+
+
+def seed_portal_menu():
+	"""Create the portal menu items that are missing (matched by route).
+
+	An existing item is left as it is, so changes made in Desk survive migrate.
+	"""
+	existing = set(frappe.get_all("DA Portal Menu Item", pluck="route"))
+	for sequence, (route, label, roles) in enumerate(PORTAL_MENU, start=1):
+		if route in existing:
+			continue
+		frappe.get_doc(
+			{
+				"doctype": "DA Portal Menu Item",
+				"route": route,
+				"label": label,
+				"sequence": sequence * 10,
+				"enabled": 1,
+				"roles": [{"role": role} for role in roles],
+			}
+		).insert(ignore_permissions=True)
 
 
 def seed_not_assigned_kebele():

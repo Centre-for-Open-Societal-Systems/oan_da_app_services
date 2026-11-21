@@ -17,6 +17,7 @@ LEVEL_DOCTYPE = {
 }
 
 NAME_FIELD = {
+	"DA Country": "country_name",
 	"DA Region": "region_name",
 	"DA Zone": "zone_name",
 	"DA Woreda": "woreda_name",

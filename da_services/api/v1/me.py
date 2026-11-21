@@ -19,10 +19,11 @@ import frappe
 from oan_auth_service.api.utils import handle_api_errors, success_response
 
 from da_services.api.router import route
+from da_services.da_services.doctype.da_portal_menu_item.da_portal_menu_item import cached_menu
 from da_services.services import constants as C
-from da_services.services.notifications import own_kebeles
+from da_services.services import geo
 
-# Single role code and label the portal switches on (frontend lib/rbac.ts ROLES / ROLE_LABELS).
+# Single role code the portal switches on (frontend lib/rbac.ts ROLES).
 ROLE_CODES: dict[str, str] = {
 	C.ROLE_DA: "DA",
 	C.ROLE_SUPERVISOR: "Supervisor",
@@ -30,43 +31,8 @@ ROLE_CODES: dict[str, str] = {
 	C.ROLE_ADMIN: "Admin",
 	C.ROLE_COMMS: "CommsOfficer",
 }
-ROLE_LABELS: dict[str, str] = {
-	"DA": "Development Agent",
-	"Supervisor": "Supervisor (Woreda)",
-	"Executive": "Executive (Regional)",
-	"Admin": "OAN / ATI Administrator",
-	"CommsOfficer": "Communications Officer",
-}
 # When a user holds more than one role, the portal shows the widest one.
 PRIMARY_ROLE_ORDER = ("Admin", "Supervisor", "Executive", "DA", "CommsOfficer")
-
-# Sidebar items in the portal's order, with the role codes that see each one
-# (frontend lib/rbac.ts NAV_GROUPS, FSD 2.4). Routes without a nav item (/profile, /sync,
-# /visits/{id}/outcome, ...) are not listed; the portal reaches them from a page.
-_ALL = ("DA", "Supervisor", "Executive", "Admin", "CommsOfficer")
-_OFFICERS = ("Supervisor", "Executive", "Admin")
-NAV: tuple[tuple[str, tuple[str, ...]], ...] = (
-	("/dashboard", _ALL),
-	("/farmers", ("DA", "Supervisor", "Executive")),
-	("/beneficiaries", ("DA", "Supervisor", "Admin")),
-	("/grievances", ("DA", "Supervisor", "Admin")),
-	("/my-teams", ("DA",)),
-	("/agents", _OFFICERS),
-	("/visits", ("Supervisor",)),
-	("/assignments", ("Supervisor",)),
-	# Level 1 (the Woreda's Supervisor) and level 2 (the OAN Administrator) of a profile change
-	("/approvals", ("Supervisor", "Admin")),
-	("/registry-sync", ("Admin",)),
-	("/feedback", ("DA", "Supervisor", "Admin")),
-	("/knowledge", _ALL),
-	("/broadcast", ("DA", "CommsOfficer", "Admin")),
-	("/alerts", ("CommsOfficer", "Admin", "Supervisor")),
-	("/performance", ("DA", "Supervisor")),
-	("/surveys", ("DA", "Supervisor", "Executive", "Admin")),
-	("/admin/users", ("Admin",)),
-	("/admin/reports", _OFFICERS),
-	("/admin/settings", ("Admin",)),
-)
 
 
 def role_codes_for() -> list[str]:
@@ -75,50 +41,57 @@ def role_codes_for() -> list[str]:
 
 
 def menu_for() -> list[str]:
-	"""Nav hrefs for every role the user holds. A UI convenience, not an access control."""
-	codes = set(role_codes_for())
-	return [href for href, roles in NAV if codes.intersection(roles)]
+	"""Nav hrefs (DA Portal Menu Item) for every role the user holds. A UI convenience, not
+	an access control."""
+	roles = set(frappe.get_roles())
+	return [route for route, allowed in cached_menu() if roles & allowed]
 
 
-def scope_label_for(role: str | None) -> str:
-	"""Sidebar footer line (frontend ROLE_SCOPES), e.g. "All regions"."""
-	if role == "Admin":
-		return "All regions"
-	if role == "CommsOfficer":
-		return "Broadcast domain"
-	if role == "DA":
-		return "Own record"
-	if role == "Executive":
-		return "Read only"
-	return ""
+# DA Hierarchy Link field -> geo master doctype, top level first.
+HIERARCHY_GEO_FIELDS = (
+	("country", "DA Country"),
+	("region", "DA Region"),
+	("zone", "DA Zone"),
+	("woreda", "DA Woreda"),
+	("kebele", "DA Kebele"),
+)
+
+
+def hierarchy_for(user: str) -> tuple[str | None, dict]:
+	"""(designation, location) from the user's DA Hierarchy node. Each location level is
+	{"id", "name"}, or None when the node does not set it (or the user has no node)."""
+	row = frappe.db.get_value(
+		"DA Hierarchy",
+		{"user": user},
+		["designation", *(field for field, _doctype in HIERARCHY_GEO_FIELDS)],
+		as_dict=True,
+	)
+	location: dict = {}
+	for field, doctype in HIERARCHY_GEO_FIELDS:
+		code = row.get(field) if row else None
+		location[field] = (
+			{"id": code, "name": geo.display_names(doctype, [code]).get(code) or code} if code else None
+		)
+	return (row.designation if row else None), location
 
 
 def profile_for() -> dict:
 	codes = role_codes_for()
 	role = codes[0] if codes else None
 	full_name = frappe.db.get_value("User", frappe.session.user, "full_name") if frappe.session.user else None
-	data: dict = {
+	designation, location = hierarchy_for(frappe.session.user)
+	return {
 		"user": {
 			"id": frappe.session.user,
 			"name": full_name or frappe.session.user,
 			"email": frappe.session.user,
 		},
 		"role": role,
-		"role_label": ROLE_LABELS.get(role),
-		"role_codes": codes,
+		"designation": designation,
+		**location,  # country, region, zone, woreda, kebele: {"id", "name"} or None
 		"roles": sorted(r for r in frappe.get_roles() if r in ROLE_CODES),
 		"menu": menu_for(),
 	}
-	if kebeles := own_kebeles():
-		# The Kebeles the caller is posted to (Effective assignments).
-		names = dict(
-			frappe.get_all(
-				"DA Kebele", filters={"name": ("in", kebeles)}, fields=["name", "kebele_name"], as_list=True
-			)
-		)
-		data["kebeles"] = [{"code": c, "name": names.get(c) or c} for c in kebeles]
-	data["scope_label"] = scope_label_for(role)
-	return data
 
 
 @route("/me", methods=("GET",), summary="Current user's DA Services profile: roles, menu")

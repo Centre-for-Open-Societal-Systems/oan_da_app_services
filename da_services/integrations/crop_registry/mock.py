@@ -133,19 +133,6 @@ class MockCropRegistryClient(CropRegistryClient):
 		described["intake_forms"] = [{"form_id": "form-1", "form_mnemonic": "Crop Planning"}]
 		return described
 
-	def geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
-		# The fixture is one synthetic place. The parent is accepted and not applied.
-		del parent_level_value_id
-		if not str(level_id or "").strip():
-			raise CropRegistryClientError("level_id is required")
-		return [
-			{
-				"level_value_id": "geo-1",
-				"level_value_mnemonic": "SYNTHETIC",
-				"display_name": "Synthetic",
-			}
-		]
-
 	def submit_sections(
 		self,
 		requests: list[dict],

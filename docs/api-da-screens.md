@@ -29,7 +29,6 @@ Administrator, Communications Officer). The auth store keeps `user {id, name, em
 | Field | Type | Why |
 |---|---|---|
 | `role` | one of the five codes above | the frontend switches dashboards and nav on a single role |
-| `scope_label` | string by role: "All regions", "Broadcast domain", "Own record", "Read only", or "" | sidebar footer (`ROLE_SCOPES`) |
 | `agent.da_id`, `agent.full_name`, `agent.kebele`, `agent.woreda`, `agent.region`, `agent.phone`, `agent.specialisation`, `agent.education_tier`, `agent.joined_at`, `agent.farmer_count`, `agent.active_status` | from Registry projection | header, footer, My Teams, Assignments |
 | `menu` | list of nav hrefs | must use the frontend's hrefs (next table), not our current section names |
 
@@ -177,7 +176,6 @@ Exact form field names (`name=` attributes):
 
 | Element | API | Source |
 |---|---|---|
-| Cascading dropdowns | `GET /master/regions`, `/master/zones?region=`, `/master/woredas?zone=`, `/master/kebeles?woreda=` | ours: DA Administrative Area |
 | Reference lists (gender, id type, language, education tier, specialization, certificate type) | `GET /master/reference-values?type=` | ours: DA Reference Value |
 | File uploads | `POST /files` (returns `file_url`, `content_hash`) | Frappe File |
 | Submit | `POST /farmers` with the steps as nested objects + `client_op_id` → Farmer Registry create → `DA Farmer Link` (Automatic) → returns `{farmer_id, ticket_number, status}` | Farmer Registry + ours |
@@ -552,7 +550,7 @@ two types.
 
 | # | Endpoints | Screen | Owner |
 |---|---|---|---|
-| 1 | `GET /me` (+ role, scope_label, menu hrefs, agent fields) | shell | Nikky (small change) |
+| 1 | `GET /me` (+ role, menu hrefs, agent fields) | shell | Nikky (small change) |
 | 2 | `GET /notifications`, `POST /notifications/{id}/read`, `/read-all` | shell | Nikky |
 | 3 | `GET /master/regions|zones|woredas|kebeles`, `GET /master/reference-values` | forms, filters | Pushkar |
 | 4 | `GET /dashboard/summary` (role-aware), `GET /dashboard/today` | DA + Supervisor dashboard | Nikky / DA-373 |

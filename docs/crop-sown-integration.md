@@ -60,13 +60,6 @@ sequenceDiagram
   Crop-->>DA: sections, labels, options, choices
   DA-->>Agent: form payload
 
-  Agent->>DA: GET /crop-sown/geo-level-values?level_id=l1
-  DA->>MD: get_geo_level_values
-  MD-->>Agent: level_value_id and level_value_mnemonic
-
-  Agent->>DA: GET /crop-sown/geo-level-values?level_id=l2&parent_level_value_id=ET01
-  DA->>MD: get_geo_level_values for that parent only
-
   Agent->>DA: POST /farmers/{id}/crops
   DA->>Staff: save_intake_form_submission, root section first
   Staff-->>DA: submission_id
@@ -83,7 +76,6 @@ Prefix: `/api/v1/da-services`
 | Route | Staff or master-data call |
 | --- | --- |
 | `GET /crop-sown/intake-form?form=` | Required `form`. Discover CropSown, render that form only, `get_register_fields`, then every catalog page for that form |
-| `GET /crop-sown/geo-level-values?level_id=&parent_level_value_id=` | `POST /geo/get_geo_level_values` |
 | `GET /farmers/{id}/crops?source=submission` | One staff search: `search_in_intake_form_submissions`; response includes `source` |
 | `GET /farmers/{id}/crops?source=register` | One staff search: `search_in_a_register`; rows use `internal_record_id` |
 | `GET /farmers/{id}/crops?submission_id=` | `get_intake_form_submission` and submission `get_tab_records` |
@@ -99,7 +91,7 @@ GPS is not reshaped into a top-level `location` object. When present, it stays i
 
 A field is required when its widget has `widget-required` and it is not read-only. `get_register_fields.required` is true for managed columns on the planning server. Those columns are not caller inputs. A read-only widget value is rejected. The registry fills it.
 
-A catalog field returns `choices` of `value_id` and `value_display` when the master-data URL is set. The stored value is `value_id`. A static choice returns `options` with `label` and `value`. Geography fields point at `geo.endpoint` `geo-level-values`. Their rows are the geography route, not the form payload.
+A catalog field returns `choices` of `value_id` and `value_display` when the master-data URL is set. The stored value is `value_id`. A static choice returns `options` with `label` and `value`. Geography fields are not filled by the form payload. DA Services has no geography route.
 
 `level_id` is forwarded unchanged. The planning run used `l1`, `l2`, `l3`, and `l4` from `get_all_geo_levels`. A child level sends the selected `level_value_id` as `parent_level_value_id`. Submit stores that id in `geo_lowest_level_value_id`.
 

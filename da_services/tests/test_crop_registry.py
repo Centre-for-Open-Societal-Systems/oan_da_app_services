@@ -1287,7 +1287,7 @@ class TestIntakeContract(unittest.TestCase):
 			by_name["cropping_system"]["options"],
 			[{"label": "Mono cropping", "value": "MONO_CROPPING"}],
 		)
-		self.assertEqual(by_name["region"]["geo"]["endpoint"], "geo-level-values")
+		self.assertNotIn("geo", by_name["region"])
 		self.assertFalse(by_name["created_at"]["required"])
 		self.assertTrue(by_name["created_at"]["readonly"])
 		self.assertEqual(form_selector("Crop Sown", "Planning"), "planning")
@@ -1301,7 +1301,7 @@ def _paged(payload, pages):
 
 
 class TestCropRenderContract(unittest.TestCase):
-	def test_catalog_and_geography_read_every_page(self):
+	def test_catalog_reads_every_page(self):
 		seen = []
 
 		def post(url, **kwargs):
@@ -1317,20 +1317,6 @@ class TestCropRenderContract(unittest.TestCase):
 						2,
 					),
 				)
-			if url.endswith("/geo/get_geo_level_values"):
-				return _Resp(
-					200,
-					_paged(
-						[
-							{
-								"level_value_id": f"L-{page}",
-								"level_value_mnemonic": f"M-{page}",
-								"display_name": "Place",
-							}
-						],
-						2,
-					),
-				)
 			raise AssertionError(url)
 
 		client = HTTPCropRegistryClient(
@@ -1340,13 +1326,9 @@ class TestCropRenderContract(unittest.TestCase):
 		)
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
 			values = client._attribute_values("CROP_COMMODITY")
-			places = client.geo_level_values("l2", "ET01")
 
 		self.assertEqual([row["value_id"] for row in values], ["ROW-1", "ROW-2"])
-		self.assertEqual([row["level_value_id"] for row in places], ["L-1", "L-2"])
-		geo_calls = [item for item in seen if item[0].endswith("/geo/get_geo_level_values")]
-		self.assertEqual(geo_calls[0][2], {"level_id": "l2", "parent_level_value_id": "ET01"})
-		self.assertEqual([item[1] for item in geo_calls], [1, 2])
+		self.assertEqual([item[1] for item in seen], [1, 2])
 
 	def test_form_query_renders_only_the_named_intake_form(self):
 		rendered = []

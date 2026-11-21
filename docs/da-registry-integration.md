@@ -151,7 +151,7 @@ An OAN Administrator uploads a CSV or XLSX in the registry's DA import template 
 
 ## Codes and labels
 
-Region / Zone / Woreda / Kebele are Master Data P-codes (`ET04`, `ET0403`, `ET040301`, `ET04030101`); DA Services' own area master is synced from the same source (`docs/area-master-sync.md`). Coded fields (prefix, gender, marital status, education level, specialisation, position) are shown as Master Data labels, read once a day; without `da_registry_master_data_url` the codes are shown as words.
+Region / Zone / Woreda / Kebele are Master Data P-codes (`ET04`, `ET0403`, `ET040301`, `ET04030101`). Coded fields (prefix, gender, marital status, education level, specialisation, position) are shown as Master Data labels, read once a day; without `da_registry_master_data_url` the codes are shown as words.
 
 ## Roles
 

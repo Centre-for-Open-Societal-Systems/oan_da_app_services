@@ -70,7 +70,6 @@ Every `{id}` takes the registry id or the Farmer-ID (`FR-…`).
 | Advisory tab | GET | `/farmers/{id}/advisory` |
 | Change requests | GET | `/farmers/{id}/change-requests?status=&tab=` |
 | Register wizard, dropdowns | GET | `/registries/farmer/field-options` |
-| Register wizard, location cascade | GET | `/registries/farmer/places?level=region\|zone\|woreda\|kebele&parent=` |
 | Register wizard, form layout | GET | `/registries/farmer/intake-form` |
 | Register wizard, ID document | POST | `/farmers/registrations/documents` (multipart `file`) |
 | Register wizard, submit | POST | `/farmers` |
@@ -121,7 +120,7 @@ Saved responses for each of these are in the Postman collection.
 ## Register a farmer
 
 1. Load the dropdowns from `field-options` (`{register: {field: [{value, label}]}}`). Send `value` and show `label`.
-2. Fill the location one level at a time from `places`, passing the chosen `id` as `parent` for the next level. The kebele `id` (for example `ET04080101`) is the `kebele` in the body.
+2. Set `kebele` in the body to a Master Data kebele id (for example `ET04080101`). DA Services has no location-cascade route.
 3. Upload the ID document. The response's `document_id` goes into the body as `identity_document_id`.
 4. `POST /farmers`. The body is in the collection. Use a new `client_op_id` per registration: a repeat returns the first result (`DUPLICATE`) and does not create a second record.
 

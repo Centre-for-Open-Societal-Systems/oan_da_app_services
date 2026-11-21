@@ -65,11 +65,6 @@ sequenceDiagram
   Agent->>Page: Open the report
   Page->>DA: GET /livestock/intake-form
   DA-->>Page: sections, labels, required, options, choices
-  Page->>DA: GET /livestock/geo-level-values?level_id=l1
-  DA-->>Page: regions
-  Agent->>Page: Pick a region
-  Page->>DA: GET /livestock/geo-level-values?level_id=l2&parent_level_value_id=ET01
-  Note over Page,DA: Same call for l3 woreda and l4 kebele
   Agent->>Page: Save Draft
   Page->>DA: POST /farmers/{farmer_id}/livestock
   DA-->>Page: submission_id
@@ -149,13 +144,7 @@ When `options` is set, there is no catalog. On this form, `is_notifiable` and `p
 
 ### 4. Geography
 
-A field with `geo.endpoint` of `geo-level-values` is not filled by the intake-form call.
-
-1. `GET /livestock/geo-level-values?level_id=l1` returns regions. On 2026-11-02 the first row was `ET01`, Tigray.
-2. After the user picks a region, `GET /livestock/geo-level-values?level_id=l2&parent_level_value_id=ET01`.
-3. Woreda is `l3` with the selected zone id. Kebele is `l4` with the selected woreda id.
-
-Each row has `level_value_id` and `level_value_mnemonic`. Show the mnemonic. Store the id.
+A geography field is not filled by the intake-form call, and DA Services has no geography route.
 
 Send `geo_lowest_level_value_id` as the kebele id the user selected. The holding read for `FR-512145929324` stored `ET04010101` (Bengua 01, Oromia). That is that holding's kebele, not a default for a new draft.
 

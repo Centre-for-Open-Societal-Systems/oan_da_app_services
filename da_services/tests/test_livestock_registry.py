@@ -166,7 +166,7 @@ class TestDescribeForm(unittest.TestCase):
 		geo = self.sections[LOCATION]["fields"][0]
 		self.assertEqual(geo["field_name"], "geo_lowest_level_value_id")
 		self.assertEqual(geo["writes"]["hierarchy"], "geo_code_hierarchy_json")
-		self.assertEqual(geo["geo"]["levels"], ["region", "zone", "woreda", "kebele"])
+		self.assertNotIn("geo", geo)
 
 	def test_a_catalog_that_was_not_loaded_is_marked(self):
 		form = describe_form(MOCK_FORM, MOCK_FIELDS, {})

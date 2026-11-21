@@ -76,9 +76,6 @@ sequenceDiagram
   DA->>MD: get_attribute_values, every page of each catalog
   DA-->>Agent: sections, fields, rules, choices
 
-  Agent->>DA: GET /livestock/geo-level-values?level_id=l1
-  DA->>MD: get_geo_level_values
-
   Agent->>DA: POST /farmers/{FR-id}/livestock (lookup, personnel, location, animals ...)
   DA->>Staff: save_intake_form_submission, Livestock sections first
   Staff-->>DA: submission_id, Livestock row id
@@ -93,7 +90,6 @@ Prefix: `/api/v1/da-services`
 | Route | Staff or master-data call |
 | --- | --- |
 | `GET /livestock/intake-form` | Discover the register and form, render it, `get_register_fields`, every catalog page |
-| `GET /livestock/geo-level-values?level_id=&parent_level_value_id=` | `POST /geo/get_geo_level_values` |
 | `GET /farmers/{id}/livestock` | Search submissions and the Livestock register by Farmer-ID, then `get_section_records` for every section register on the rendered form. Each record is the full row, not the search `display_fields` |
 | `GET /farmers/{id}/livestock?submission_id=` | `get_intake_form_submission` |
 | `POST /farmers/{id}/livestock` | `save_intake_form_submission` per section |
