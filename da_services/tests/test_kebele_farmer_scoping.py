@@ -8,6 +8,7 @@ from frappe.utils import today
 
 from da_services.services import constants as C
 from da_services.services import farmers as svc
+from da_services.setup.install import seed_not_assigned_kebele
 from da_services.tests.fixtures import as_user, create_administrative_areas, ensure_da_user
 
 SUPERVISOR = "kebele-scope-sup@da.local"
@@ -37,6 +38,9 @@ class TestKebeleFarmerScoping(IntegrationTestCase):
 		"""Set up test data."""
 		# Create administrative areas first
 		create_administrative_areas()
+		# A DA with no Kebele is scoped to this record; a site built with install-app only
+		# may not have it.
+		seed_not_assigned_kebele()
 
 		self.da_id = "DA-TEST-SCOPE-001"
 		self.da_id_other = "DA-TEST-SCOPE-002"
