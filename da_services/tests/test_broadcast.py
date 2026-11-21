@@ -233,17 +233,6 @@ class TestBroadcast(IntegrationTestCase):
 			with as_user(ctx):
 				svc.broadcast(title="x", scope="kebele", scope_value=KEBELE_W01)
 
-	def test_me_lists_the_das_kebeles(self):
-		from da_services.api.v1.me import profile_for
-
-		with as_user(DA_W01):
-			data = profile_for()
-		self.assertEqual(data["kebeles"], [{"code": KEBELE_W01, "name": f"Kebele {KEBELE_W01}"}])
-		with as_user(DA_ET03):
-			self.assertNotIn("kebeles", profile_for())  # posted nowhere
-		with as_user(COMMS_NATIONAL):
-			self.assertNotIn("kebeles", profile_for())
-
 	def test_source_is_stored_on_the_notification(self):
 		ctx = COMMS_NATIONAL
 		with as_user(ctx):

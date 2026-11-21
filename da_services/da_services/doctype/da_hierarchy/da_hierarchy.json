@@ -7,6 +7,14 @@
  "field_order": [
   "user",
   "full_name",
+  "designation",
+  "sec_location",
+  "country",
+  "region",
+  "zone",
+  "col_break_location",
+  "woreda",
+  "kebele",
   "section_break_c7ae",
   "lft",
   "rgt",
@@ -71,13 +79,61 @@
    "in_list_view": 1,
    "label": "Full Name",
    "read_only": 1
+  },
+  {
+   "fieldname": "designation",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Designation"
+  },
+  {
+   "fieldname": "sec_location",
+   "fieldtype": "Section Break",
+   "label": "Location"
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Link",
+   "label": "Country",
+   "options": "DA Country"
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Region",
+   "options": "DA Region"
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Zone",
+   "options": "DA Zone"
+  },
+  {
+   "fieldname": "col_break_location",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "woreda",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Woreda",
+   "options": "DA Woreda"
+  },
+  {
+   "fieldname": "kebele",
+   "fieldtype": "Link",
+   "label": "Kebele",
+   "options": "DA Kebele"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_tree": 1,
  "links": [],
- "modified": "2026-11-20 23:45:00.000000",
+ "modified": "2026-11-21 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Hierarchy",

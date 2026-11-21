@@ -136,8 +136,9 @@ class TestMe(_Base):
 		self.assertEqual(d["roles"], [C.ROLE_SUPERVISOR])
 		self.assertNotIn("scope", d)
 		self.assertEqual(d["role"], "Supervisor")
-		self.assertEqual(d["role_label"], "Supervisor (Woreda)")
-		self.assertEqual(d["scope_label"], "")
+		self.assertNotIn("role_label", d)
+		self.assertNotIn("role_codes", d)
+		self.assertNotIn("scope_label", d)
 		self.assertEqual(d["user"]["email"], SUP)
 		# frontend hrefs (lib/rbac.ts NAV_GROUPS), in nav order
 		self.assertEqual(d["menu"][0], "/dashboard")
@@ -146,12 +147,44 @@ class TestMe(_Base):
 		self.assertIn("/approvals", d["menu"])
 		self.assertNotIn("/admin/users", d["menu"])
 
+	def test_designation_and_location_come_from_the_da_hierarchy(self):
+		from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ensure_root
+
+		frappe.set_user(SUP)
+		d = me_api.get_me()["data"]
+		self.assertIsNone(d["designation"])  # no DA Hierarchy node yet
+		self.assertNotIn("location", d)
+		for level in ("country", "region", "zone", "woreda", "kebele"):
+			self.assertIsNone(d[level])
+
+		frappe.set_user("Administrator")
+		ensure_root()
+		frappe.db.delete("DA Hierarchy", {"user": SUP})
+		frappe.get_doc(
+			{
+				"doctype": "DA Hierarchy",
+				"user": SUP,
+				"designation": "Woreda Supervisor",
+				"region": "ET04",
+				"zone": "ET04-Z01",
+				"woreda": "ET04-W01",
+			}
+		).insert(ignore_permissions=True)
+
+		frappe.set_user(SUP)
+		d = me_api.get_me()["data"]
+		self.assertEqual(d["designation"], "Woreda Supervisor")
+		self.assertEqual(d["region"], {"id": "ET04", "name": "Oromia"})
+		self.assertEqual(d["zone"], {"id": "ET04-Z01", "name": "West Shewa"})
+		self.assertEqual(d["woreda"], {"id": "ET04-W01", "name": "Bako Tibe"})
+		self.assertIsNone(d["country"])
+		self.assertIsNone(d["kebele"])
+
 	def test_da_profile(self):
 		frappe.set_user(DA_USER)
 		d = me_api.get_me()["data"]
 		self.assertNotIn("agent", d)  # no own DA-ID: the registry record is not looked up
 		self.assertEqual(d["role"], "DA")
-		self.assertEqual(d["scope_label"], "Own record")
 		self.assertIn("/my-teams", d["menu"])
 		self.assertNotIn("/approvals", d["menu"])
 		self.assertNotIn("/agents", d["menu"])
@@ -159,39 +192,36 @@ class TestMe(_Base):
 	def test_administrator_is_admin_with_full_menu(self):
 		frappe.set_user("Administrator")
 		d = me_api.get_me()["data"]
-		self.assertEqual((d["role"], d["scope_label"]), ("Admin", "All regions"))
+		self.assertEqual(d["role"], "Admin")
 		self.assertIn("/approvals", d["menu"])
 		self.assertIn("/admin/settings", d["menu"])
 		# Frappe's Administrator holds every role, so every role's menu items show.
 		self.assertIn("/my-teams", d["menu"])
 
-	def test_scope_labels_per_role(self):
+	def test_role_and_menu_per_role(self):
 		from unittest.mock import patch
 
-		def labels(roles):
-			"""(role codes, label per role, menu) for a user with `roles`."""
+		def resolve(roles):
+			"""(role codes, menu) for a user with `roles`."""
 			with patch.object(me_api.frappe, "get_roles", return_value=list(roles)):
-				codes = me_api.role_codes_for()
-				return codes, {c: me_api.scope_label_for(c) for c in codes}, me_api.menu_for()
+				return me_api.role_codes_for(), me_api.menu_for()
 
-		codes, label, _menu = labels({C.ROLE_EXECUTIVE})
-		self.assertEqual((codes, label["Executive"]), (["Executive"], "Read only"))
-		_codes, label, _menu = labels({C.ROLE_SUPERVISOR})
-		self.assertEqual(label["Supervisor"], "")
-		_codes, label, menu = labels({C.ROLE_COMMS})
-		self.assertEqual(label["CommsOfficer"], "Broadcast domain")
+		self.assertEqual(resolve({C.ROLE_EXECUTIVE})[0], ["Executive"])
+		_codes, menu = resolve({C.ROLE_COMMS})
 		self.assertEqual(menu, ["/dashboard", "/knowledge", "/broadcast", "/alerts"])
 		# two roles: the widest one wins, the menu is the union
-		codes, _label, menu = labels({C.ROLE_DA, C.ROLE_SUPERVISOR})
+		codes, menu = resolve({C.ROLE_DA, C.ROLE_SUPERVISOR})
 		self.assertEqual(codes, ["Supervisor", "DA"])
 		self.assertTrue({"/my-teams", "/assignments"} <= set(menu))
 
 	def test_menu_hrefs_match_the_portal_nav(self):
-		hrefs = [href for href, _roles in me_api.NAV]
+		from da_services.setup.install import PORTAL_MENU
+
+		hrefs = [href for href, _label, _roles in PORTAL_MENU]
 		self.assertTrue(all(h.startswith("/") for h in hrefs))
 		self.assertEqual(len(hrefs), len(set(hrefs)))
-		for _href, roles in me_api.NAV:
-			self.assertTrue(set(roles) <= set(me_api.ROLE_LABELS))
+		for _href, _label, roles in PORTAL_MENU:
+			self.assertTrue(set(roles) <= set(me_api.ROLE_CODES))
 
 	def test_me_needs_a_login_only(self):
 		frappe.set_user(PLAIN)
