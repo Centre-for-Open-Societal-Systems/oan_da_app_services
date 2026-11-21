@@ -17,7 +17,7 @@ import json
 import re
 from collections.abc import Callable
 
-from .client import LivestockRegistryClientError
+from .client import LivestockRegistryClientError, LivestockRegistryError
 
 # Columns the staff save route fills itself. A new business field is not in this set.
 _MANAGED = re.compile(
@@ -356,32 +356,41 @@ def submit_with_metadata(
 	current = submission_id or None
 	subject = subject_record_id or None
 	saved: dict | None = None
-	for section, records in prepared:
-		is_child = section["section_register_id"] != form_register_id
-		if is_child and not subject and current and find_subject is not None:
-			subject = find_subject(current)
-		payload = build_section_records(
-			section=section,
-			fields=fields_for(section["section_register_id"]),
-			records=records,
-			catalogs=catalogs,
-			subject_record_id=subject,
-			form_register_id=form_register_id,
-		)
-		saved = save(
-			section_id=section["section_id"],
-			section_register_id=section["section_register_id"],
-			section_payload=payload,
-			submission_id=current,
-			form_id=form.get("form_id"),
-			register_id=form_register_id or None,
-		)
-		current = str(saved.get("submission_id") or "")
-		if not current:
-			raise IntakeContractError("Livestock save did not return a submission_id")
-		found = subject_from_save(saved, form_register_id)
-		if found:
-			subject = found
+	done: list[str] = []
+	try:
+		for section, records in prepared:
+			is_child = section["section_register_id"] != form_register_id
+			if is_child and not subject and current and find_subject is not None:
+				subject = find_subject(current)
+			payload = build_section_records(
+				section=section,
+				fields=fields_for(section["section_register_id"]),
+				records=records,
+				catalogs=catalogs,
+				subject_record_id=subject,
+				form_register_id=form_register_id,
+			)
+			saved = save(
+				section_id=section["section_id"],
+				section_register_id=section["section_register_id"],
+				section_payload=payload,
+				submission_id=current,
+				form_id=form.get("form_id"),
+				register_id=form_register_id or None,
+			)
+			current = str(saved.get("submission_id") or "")
+			if not current:
+				raise IntakeContractError("Livestock save did not return a submission_id")
+			done.append(section["section_id"])
+			found = subject_from_save(saved, form_register_id)
+			if found:
+				subject = found
+	except LivestockRegistryError as exc:
+		# The sections saved so far are on a draft already: hand it back so a retry continues it
+		# instead of opening another draft.
+		if done:
+			exc.partial = {"submission_id": current, "subject_record_id": subject, "saved_sections": done}
+		raise
 	if not saved:
 		return {}
 	result = dict(saved)
