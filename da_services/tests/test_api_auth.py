@@ -75,6 +75,7 @@ class TestRoutes(_Base):
 		paths = {r.rule for r in frappe.api.API_URL_MAP._rules}
 		for expected in (
 			"/api/v1/da-services/health",
+			"/api/v1/da-services/charts/visits",
 			"/api/v1/da-services/me",
 			"/api/v1/da-services/agents/<da_id>",
 			"/api/v1/da-services/rbac-assignments",
@@ -125,6 +126,12 @@ class TestJwtMiddleware(_Base):
 		router.ensure_routes_registered()
 		with configured_keys():
 			self.assertEqual(self._run("/api/v1/da-services/health", None), "Guest")
+
+	def test_charts_visits_is_public_at_middleware(self):
+		"""Charts verifies Keycloak charts:read itself; middleware must not demand a user JWT."""
+		router.ensure_routes_registered()
+		with configured_keys():
+			self.assertEqual(self._run("/api/v1/da-services/charts/visits", None), "Guest")
 
 
 class TestMe(_Base):

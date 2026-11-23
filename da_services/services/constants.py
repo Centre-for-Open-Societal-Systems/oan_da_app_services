@@ -26,3 +26,6 @@ ACTIVE_STATUSES = (ACTIVE_STATUS_ACTIVE, ACTIVE_STATUS_ON_LEAVE, ACTIVE_STATUS_S
 
 # Approval Status (FSD 3.2.1 column 9).
 APPROVAL_STATUSES = ("Draft", "Awaiting review", "Approved", "Published")
+
+# Keycloak staff-realm client role for central dashboard chart feeders (not a Frappe Role).
+CHARTS_READ_ROLE = "charts:read"
