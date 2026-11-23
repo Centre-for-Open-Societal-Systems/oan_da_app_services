@@ -3,8 +3,9 @@
 ``POST {farmer_registry_domain}/register-data/search_in_a_register`` with the
 ``request_payload.register_id`` of ``farmer_registry_form_register_id`` (DA Services Settings).
 The caller's ``pagination_request`` (``current_page``, ``page_size``, ``filter_by``,
-``search_text``) is sent as given, and the answer's ``response_payload`` and
-``pagination_response`` are returned unchanged.
+``search_text``) is sent as given. Each row of the answer's ``response_payload`` has its
+``display_fields`` list turned into plain keys (``field_name`` -> ``value``); the
+``pagination_response`` is returned unchanged.
 """
 
 from __future__ import annotations
@@ -57,6 +58,19 @@ def client_from_settings(token: str, csrf_token: str) -> FarmerRegistryClient:
 	)
 
 
+def flatten_display_fields(row):
+	"""A row with its ``display_fields`` list turned into keys: each
+	``{"field_name": "first_name", "value": "Signoff"}`` becomes ``"first_name": "Signoff"``.
+	``display_fields`` itself is removed; a row without it is returned unchanged."""
+	if not isinstance(row, dict) or "display_fields" not in row:
+		return row
+	out = {k: v for k, v in row.items() if k != "display_fields"}
+	for field in row.get("display_fields") or []:
+		if isinstance(field, dict) and field.get("field_name"):
+			out[field["field_name"]] = field.get("value")
+	return out
+
+
 class FarmerRegistryClient:
 	def __init__(
 		self,
@@ -101,7 +115,10 @@ class FarmerRegistryClient:
 				},
 			},
 		}
-		return self._send(self.base_url + SEARCH_PATH, envelope)
+		payload, pagination = self._send(self.base_url + SEARCH_PATH, envelope)
+		if isinstance(payload, list):
+			payload = [flatten_display_fields(row) for row in payload]
+		return payload, pagination
 
 	def _send(self, url: str, envelope: dict) -> tuple[object, dict]:
 		action = "search the register"

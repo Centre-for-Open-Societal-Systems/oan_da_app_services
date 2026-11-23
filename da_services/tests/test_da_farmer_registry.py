@@ -30,6 +30,34 @@ def _answer(status=200, body=None):
 
 
 class TestDAFarmerRegistryClient(IntegrationTestCase):
+	def test_display_fields_become_keys(self):
+		row = {
+			"record_id": "R-1",
+			"display_fields": [
+				{"field_name": "functional_record_id", "order": 1, "value": "FR-821910965037"},
+				{"field_name": "first_name", "order": 2, "value": "Signoff"},
+				{"field_name": "woreda_name", "order": 12, "value": "Tahtay Adiyabo"},
+			],
+		}
+		body = {
+			"response_header": {"response_status": "SUCCESS"},
+			"response_body": {"response_payload": [row, {"plain": 1}], "pagination_response": PAGINATION},
+		}
+		with patch(POST, return_value=_answer(200, body)):
+			payload, _pagination = self._client().search_in_a_register()
+		self.assertEqual(
+			payload,
+			[
+				{
+					"record_id": "R-1",
+					"functional_record_id": "FR-821910965037",
+					"first_name": "Signoff",
+					"woreda_name": "Tahtay Adiyabo",
+				},
+				{"plain": 1},
+			],
+		)
+
 	def _client(self):
 		return FarmerRegistryClient(
 			base_url="https://farmer.example.org", register_id="REG-1", token="tok-1", csrf_token="csrf-1"

@@ -2,7 +2,7 @@
 
 `GET /api/v1/da-services/farmers` returns one page of the Farmer Registry register. It calls the
 registry's `search_in_a_register` live with the **caller's own token** and keeps no copy of the
-data. Request and response keys are the registry's own.
+data. Request keys are the registry's own; each row's `display_fields` are returned as plain keys.
 
 ## Request
 
@@ -70,14 +70,36 @@ POST {farmer_registry_domain}/register-data/search_in_a_register
 
 ## Response
 
-`data` is the registry's `response_payload` and `meta` is its `pagination_response`, both with the
-registry's keys. `meta` also carries `api_version`, which every v1 response adds.
+`data` is the registry's `response_payload` and `meta` is its `pagination_response`. Each row's
+`display_fields` list is turned into plain keys, `field_name` → `value`, and `display_fields` is
+removed. The row's other keys are kept as they are. `meta` also carries `api_version`, which every
+v1 response adds.
+
+Registry row:
+
+```json
+{
+  "display_fields": [
+    {"field_name": "functional_record_id", "order": 1, "value": "FR-821910965037"},
+    {"field_name": "first_name", "order": 2, "value": "Signoff"},
+    {"field_name": "woreda_name", "order": 12, "value": "Tahtay Adiyabo"}
+  ]
+}
+```
+
+Returned as:
 
 ```json
 {
   "status": "success",
   "message": "Success",
-  "data": [ { "...": "registry row, unchanged" } ],
+  "data": [
+    {
+      "functional_record_id": "FR-821910965037",
+      "first_name": "Signoff",
+      "woreda_name": "Tahtay Adiyabo"
+    }
+  ],
   "meta": {
     "api_version": "v1",
     "current_page": 1,

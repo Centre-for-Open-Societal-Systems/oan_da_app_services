@@ -32,7 +32,7 @@ Every `{id}` accepts the registry internal id or the Farmer-ID (`FR-…`).
 
 | Method | Endpoint | Returns |
 |---|---|---|
-| GET | `/farmers?current_page=&page_size=&filter_by=&search_text=` | One page of the register via `search_in_a_register`, called with the caller's own tokens; `data` / `meta` are the registry's `response_payload` / `pagination_response` unchanged. Geo codes in `filter_by` (`region_code` … `kebele_code`) are filled in or checked from the caller's User Permissions and sent to the registry as `region_name` … `kebele_name`; see [da-farmer-registry.md](da-farmer-registry.md) |
+| GET | `/farmers?current_page=&page_size=&filter_by=&search_text=` | One page of the register via `search_in_a_register`, called with the caller's own tokens; `data` is the registry's `response_payload` with each row's `display_fields` turned into plain keys (`field_name` → `value`); `meta` is its `pagination_response`. Geo codes in `filter_by` (`region_code` … `kebele_code`) are filled in or checked from the caller's User Permissions and sent to the registry as `region_name` … `kebele_name`; see [da-farmer-registry.md](da-farmer-registry.md) |
 | GET | `/farmers/{id}/profile` | Profile header and overview (name, phone, email, gender, education, location, total land, land ownership, household size, last visit, `can_edit`) |
 | GET | `/farmers/{id}/plots` | Land records (area, ownership, soil fertility, land use) |
 | GET | `/farmers/{id}/photo` | `photo_url` (signed link, about 1 hour) and `document_id` |
