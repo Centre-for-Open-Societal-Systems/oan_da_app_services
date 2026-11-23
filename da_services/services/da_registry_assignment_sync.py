@@ -11,7 +11,8 @@ created with ``da_registry_id`` set or its ``da_registry_id`` changes:
 3. From the record:
 
    - a **DA RBAC Assignment**: role Development Agent, active, scope from ``region_code``
-     / ``zone_code`` / ``woreda_code``, effective today;
+     / ``zone_code`` / ``woreda_code``, effective today. Skipped when the record has no
+     ``region_code``;
    - a **DA Kebele Assignment** when the record has a ``kebele_code``: state Effective,
      mode Automatic, effective today. Inserting it supersedes the DA's earlier live
      Kebele assignments (see DA Kebele Assignment);
@@ -168,14 +169,15 @@ def _code(record: dict, key: str) -> str | None:
 
 
 def _ensure_rbac_assignment(user: str, record: dict) -> str | None:
-	"""The Development Agent RBAC assignment for the record's area; None if already in place."""
+	"""The Development Agent RBAC assignment for the record's area; None if already in place,
+	or when the record has no ``region_code`` (no RBAC assignment is made then)."""
 	scope = {
 		"region_scope": _code(record, "region_code"),
 		"zone_scope": _code(record, "zone_code"),
 		"woreda_scope": _code(record, "woreda_code"),
 	}
 	if not scope["region_scope"]:
-		raise AssignmentSyncError("The DA Registry record has no region_code")
+		return None
 
 	live = frappe.get_all(
 		RBAC,

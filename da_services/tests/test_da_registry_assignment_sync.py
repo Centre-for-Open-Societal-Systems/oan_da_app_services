@@ -227,11 +227,12 @@ class TestUserHook(IntegrationTestCase):
 		self.assertEqual(self._rbac(user), [])
 		self.assertEqual(self._kebele(user), [])
 
-	def test_a_record_without_region_code_creates_nothing(self):
+	def test_a_record_without_region_code_skips_only_the_rbac_assignment(self):
 		with patch(FETCH, return_value={"kebele_code": "ET04-W01-K01"}):
 			user = self._user().name
 		self.assertEqual(self._rbac(user), [])
-		self.assertEqual(self._kebele(user), [])
+		self.assertEqual(len(self._kebele(user)), 1)
+		self.assertTrue(frappe.db.exists("DA Hierarchy", {"user": user}))
 
 
 class TestHierarchySync(IntegrationTestCase):
