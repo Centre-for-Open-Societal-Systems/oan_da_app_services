@@ -20,6 +20,7 @@ from frappe.utils import get_datetime, getdate, today
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
 from da_services.services import constants as C
+from da_services.services.geo import require_user_for_da
 
 TEMPLATE_DOCTYPE = "DA Survey Template"
 RESPONSE_DOCTYPE = "DA Survey Response"
@@ -301,6 +302,7 @@ def _sync_assignments(doc, da_ids) -> None:
 		frappe.get_doc(
 			{
 				"doctype": "DA Task",
+				"user": require_user_for_da(da_id),
 				"da_id": da_id,
 				"task_type": "Survey due",
 				"title": f"Complete survey: {doc.title}",

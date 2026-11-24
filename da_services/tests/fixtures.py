@@ -8,6 +8,7 @@ _SCHEMA_DOCTYPES = (
 	("da_profile_change_request", "DA Profile Change Request"),
 	("da_integration_event", "DA Integration Event"),
 	("da_survey_parameter", "DA Survey Parameter"),
+	("da_task", "DA Task"),
 )
 
 
@@ -211,6 +212,18 @@ def stamp_visit_geo(name: str, geo: dict) -> None:
 		},
 		update_modified=False,
 	)
+
+
+def stamp_task_geo(name: str, geo: dict) -> None:
+	"""Overwrite task posting codes with live master links (no registry geo fill)."""
+	values = {
+		"region": geo["region"],
+		"zone": geo["zone"],
+		"woreda": geo["woreda"],
+	}
+	if "kebele" in geo and geo["kebele"] is not None:
+		values["kebele"] = geo["kebele"]
+	frappe.db.set_value("DA Task", name, values, update_modified=False)
 
 
 def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic") -> None:

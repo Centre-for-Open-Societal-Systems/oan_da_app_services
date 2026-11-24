@@ -5,7 +5,8 @@
 Refuses to run unless the site has ``developer_mode`` on (or ``force=1`` is passed), and is
 idempotent: every row carries a ``seed-*`` client_op_id or a fixed title, so running it
 again changes nothing. The DA-IDs match the mock DA Registry fixtures (DA-000001 in
-Woreda ET04-W01); with a real registry the posting lookup on insert decides the scope.
+Woreda ET04-W01). Task/Visit create pass ``user=``; ``da_id`` comes from
+``User.da_registry_id``.
 """
 
 from __future__ import annotations
@@ -137,9 +138,16 @@ def _tasks() -> None:
 		("seed-t6", "Visit summary FRM-000101", "Follow-up", f"{add_days(t, -15)} 09:00:00", "Normal", True),
 		("seed-t7", "Seed distribution check", "Survey due", f"{add_days(t, -25)} 09:00:00", "Normal", True),
 	]
+	da_user = "da.demo@da.local"
 	for op, title, ttype, due, priority, done in plan:
 		out = tasks.create_task(
-			title=title, da_id=DA_ID, task_type=ttype, due_at=due, priority=priority, client_op_id=op
+			title=title,
+			user=da_user,
+			da_id=DA_ID,
+			task_type=ttype,
+			due_at=due,
+			priority=priority,
+			client_op_id=op,
 		)
 		if done and out["status"] == "Open":
 			tasks.complete_task(out["name"])

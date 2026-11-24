@@ -199,6 +199,7 @@ class DAVisit(Document):
 		task = frappe.get_doc(
 			{
 				"doctype": "DA Task",
+				"user": self.user,
 				"da_id": self.da_id,
 				"task_type": "Follow-up",
 				"title": f"{title}: {self.farmer_id}" if self.farmer_id else title,
@@ -211,6 +212,7 @@ class DAVisit(Document):
 				"region": self.region,
 				"zone": self.zone,
 				"woreda": self.woreda,
+				"kebele": self.kebele,
 			}
 		)
 		task.insert(ignore_permissions=True)
