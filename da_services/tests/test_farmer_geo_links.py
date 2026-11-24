@@ -173,6 +173,20 @@ class TestFarmerReferenceGeoLinks(IntegrationTestCase):
 		self.assertEqual(profile["name"], "Farmer X")
 		self.assertEqual((profile["region"], profile["woreda"], profile["kebele"]), (None, None, None))
 
+	def test_an_unknown_place_is_not_filled_with_the_readers_own(self):
+		# Frappe defaults an empty Link to the user's single User Permission; the farmer
+		# would then read as living in the reader's own Kebele.
+		agent = _user("geolink-da@da.local", C.ROLE_DA, DA_Kebele=KEBELE_A)
+		with as_user(agent):
+			try:
+				svc.get_farmer_profile(self.NOWHERE)
+			except frappe.PermissionError:
+				pass  # a site with Apply Strict User Permissions refuses an empty place
+		row = frappe.db.get_value(
+			"DA Farmer Reference", self.NOWHERE, ["region", "zone", "woreda", "kebele"], as_dict=True
+		)
+		self.assertEqual(row, NOTHING)
+
 	def test_a_development_agent_reads_the_farmers_of_their_kebele_only(self):
 		agent = _user("geolink-da@da.local", C.ROLE_DA, DA_Kebele=KEBELE_A)
 		with as_user(agent):

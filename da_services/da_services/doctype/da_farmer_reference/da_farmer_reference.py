@@ -12,4 +12,9 @@ class DAFarmerReference(Document):
 	Enables fast profile screens without calling the registry per row.
 	"""
 
-	pass
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		# The place is the registry's. A level the geo masters do not have stays empty: it
+		# is never filled with the saving user's own Region / Zone / Woreda / Kebele (the
+		# default Frappe takes from a single User Permission).
+		self.dont_update_if_missing = ["region", "zone", "woreda", "kebele"]
