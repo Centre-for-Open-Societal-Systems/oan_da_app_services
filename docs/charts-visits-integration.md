@@ -21,23 +21,18 @@ Health stays open: `GET /api/v1/da-services/health` (no token).
 | Who calls | Dashboard **service account**, not a DA/Supervisor user |
 | Grant | Keycloak **client-credentials** in the **staff** realm |
 | Role | Client role **`charts:read`** on this API’s charts client |
-| Local | `charts_auth_enabled: false` (or omit) — Confluence “empty clientId” |
+| Local | Charts Auth Enabled unchecked on **DA Services Settings** — Confluence “empty clientId” |
 | Fail closed | When enabled: missing / invalid token → 401; wrong role → 403 |
 
-### `site_config.json`
+### DA Services Settings → Charts Auth
 
-```json
-{
-  "charts_auth_enabled": true,
-  "charts_auth_issuer": "https://<keycloak>/realms/staff",
-  "charts_auth_audience": "da-services-dashboard-api",
-  "charts_auth_role": "charts:read"
-}
-```
+| Field | Example |
+|-------|---------|
+| Charts Auth Enabled | checked in shared/staging |
+| Charts Auth Issuer | `https://<keycloak>/realms/staff` |
+| Charts Auth Audience | `da-services-dashboard-api` |
 
-Optional: `charts_auth_jwks_url` (defaults to `{issuer}/protocol/openid-connect/certs`).
-
-Audience may appear as JWT `aud` or Keycloak `azp`. Role is read from `resource_access[<audience>].roles`.
+Role is fixed as **`charts:read`**. JWKS is `{issuer}/protocol/openid-connect/certs`. Audience may appear as JWT `aud` or Keycloak `azp`; role is read from `resource_access[<audience>].roles`.
 
 ## Filters
 

@@ -4,8 +4,9 @@ Verifies Bearer JWT against the staff realm: trusted issuer, audience (charts
 client), and role ``charts:read``. Does not use portal user JWT, ``require_roles``,
 or Frappe User provisioning — the BFF is a service account, not a DA session.
 
-Local / isolated tests: leave ``charts_auth_enabled`` false (Confluence empty clientId).
-When enabled, missing or invalid tokens fail closed (401/403).
+Config lives on **DA Services Settings** (Charts Auth section). Local / isolated
+tests: leave Charts Auth Enabled unchecked (Confluence empty clientId). When
+enabled, missing or invalid tokens fail closed (401/403).
 """
 
 from __future__ import annotations
@@ -19,24 +20,28 @@ from jwt import PyJWKClient
 
 from da_services.services import constants as C
 
+SETTINGS = "DA Services Settings"
 _JWKS_CLIENTS: dict[str, PyJWKClient] = {}
+
+
+def _settings():
+	return frappe.get_cached_doc(SETTINGS)
 
 
 def charts_auth_enabled() -> bool:
 	"""Whether chart feeders must verify a staff-realm Bearer token."""
-	return bool(frappe.conf.get("charts_auth_enabled"))
+	return bool(_settings().charts_auth_enabled)
 
 
 def _charts_config() -> dict[str, str]:
-	issuer = str(frappe.conf.get("charts_auth_issuer") or "").rstrip("/")
-	audience = str(frappe.conf.get("charts_auth_audience") or "").strip()
-	role = str(frappe.conf.get("charts_auth_role") or "").strip() or C.CHARTS_READ_ROLE
-	jwks_url = str(frappe.conf.get("charts_auth_jwks_url") or "").strip()
+	settings = _settings()
+	issuer = str(settings.charts_auth_issuer or "").rstrip("/")
+	audience = str(settings.charts_auth_audience or "").strip()
 	return {
 		"issuer": issuer,
 		"audience": audience,
-		"role": role,
-		"jwks_url": jwks_url or (f"{issuer}/protocol/openid-connect/certs" if issuer else ""),
+		"role": C.CHARTS_READ_ROLE,
+		"jwks_url": f"{issuer}/protocol/openid-connect/certs" if issuer else "",
 	}
 
 

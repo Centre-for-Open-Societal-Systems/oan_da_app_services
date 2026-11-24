@@ -36,6 +36,20 @@ DA_ID_2 = "DA-CHARTS-002"
 FARMER_A = "FR-CHARTS-A"
 FARMER_B = "FR-CHARTS-B"
 KPI_KEYS = list(charts_visits.KPI_KEYS)
+SETTINGS = "DA Services Settings"
+CHARTS_AUTH_FIELDS = (
+	"charts_auth_enabled",
+	"charts_auth_issuer",
+	"charts_auth_audience",
+)
+
+
+def _set_charts_auth(**values) -> None:
+	settings = frappe.get_single(SETTINGS)
+	for key, value in values.items():
+		settings.set(key, value)
+	settings.save()
+	frappe.clear_document_cache(SETTINGS, SETTINGS)
 
 
 def _month_bounds() -> tuple[str, str]:
@@ -66,8 +80,13 @@ class TestChartsVisits(IntegrationTestCase):
 
 	def setUp(self):
 		frappe.set_user("Administrator")
-		self._prev_enabled = frappe.conf.get("charts_auth_enabled")
-		frappe.conf.charts_auth_enabled = False
+		settings = frappe.get_single(SETTINGS)
+		self._saved_charts_auth = {k: settings.get(k) for k in CHARTS_AUTH_FIELDS}
+		_set_charts_auth(
+			charts_auth_enabled=0,
+			charts_auth_issuer="",
+			charts_auth_audience="",
+		)
 		cleanup_test_rows(users=(DA_USER,), da_ids=(DA_ID, DA_ID_2), farmer_ids=(FARMER_A, FARMER_B))
 		_user(DA_USER, [C.ROLE_DA])
 		set_da_registry_id(DA_USER, DA_ID)
@@ -77,10 +96,11 @@ class TestChartsVisits(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		cleanup_test_rows(users=(DA_USER,), da_ids=(DA_ID, DA_ID_2), farmer_ids=(FARMER_A, FARMER_B))
-		if self._prev_enabled is None:
-			frappe.conf.pop("charts_auth_enabled", None)
-		else:
-			frappe.conf.charts_auth_enabled = self._prev_enabled
+		restored = {
+			k: (v or 0) if k == "charts_auth_enabled" else (v or "")
+			for k, v in self._saved_charts_auth.items()
+		}
+		_set_charts_auth(**restored)
 
 	def _insert(
 		self,
@@ -237,20 +257,24 @@ class TestChartsVisits(IntegrationTestCase):
 			self.assertIn(key, out[0])
 
 	def test_auth_off_allows_missing_token(self):
-		frappe.conf.charts_auth_enabled = False
+		_set_charts_auth(charts_auth_enabled=0)
 		self.assertIsNone(charts_auth.require_charts_read())
 
 	def test_auth_on_rejects_missing_token(self):
-		frappe.conf.charts_auth_enabled = True
-		frappe.conf.charts_auth_issuer = "https://kc.example/realms/staff"
-		frappe.conf.charts_auth_audience = "da-services-dashboard-api"
+		_set_charts_auth(
+			charts_auth_enabled=1,
+			charts_auth_issuer="https://kc.example/realms/staff",
+			charts_auth_audience="da-services-dashboard-api",
+		)
 		with self.assertRaises(frappe.AuthenticationError):
 			charts_auth.require_charts_read()
 
 	def test_auth_on_accepts_valid_token(self):
-		frappe.conf.charts_auth_enabled = True
-		frappe.conf.charts_auth_issuer = "https://kc.example/realms/staff"
-		frappe.conf.charts_auth_audience = "da-services-dashboard-api"
+		_set_charts_auth(
+			charts_auth_enabled=1,
+			charts_auth_issuer="https://kc.example/realms/staff",
+			charts_auth_audience="da-services-dashboard-api",
+		)
 		claims = {
 			"iss": "https://kc.example/realms/staff",
 			"azp": "da-services-dashboard-api",

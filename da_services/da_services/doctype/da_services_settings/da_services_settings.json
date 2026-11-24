@@ -16,7 +16,11 @@
   "master_sync_username",
   "master_sync_password",
   "col_master_sync",
-  "master_sync_login_key"
+  "master_sync_login_key",
+  "sec_charts_auth",
+  "charts_auth_enabled",
+  "charts_auth_issuer",
+  "charts_auth_audience"
  ],
  "fields": [
   {
@@ -79,13 +83,38 @@
    "fieldname": "farmer_registry_form_register_id",
    "fieldtype": "Data",
    "label": "Farmer Registry Form Register ID"
+  },
+  {
+   "description": "Staff-realm Keycloak client-credentials for the central dashboard Visit chart feeder. Leave Enabled unchecked for local / empty clientId.",
+   "fieldname": "sec_charts_auth",
+   "fieldtype": "Section Break",
+   "label": "Charts Auth"
+  },
+  {
+   "default": "0",
+   "description": "When checked, GET /charts/visits requires a staff-realm Bearer token with client role charts:read.",
+   "fieldname": "charts_auth_enabled",
+   "fieldtype": "Check",
+   "label": "Charts Auth Enabled"
+  },
+  {
+   "description": "Staff-realm issuer URL, e.g. https://keycloak.example/realms/staff. JWKS is {issuer}/protocol/openid-connect/certs.",
+   "fieldname": "charts_auth_issuer",
+   "fieldtype": "Data",
+   "label": "Charts Auth Issuer"
+  },
+  {
+   "description": "Charts API client id (JWT aud or azp), e.g. da-services-dashboard-api",
+   "fieldname": "charts_auth_audience",
+   "fieldtype": "Data",
+   "label": "Charts Auth Audience"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-21 18:41:10.373640",
+ "modified": "2026-11-24 17:50:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",

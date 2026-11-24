@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-charts",
     "name": "OAN DA Charts",
-    "description": "Central dashboard Visit chart feeder (Confluence Dashboard APIs contract).\n\nBase path: /api/v1/da-services\n\nRoute: GET /charts/visits → **raw JSON array** (no status/data envelope).\nChart id for BFF: `visits`\n\n## Auth\nKeycloak staff realm client-credentials + role `charts:read`.\nLeave `charts_client_id` empty for local (`charts_auth_enabled` false).\nWhen client id is set, the collection pre-request fetches a token from `charts_token_url`.\n\n## Query params\n| Param | Env key | Notes |\n|-------|---------|-------|\n| region, zone, woreda, kebele | same | Empty / `all` = no filter |\n| from, to | same | Inclusive calendar days on `scheduled_at`. Both omitted → current month |\n| da_id, visit_type, status | same | Optional equality (`status` → `physical_status`) |\n| groupBy | groupBy | Omit → one KPI object. Else `visit_type` \\| `woreda` \\| `da_id` \\| `month` |\n\n## Docs\ndocs/charts-visits-integration.md",
+    "description": "Central dashboard Visit chart feeder (Confluence Dashboard APIs contract).\n\nBase path: /api/v1/da-services\n\nRoute: GET /charts/visits → **raw JSON array** (no status/data envelope).\nChart id for BFF: `visits`\n\n## Auth\nKeycloak staff realm client-credentials + role `charts:read`.\nLeave `charts_client_id` empty for local (Charts Auth Enabled unchecked on DA Services Settings).\nWhen client id is set, the collection pre-request fetches a token from `charts_token_url`.\n\n## Query params\n| Param | Env key | Notes |\n|-------|---------|-------|\n| region, zone, woreda, kebele | same | Empty / `all` = no filter |\n| from, to | same | Inclusive calendar days on `scheduled_at`. Both omitted → current month |\n| da_id, visit_type, status | same | Optional equality (`status` → `physical_status`) |\n| groupBy | groupBy | Omit → one KPI object. Else `visit_type` \\| `woreda` \\| `da_id` \\| `month` |\n\n## Docs\ndocs/charts-visits-integration.md",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -105,7 +105,7 @@
     },
     {
       "name": "1. Visits chart",
-      "description": "GET /charts/visits — raw KPI array for BFF chart id `visits`. Sample bodies captured against local site with charts_auth_enabled=false (counts reflect that site's visit data).",
+      "description": "GET /charts/visits — raw KPI array for BFF chart id `visits`. Sample bodies captured against local site with Charts Auth Enabled unchecked (counts reflect that site's visit data).",
       "item": [
         {
           "name": "Visits KPI (default month)",
