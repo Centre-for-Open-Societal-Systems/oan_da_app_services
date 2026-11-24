@@ -88,6 +88,55 @@ def ancestors_of_zone(zone: str) -> dict:
 	return {"kebele": None, "woreda": None, "zone": zone, "region": region}
 
 
+def codes_for_names(
+	*,
+	region: str | None = None,
+	zone: str | None = None,
+	woreda: str | None = None,
+	kebele: str | None = None,
+) -> dict:
+	"""Master codes for a place a registry gives by its names (``Tigray``, ``Lekatit``).
+
+	Walks down from the Region. A level is looked up by its name under the level above,
+	so two Kebeles of the same name in different Woredas are told apart; a value that is
+	already a master code is kept. The walk stops at the first name the masters do not
+	have (or have more than once): that level and the ones below it stay None, as a
+	place is never guessed. A level given no name is skipped, and the levels above the
+	deepest one found are filled from its Link parents.
+	"""
+	out: dict = {"region": None, "zone": None, "woreda": None, "kebele": None}
+	parent = None
+	for level, value in (("region", region), ("zone", zone), ("woreda", woreda), ("kebele", kebele)):
+		doctype = LEVEL_DOCTYPE[level]
+		value = (value or "").strip()
+		if not value:
+			parent = None
+			continue
+		if frappe.db.exists(doctype, value):
+			code = value
+		else:
+			filters = {NAME_FIELD[doctype]: value}
+			if parent:
+				filters[PARENT_FIELD[doctype]] = parent
+			found = frappe.get_all(doctype, filters=filters, pluck="name", limit=2)
+			code = found[0] if len(found) == 1 else None
+		if not code:
+			break
+		parent = out[level] = code
+
+	if out["kebele"]:
+		known = ancestors_of_kebele(out["kebele"])
+	elif out["woreda"]:
+		known = ancestors_of_woreda(out["woreda"])
+	elif out["zone"]:
+		known = ancestors_of_zone(out["zone"])
+	else:
+		known = {}
+	for level in out:
+		out[level] = out[level] or known.get(level)
+	return out
+
+
 def require_active_master(doctype: str, name: str | None, label: str) -> dict:
 	"""Active master row or ValidationError."""
 	name = (name or "").strip() or None
