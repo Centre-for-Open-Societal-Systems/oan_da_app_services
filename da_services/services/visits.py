@@ -192,12 +192,11 @@ def plan_visit(
 	da_id: str | None = None,
 	client_op_id: str | None = None,
 ) -> dict:
-	"""Plan one visit. ``user`` is required from the FE; ``da_id`` is ``fetch_from`` that User.
+	"""Plan one visit. ``user`` is required from the FE.
 
 	No role / scope / permission helpers here — Frappe DocType Role permissions + User Permissions own access.
-	``da_id`` on the request is ignored for the row (fetch_from); it is only accepted for
-	backward-compatible callers and unused. Specialization uses ``User.da_registry_id``.
-	``farmer_name`` is an FE snapshot (required DocType field); no registry lookup.
+	``da_id`` is optional (DocType ``fetch_from: user.da_registry_id`` when present). Body ``da_id`` is
+	legacy/envelope only. ``farmer_name`` is an FE snapshot (required DocType field); no registry lookup.
 	"""
 	if not farmer_id:
 		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
@@ -209,19 +208,19 @@ def plan_visit(
 	user = (user or "").strip()
 	if not user:
 		frappe.throw(_("user is required."), frappe.ValidationError)
-	# ``da_id`` kept for API/batch envelope compatibility; row uses User.da_registry_id.
+	# ``da_id`` kept for API/batch envelope compatibility; optional on the row.
 
 	if client_op_id:
 		existing = frappe.db.get_value("DA Visit", {"client_op_id": client_op_id}, "name")
 		if existing:
 			return serialize(frappe.get_doc("DA Visit", existing))
 
-	# Product-rule data only. Row ``da_id`` is filled by DocType fetch_from.
-	registry_da = frappe.db.get_value("User", user, "da_registry_id")
-	if not registry_da:
-		frappe.throw(_("user has no DA Registry ID."), frappe.ValidationError)
-
-	new_specializations = spec_svc.derive_visit_specializations(visit_type or "Crop Survey", registry_da)
+	# ``da_id`` is optional — do not require / stamp from User.da_registry_id on plan.
+	# DocType fetch_from still fills when the User has da_registry_id.
+	# registry_da = frappe.db.get_value("User", user, "da_registry_id")
+	# if not registry_da:
+	# 	frappe.throw(_("user has no DA Registry ID."), frappe.ValidationError)
+	new_specializations = spec_svc.derive_visit_specializations(visit_type or "Crop Survey", "")
 	conflict = _check_specialization_conflict(farmer_id, new_specializations)
 	if conflict:
 		frappe.throw(
@@ -236,8 +235,8 @@ def plan_visit(
 		{
 			"doctype": "DA Visit",
 			"user": user,
-			# Same value as fetch_from; set so DocType create permission sees da_id.
-			"da_id": registry_da,
+			# Optional: DocType fetch_from fills when User.da_registry_id is set.
+			# "da_id": registry_da,
 			"farmer_id": farmer_id,
 			"farmer_name": farmer_name,
 			"visit_type": visit_type or "Crop Survey",

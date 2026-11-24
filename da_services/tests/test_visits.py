@@ -55,6 +55,9 @@ class TestDAVisit(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user(ADMIN)
 		cleanup_test_rows(users=self.USERS, da_ids=self.DA_IDS)
+		# Rows with blank region pass every geo User Permission filter and poison scope asserts.
+		for name in frappe.get_all("DA Visit", filters={"region": ["is", "not set"]}, pluck="name"):
+			frappe.delete_doc("DA Visit", name, ignore_permissions=True, force=True)
 		self.geo = live_geo()
 		_user(DA1, [C.ROLE_DA])
 		_user(DA3, [C.ROLE_DA])

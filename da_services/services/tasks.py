@@ -60,22 +60,22 @@ def create_task(
 	woreda: str | None = None,
 	kebele: str | None = None,
 ) -> dict:
-	"""Create one task. ``user`` is required from the FE; ``da_id`` is ``fetch_from`` that User.
+	"""Create one task. ``user`` is required from the FE.
 
 	No role / scope / permission helpers here — Frappe DocType Role permissions + User Permissions own access.
-	``da_id`` on the request is ignored for the row (fetch_from); it is only accepted for
-	backward-compatible callers and unused. Optional geo stamps come from the caller / masters / tests.
+	``da_id`` is optional (DocType ``fetch_from: user.da_registry_id`` when present). Body ``da_id`` is
+	legacy/envelope only. Optional geo stamps come from the caller / masters / tests.
 	"""
 	if not (title or "").strip():
 		frappe.throw(_("title is required."), frappe.ValidationError)
 	user = (user or "").strip()
 	if not user:
 		frappe.throw(_("user is required."), frappe.ValidationError)
-	# ``da_id`` kept for API/envelope compatibility; row uses User.da_registry_id.
-
-	registry_da = frappe.db.get_value("User", user, "da_registry_id")
-	if not registry_da:
-		frappe.throw(_("user has no DA Registry ID."), frappe.ValidationError)
+	# ``da_id`` kept for API/envelope compatibility; optional on the row.
+	# Do not require / stamp from User.da_registry_id — DocType fetch_from fills when set.
+	# registry_da = frappe.db.get_value("User", user, "da_registry_id")
+	# if not registry_da:
+	# 	frappe.throw(_("user has no DA Registry ID."), frappe.ValidationError)
 
 	if client_op_id:
 		existing = frappe.db.get_value("DA Task", {"client_op_id": client_op_id}, "name")
@@ -87,7 +87,8 @@ def create_task(
 		{
 			"doctype": "DA Task",
 			"user": user,
-			"da_id": registry_da,  # same as fetch_from; set so create permission sees da_id
+			# Optional: DocType fetch_from fills when User.da_registry_id is set.
+			# "da_id": registry_da,
 			"task_type": task_type or "Custom",
 			"title": title.strip(),
 			"description": description,
