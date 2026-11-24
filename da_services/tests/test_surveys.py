@@ -15,7 +15,7 @@ from openpyxl import load_workbook
 from da_services.api.v1 import surveys as api
 from da_services.services import constants as C
 from da_services.services import surveys as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_doctype_schema
+from da_services.tests.fixtures import create_administrative_areas, ensure_doctype_schema, set_da_registry_id
 
 DA1 = "srv-da1@da.local"  # DA-000001, ET04-W01
 DA2 = "srv-da2@da.local"  # DA-000002, ET04-W01
@@ -82,6 +82,9 @@ class TestSurveys(IntegrationTestCase):
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA2, "DA-000002")
+		set_da_registry_id(DA3, "DA-000004")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
