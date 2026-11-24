@@ -73,6 +73,7 @@ def _register() -> None:
 		assignments,
 		attendance_punches,
 		beneficiary,
+		charts,
 		crop_sown,
 		da,
 		dashboard,
