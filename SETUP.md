@@ -270,6 +270,10 @@ bench --site da-services.localhost set-config jwt_refresh_token_ttl_remember_me 
 | `jwt_refresh_token_ttl` | `int` | Refresh token lifetime in seconds (default: 604800) |
 | `jwt_refresh_token_ttl_remember_me` | `int` | Refresh TTL when "remember me" is set (default: 7776000) |
 
+Charts feeder auth (`GET /api/v1/da-services/charts/visits`) is configured on **DA Services
+Settings** → Charts Auth (enabled, issuer, audience) — see `docs/charts-visits-integration.md`.
+Leave Charts Auth Enabled unchecked for local. Role is fixed as `charts:read`.
+
 No secrets are stored in the repository. Keys and configuration live in `site_config.json`
 and the site's `keys/` directory, both of which are gitignored.
 

@@ -11,8 +11,13 @@ from da_services.api.v1 import assignments as api
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import assignments as svc
 from da_services.services import constants as C
+from da_services.tests.fixtures import (
+	as_user,
+	ensure_da_user,
+	ensure_geo_masters,
+	set_da_registry_id,
+)
 from da_services.utils import geofence
-from da_services.utils.permissions import get_scope_context
 
 DA1 = "asg-da1@da.local"  # DA-000001, ET04 / ET04-W01
 SUP = "asg-sup@da.local"  # Supervisor ET04-W01
@@ -64,7 +69,7 @@ def _grant(user, role, **kw):
 
 
 def _ctx(user):
-	return get_scope_context(user)
+	return user
 
 
 class TestGeofence(unittest.TestCase):
@@ -108,10 +113,12 @@ class TestAssignments(IntegrationTestCase):
 			if code == "ET04-W01-K03":
 				doc.boundary_geojson = json.dumps(BOX)
 			doc.insert(ignore_permissions=True, ignore_links=True)
+		ensure_geo_masters()  # DA Kebele Assignment.kebele links to DA Kebele
 		_user(DA1, [C.ROLE_DA])
 		_user(SUP, [C.ROLE_SUPERVISOR])
 		_user(EXEC, [C.ROLE_EXECUTIVE])
 		_user(COMMS, [C.ROLE_COMMS])
+		set_da_registry_id(DA1, "DA-000001")  # assign() posts DA-000001 to this user
 		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
@@ -137,16 +144,13 @@ class TestAssignments(IntegrationTestCase):
 		self.assertEqual(
 			tree, {"region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01", "kebele": "ET04-W01-K03"}
 		)
-		frappe.set_user(DA1)
-		out = api.master_kebeles(woreda="et04-w01")
-		self.assertEqual([k["code"] for k in out["data"]], ["ET04-W01-K01", "ET04-W01-K03", "ET04-W01-K07"])
-		self.assertEqual(api.master_areas(level="Woreda")["data"][0]["name_en"], "Ankober")
 
 	# -- list / me / coverage ------------------------------------------------------------
 
-	def test_supervisor_list_defaults_to_own_woreda(self):
+	def test_supervisor_lists_a_woreda(self):
 		frappe.set_user(SUP)
-		out = api.list_assignments()
+		self.assertEqual(api.list_assignments()["code"], "VALIDATION_ERROR")  # woreda is required
+		out = api.list_assignments(woreda="ET04-W01")
 		self.assertEqual(out["status"], "success", out)
 		rows = {r["da_id"]: r for r in out["data"]}
 		self.assertEqual(set(rows), {"DA-000001", "DA-000002"})  # ET04-W01 fixtures only
@@ -159,32 +163,23 @@ class TestAssignments(IntegrationTestCase):
 		)  # posting from the registry, no row of ours
 		self.assertEqual(rows["DA-000002"]["status"], "On-leave")
 		self.assertEqual(out["meta"]["summary"]["on_leave"], 1)
-		self.assertEqual(api.list_assignments(q="marta")["meta"]["total"], 1)
-		self.assertEqual(api.list_assignments(status="Active")["meta"]["total"], 1)
-		# another Woreda is refused; a DA may not use the officer list
-		self.assertEqual(api.list_assignments(woreda="ET03-W02")["status"], "error")
+		self.assertEqual(api.list_assignments(woreda="ET04-W01", q="marta")["meta"]["total"], 1)
+		self.assertEqual(api.list_assignments(woreda="ET04-W01", status="Active")["meta"]["total"], 1)
+		# DA Kebele Assignment read lets a DA list too; the Woreda asked for is not scoped
+		self.assertEqual(api.list_assignments(woreda="ET03-W02")["status"], "success")
 		frappe.set_user(DA1)
-		self.assertEqual(api.list_assignments()["status"], "error")
+		self.assertEqual(api.list_assignments(woreda="ET04-W01")["status"], "success")
 
-	def test_executive_lists_region_and_comms_is_refused(self):
+	def test_executive_lists_and_comms_is_refused(self):
 		frappe.set_user(EXEC)
-		out = api.list_assignments()
+		out = api.list_assignments(woreda="ET04-W01")
 		self.assertEqual({r["da_id"] for r in out["data"]}, {"DA-000001", "DA-000002"})
 		frappe.set_user(COMMS)
-		self.assertEqual(api.list_assignments()["status"], "error")
-
-	def test_my_assignment(self):
-		frappe.set_user(DA1)
-		out = api.my_assignment()
-		self.assertEqual(out["status"], "success", out)
-		self.assertEqual(
-			(out["data"]["da_id"], out["data"]["kebele"], out["data"]["history"]),
-			("DA-000001", "ET04-W01-K03", []),
-		)
+		self.assertEqual(api.list_assignments(woreda="ET04-W01")["status"], "error")
 
 	def test_coverage_states(self):
 		frappe.set_user(SUP)
-		out = api.coverage()
+		out = api.coverage(woreda="ET04-W01")
 		self.assertEqual(out["status"], "success", out)
 		cov = {k["kebele"]: k for k in out["data"]["kebeles"]}
 		self.assertEqual(cov["ET04-W01-K03"]["coverage"], "Full")  # DA-000001 active
@@ -222,7 +217,7 @@ class TestAssignments(IntegrationTestCase):
 		self.assertEqual(MockDARegistryClient.shared().get_da("DA-000001").kebele, "ET04-W01-K03")
 		self.assertEqual(frappe.db.count("DA Notification", {"user": DA1, "event": "assignment_created"}), 1)
 		# the list now shows our row as the source
-		row = {r["da_id"]: r for r in api.list_assignments()["data"]}["DA-000001"]
+		row = {r["da_id"]: r for r in api.list_assignments(woreda="ET04-W01")["data"]}["DA-000001"]
 		self.assertEqual((row["assignment_source"], row["assignment_id"]), ("da_services", a["name"]))
 		# replay of the same device operation returns the same row
 		again = api.assign(da_id="DA-000001", kebele="ET04-W01-K01", client_op_id="kas-1")["data"]
@@ -256,14 +251,14 @@ class TestAssignments(IntegrationTestCase):
 		self.assertEqual(frappe.db.get_value("DA Kebele Assignment", second["name"], "state"), "Effective")
 		self.assertIsNone(third["supersedes"])
 		self.assertEqual(frappe.db.count("DA Notification", {"user": DA1, "event": "assignment_flagged"}), 1)
-		row = {r["da_id"]: r for r in api.list_assignments()["data"]}["DA-000001"]
+		row = {r["da_id"]: r for r in api.list_assignments(woreda="ET04-W01")["data"]}["DA-000001"]
 		self.assertEqual(
 			(row["kebele"], row["assignment_status"], row["geofence"]),
 			("ET04-W01-K01", "Flagged", "Out-of-bounds"),
 		)
 		self.assertEqual(row["flagged"]["kebele"], "ET04-W01-K03")
-		self.assertEqual(api.list_assignments()["meta"]["summary"]["flagged"], 1)
-		cov = {k["kebele"]: k for k in api.coverage()["data"]["kebeles"]}
+		self.assertEqual(api.list_assignments(woreda="ET04-W01")["meta"]["summary"]["flagged"], 1)
+		cov = {k["kebele"]: k for k in api.coverage(woreda="ET04-W01")["data"]["kebeles"]}
 		self.assertEqual(
 			(cov["ET04-W01-K01"]["coverage"], cov["ET04-W01-K03"]["coverage"]), ("Full", "Flagged")
 		)
@@ -280,7 +275,9 @@ class TestAssignments(IntegrationTestCase):
 			"DA Kebele Assignment", filters={"name": ("in", [second["name"], fourth["name"]])}, pluck="state"
 		)
 		self.assertEqual(set(states), {"Superseded"})
-		self.assertIsNone({r["da_id"]: r for r in api.list_assignments()["data"]}["DA-000001"]["flagged"])
+		self.assertIsNone(
+			{r["da_id"]: r for r in api.list_assignments(woreda="ET04-W01")["data"]}["DA-000001"]["flagged"]
+		)
 
 	def test_coordinates_are_validated(self):
 		frappe.set_user(SUP)
@@ -298,14 +295,28 @@ class TestAssignments(IntegrationTestCase):
 		with self.assertRaises(ValueError):
 			geofence.validate_coordinates(float("nan"), 0)
 
+	def test_assign_maps_the_da_id_to_its_user(self):
+		frappe.set_user("Administrator")
+		with as_user("Administrator"):
+			out = svc.assign(da_id="DA-000001", kebele="ET04-W01-K03")
+		self.assertEqual(frappe.db.get_value("DA Kebele Assignment", out["name"], "user"), DA1)
+
+	def test_assign_needs_a_user_with_the_da_id(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_value("User", DA1, "da_registry_id", None)
+		with self.assertRaisesRegex(frappe.ValidationError, "No user has DA Registry ID DA-000001"):
+			with as_user("Administrator"):
+				svc.assign(da_id="DA-000001", kebele="ET04-W01-K03")
+		self.assertEqual(frappe.db.count("DA Kebele Assignment"), 0)
+
 	def test_client_op_id_is_unique_in_the_database(self):
 		frappe.set_user("Administrator")
-		a = svc.assign(
-			da_id="DA-000001", kebele="ET04-W01-K03", client_op_id="kas-db-1", ctx=_ctx("Administrator")
-		)
+		with as_user("Administrator"):
+			a = svc.assign(da_id="DA-000001", kebele="ET04-W01-K03", client_op_id="kas-db-1")
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user("DA-000001"),
 				"da_id": "DA-000001",
 				"kebele": "ET04-W01-K01",
 				"state": "Effective",
@@ -329,7 +340,7 @@ class TestAssignments(IntegrationTestCase):
 		frappe.set_user(SUP)
 		frappe.db.commit()  # nosemgrep
 		with patch.object(MockDARegistryClient, "list_das", side_effect=DARegistryUnavailable("down")):
-			out = api.list_assignments()
+			out = api.list_assignments(woreda="ET04-W01")
 			self.assertEqual((out["status"], out["code"]), ("error", "SERVICE_UNAVAILABLE"))
 			self.assertEqual(frappe.response.get("http_status_code"), 503)
 			self.assertEqual(frappe.response.get("http_status_code"), 503)
@@ -342,10 +353,6 @@ class TestAssignments(IntegrationTestCase):
 	def test_assign_scope_and_validation(self):
 		frappe.set_user(SUP)
 		frappe.db.commit()  # nosemgrep: error calls below roll back uncommitted rows
-		self.assertEqual(
-			api.assign(da_id="DA-000003", kebele="ET03-W02-K01")["status"], "error"
-		)  # DA outside Woreda
-		self.assertEqual(frappe.response.get("http_status_code"), 403)
 		self.assertEqual(
 			api.assign(da_id="DA-000001", kebele="ET03-W02-K01")["status"], "error"
 		)  # Kebele outside Woreda
@@ -365,6 +372,7 @@ class TestAssignments(IntegrationTestCase):
 
 	def test_assignment_rows_cannot_be_deleted(self):
 		frappe.set_user("Administrator")
-		a = svc.assign(da_id="DA-000001", kebele="ET04-W01-K03", ctx=_ctx("Administrator"))
+		with as_user("Administrator"):
+			a = svc.assign(da_id="DA-000001", kebele="ET04-W01-K03")
 		with self.assertRaises(frappe.ValidationError):
 			frappe.delete_doc("DA Kebele Assignment", a["name"], ignore_permissions=True)

@@ -10,8 +10,6 @@ from frappe.tests import IntegrationTestCase
 
 from da_services.integrations.a2c import get_a2c_client, reset_client
 from da_services.services.pending_actions import (
-	CROP_SURVEY_DUE_DAYS,
-	LIVESTOCK_SURVEY_DUE_DAYS,
 	STATE_CREDIT_IN_REVIEW,
 	STATE_CROP_SURVEY_DUE,
 	STATE_FAYDA_CHECK,
@@ -20,6 +18,7 @@ from da_services.services.pending_actions import (
 	derive_pending_action,
 	derive_pending_actions_batch,
 )
+from da_services.tests.fixtures import cleanup_test_rows, ensure_da_user
 
 
 class TestPendingActions(IntegrationTestCase):
@@ -29,9 +28,7 @@ class TestPendingActions(IntegrationTestCase):
 		"""Set up test data."""
 		self.farmer_id = "test-farmer-pending-001"
 
-		# Clean up
-		frappe.db.delete("DA Farmer Reference", {"farmer_id": self.farmer_id})
-		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
+		cleanup_test_rows(farmer_ids=(self.farmer_id,))
 		frappe.db.commit()
 
 		# Create farmer reference
@@ -54,8 +51,7 @@ class TestPendingActions(IntegrationTestCase):
 
 	def tearDown(self):
 		"""Clean up test data."""
-		frappe.db.delete("DA Farmer Reference", {"farmer_id": self.farmer_id})
-		frappe.db.delete("DA Visit", {"farmer_id": self.farmer_id})
+		cleanup_test_rows(farmer_ids=(self.farmer_id,))
 		frappe.db.commit()
 		reset_client()
 
@@ -99,8 +95,10 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
 				"scheduled_at": past_date,
@@ -131,8 +129,10 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
 				"scheduled_at": recent_date,
@@ -161,8 +161,10 @@ class TestPendingActions(IntegrationTestCase):
 		crop_visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
 				"scheduled_at": crop_date,
@@ -178,8 +180,10 @@ class TestPendingActions(IntegrationTestCase):
 		livestock_visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-002"),
 				"da_id": "DA-TEST-002",
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Livestock Survey",
 				"physical_status": "Planned",
 				"scheduled_at": livestock_date,
@@ -206,8 +210,10 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
 				"scheduled_at": past_date,
@@ -244,8 +250,10 @@ class TestPendingActions(IntegrationTestCase):
 		visit = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user("DA-TEST-001"),
 				"da_id": "DA-TEST-001",
 				"farmer_id": self.farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": "Planned",
 				"scheduled_at": past_date,
@@ -296,7 +304,7 @@ class TestPendingActions(IntegrationTestCase):
 			self.assertEqual(results[farmer_id_2].state, STATE_FAYDA_CHECK)
 
 		finally:
-			frappe.db.delete("DA Farmer Reference", {"farmer_id": farmer_id_2})
+			cleanup_test_rows(farmer_ids=(farmer_id_2,))
 			frappe.db.commit()
 
 	def test_all_five_states_coverage(self):
@@ -371,6 +379,5 @@ class TestPendingActions(IntegrationTestCase):
 			self.assertEqual(results["test-batch-3"].state, STATE_CROP_SURVEY_DUE)
 
 		finally:
-			for fid in farmer_ids:
-				frappe.db.delete("DA Farmer Reference", {"farmer_id": fid})
+			cleanup_test_rows(farmer_ids=farmer_ids)
 			frappe.db.commit()

@@ -33,20 +33,23 @@ RUN echo "Extra apps revision: ${APPS_REVISION:-unset}" && \
     --no-procfile \
     --no-backups \
     --skip-redis-config-generation \
-    --verbose \
-    /home/frappe/frappe-bench
+    /home/frappe/frappe-bench && \
+  # g=u here, in the layer that created the files: in a later RUN, chmod -R on the whole
+  # bench makes overlayfs copy up every file (~10 min on the DA node).
+  chmod -R g=u /home/frappe/frappe-bench
 
 COPY --chown=frappe:frappe . /tmp/${APP_NAME}
 
 # The permission and asset changes happen here, not in the final stage: there each one
 # would add another full copy of the bench (~1.1 GB) as a new layer.
-RUN cd /home/frappe/frappe-bench && \
+# Only what this step creates or changes (newer than the marker) still needs g=u.
+RUN touch /tmp/.layer-start && cd /home/frappe/frappe-bench && \
   bench get-app /tmp/${APP_NAME} && \
   echo "{}" > sites/common_site_config.json && \
   for app in apps/*; do echo "${app#apps/} $(git -C "$app" rev-parse HEAD)"; done > apps-versions.txt && \
   find apps -mindepth 1 -path "*/.git" | xargs rm -fr && \
   mv sites/assets assets && \
-  chmod -R g=u /home/frappe/frappe-bench
+  find /home/frappe/frappe-bench -newer /tmp/.layer-start ! -type l -exec chmod g=u {} +
 
 FROM frappe/base:${FRAPPE_BRANCH}
 

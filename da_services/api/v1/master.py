@@ -30,7 +30,6 @@ from da_services.integrations.master import (
 )
 from da_services.integrations.master.client import base_url_from_domain
 from da_services.services import constants as C
-from da_services.utils.permissions import require_roles
 
 _ATTRIBUTE_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
@@ -75,7 +74,6 @@ def get_master_data(**kwargs):
 	"""Query: ``data_type`` (geo or attribute), ``field_name`` (a level for geo, an attribute id for
 	attribute), optional ``parent`` (the parent's code or id), ``search`` (search text),
 	``current_page`` (default 1) and ``page_size`` (default 100, at most 1000)."""
-	require_roles(*C.DA_SERVICES_ROLES, *C.UNRESTRICTED_ROLES)
 	b = request_fields(kwargs, "data_type", "field_name", "parent", "search", "current_page", "page_size")
 	data_type = (b.get("data_type") or "").strip().lower()
 	field_name = (b.get("field_name") or "").strip()

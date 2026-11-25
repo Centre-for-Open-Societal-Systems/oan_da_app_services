@@ -69,7 +69,7 @@ def _full(doc) -> dict:
 @frappe.whitelist()
 @handle_api_errors
 def list_articles(category=None, source=None, status=None, language=None, search=None, limit=20, start=0):
-	ctx = common.read_ctx()
+	common.read_ctx("KB Article")
 	extra = None
 	if language:
 		matching = frappe.get_all(
@@ -78,7 +78,6 @@ def list_articles(category=None, source=None, status=None, language=None, search
 		extra = {"name": ("in", list(set(matching)) or ["__none__"])}
 	rows, meta = common.list_items(
 		DOCTYPE,
-		ctx,
 		fields=LIST_FIELDS,
 		search_fields=("title", "summary"),
 		category=category,
@@ -107,15 +106,15 @@ def list_articles(category=None, source=None, status=None, language=None, search
 @frappe.whitelist()
 @handle_api_errors
 def get_article(article_id: str):
-	ctx = common.read_ctx()
-	return success_response(data=_full(common.get_item(DOCTYPE, article_id, ctx)))
+	common.read_ctx("KB Article")
+	return success_response(data=_full(common.get_item(DOCTYPE, article_id)))
 
 
 @route(f"{BASE}", methods=("POST",), status=201, summary="Create a knowledge-base article")
 @frappe.whitelist(methods=["POST"])
 @handle_api_errors
 def create_article(**kwargs):
-	common.write_ctx()
+	common.write_ctx("KB Article")
 	data = common.request_body(kwargs)
 	doc = frappe.new_doc(DOCTYPE)
 	common.apply_fields(doc, data, SCALARS, TABLES)
@@ -127,10 +126,10 @@ def create_article(**kwargs):
 @frappe.whitelist(methods=["PATCH", "POST"])
 @handle_api_errors
 def update_article(article_id: str, **kwargs):
-	ctx = common.write_ctx()
+	common.write_ctx("KB Article")
 	data = common.request_body(kwargs)
 	data.pop("article_id", None)
-	doc = common.get_item(DOCTYPE, article_id, ctx)
+	doc = common.get_item(DOCTYPE, article_id)
 	common.apply_fields(doc, data, SCALARS, TABLES)
 	doc.save()
 	return success_response(data=_full(doc), message="Article updated")

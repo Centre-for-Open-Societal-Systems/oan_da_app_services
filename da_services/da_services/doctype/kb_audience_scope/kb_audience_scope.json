@@ -16,27 +16,27 @@
    "fieldname": "region",
    "fieldtype": "Link",
    "label": "Region",
-   "options": "DA Administrative Area",
+   "options": "DA Region",
    "in_list_view": 1
   },
   {
    "fieldname": "zone",
    "fieldtype": "Link",
    "label": "Zone",
-   "options": "DA Administrative Area",
+   "options": "DA Zone",
    "in_list_view": 1
   },
   {
    "fieldname": "woreda",
    "fieldtype": "Link",
    "label": "Woreda",
-   "options": "DA Administrative Area",
+   "options": "DA Woreda",
    "in_list_view": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-09 12:00:00.000000",
+ "modified": "2026-11-14 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "KB Audience Scope",

@@ -21,10 +21,7 @@ import frappe
 from frappe import _
 
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext, require_roles
-
-READ_ROLES = (*C.DA_SERVICES_ROLES, C.ROLE_COMMS, "System Manager")
-WRITE_ROLES = (C.ROLE_ADMIN, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, "System Manager")
+from da_services.utils.permissions import granted_areas, require_permission
 
 MAX_PAGE_LENGTH = 100
 STATUSES = ("Draft", "Published", "Archived")
@@ -34,16 +31,17 @@ SCOPE_FIELDS = ("region", "zone", "woreda")
 # ---- request helpers -------------------------------------------------------------------
 
 
-def read_ctx() -> ScopeContext:
-	return require_roles(*READ_ROLES)
+def read_ctx(doctype: str) -> None:
+	require_permission(doctype, "read")
 
 
-def write_ctx() -> ScopeContext:
-	return require_roles(*WRITE_ROLES)
+def write_ctx(doctype: str) -> None:
+	require_permission(doctype, "write")
 
 
-def is_writer(ctx: ScopeContext) -> bool:
-	return ctx.has_any_role(*WRITE_ROLES)
+def is_writer(doctype: str) -> bool:
+	"""An editor of `doctype` (its `write` permission) sees every status and audience."""
+	return frappe.has_permission(doctype, "write", user=frappe.session.user)
 
 
 def clamp_page(limit, start) -> tuple[int, int]:
@@ -72,20 +70,24 @@ def not_found(doctype: str, name: str):
 # ---- audience --------------------------------------------------------------------------
 
 
-def _reach(ctx: ScopeContext) -> set[str]:
+def _reach() -> set[str]:
 	"""Every area the user's grants touch: the grants, everything below them, and the
 	ancestors above them (content aimed at a Region reaches a Woreda user inside it)."""
-	# Narrowest grant wins (same rule as ScopeContext.scope_decision): the Region on an
-	# assignment that also names a Zone or Woreda is context, not a grant of the Region.
-	grants = set(ctx.zone_scopes) | set(ctx.woreda_scopes) or set(ctx.region_scopes)
+	# Narrowest grant wins: the Region on an assignment that also names a Zone or Woreda is
+	# context, not a grant of the Region.
+	areas = granted_areas()
+	grants = set(areas["zones"]) | set(areas["woredas"]) or set(areas["regions"])
 	if not grants:
 		return set()
 	parent: dict[str, str | None] = {}
 	children: dict[str, list[str]] = {}
-	for row in frappe.get_all("DA Administrative Area", fields=["name", "parent_area"]):
-		parent[row.name] = row.parent_area
-		if row.parent_area:
-			children.setdefault(row.parent_area, []).append(row.name)
+	# The geo masters: RBAC scopes and KB Audience Scope rows both link to them.
+	for doctype, parent_field in (("DA Zone", "region"), ("DA Woreda", "zone"), ("DA Kebele", "woreda")):
+		for row in frappe.get_all(doctype, fields=["name", parent_field], limit_page_length=0):
+			up = row.get(parent_field)
+			parent[row.name] = up
+			if up:
+				children.setdefault(up, []).append(row.name)
 	reach, stack = set(grants), list(grants)
 	while stack:  # descendants
 		for child in children.get(stack.pop(), []):
@@ -124,11 +126,11 @@ def _in_audience(rows: list[dict], reach: set[str]) -> bool:
 	return False
 
 
-def visible_names(ctx: ScopeContext, doctype: str, names: list[str]) -> set[str]:
+def visible_names(doctype: str, names: list[str]) -> set[str]:
 	"""Subset of `names` this reader's audience covers."""
-	if is_writer(ctx):
+	if is_writer(doctype):
 		return set(names)
-	rows, reach = _audience_rows(doctype, names), _reach(ctx)
+	rows, reach = _audience_rows(doctype, names), _reach()
 	return {n for n in names if _in_audience(rows.get(n, []), reach)}
 
 
@@ -137,7 +139,6 @@ def visible_names(ctx: ScopeContext, doctype: str, names: list[str]) -> set[str]
 
 def list_items(
 	doctype: str,
-	ctx: ScopeContext,
 	*,
 	fields: list[str],
 	search_fields: tuple[str, ...],
@@ -155,7 +156,7 @@ def list_items(
 		filters["category"] = category
 	if source:
 		filters["source"] = source
-	if is_writer(ctx):
+	if is_writer(doctype):
 		if status:
 			if status not in STATUSES:
 				frappe.throw(
@@ -176,19 +177,19 @@ def list_items(
 		fields=fields,
 		order_by="published_on desc, modified desc",
 	)
-	allowed = visible_names(ctx, doctype, [r.name for r in rows])
+	allowed = visible_names(doctype, [r.name for r in rows])
 	rows = [r for r in rows if r.name in allowed]
 	total = len(rows)
 	page = rows[start : start + limit]
 	return page, {"count": len(page), "total": total, "limit": limit, "start": start}
 
 
-def get_item(doctype: str, name: str, ctx: ScopeContext):
+def get_item(doctype: str, name: str):
 	if not frappe.db.exists(doctype, name):
 		not_found(doctype, name)
 	doc = frappe.get_doc(doctype, name)
-	if not is_writer(ctx):
-		if doc.status != "Published" or name not in visible_names(ctx, doctype, [name]):
+	if not is_writer(doctype):
+		if doc.status != "Published" or name not in visible_names(doctype, [name]):
 			not_found(doctype, name)
 	return doc
 

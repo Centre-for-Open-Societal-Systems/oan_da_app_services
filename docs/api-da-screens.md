@@ -29,7 +29,6 @@ Administrator, Communications Officer). The auth store keeps `user {id, name, em
 | Field | Type | Why |
 |---|---|---|
 | `role` | one of the five codes above | the frontend switches dashboards and nav on a single role |
-| `scope_label` | string, e.g. "Own record · Bako Tibe", "Woreda · Bako Tibe", "Region · Oromia (read)" | sidebar footer (`ROLE_SCOPES`) |
 | `agent.da_id`, `agent.full_name`, `agent.kebele`, `agent.woreda`, `agent.region`, `agent.phone`, `agent.specialisation`, `agent.education_tier`, `agent.joined_at`, `agent.farmer_count`, `agent.active_status` | from Registry projection | header, footer, My Teams, Assignments |
 | `menu` | list of nav hrefs | must use the frontend's hrefs (next table), not our current section names |
 
@@ -57,10 +56,11 @@ disables items in the UI, but the frontend team should know these screens call D
 
 ### 1.2 Login
 
-The prototype matches `DEMO_ACCOUNTS` in the browser. Real flow: `POST /api/v1/auth/login` (oan_auth_service,
-exists) → JWT → `GET /api/v1/auth/me` (profile with our `profiles.da_services`) or `GET /da-services/me`.
-Logout clears drafts client-side; server side `POST /api/v1/auth/logout` (exists). Password reset and Fayda
-sign-in are not in the prototype.
+The prototype matches `DEMO_ACCOUNTS` in the browser. Real flow:
+`POST /api/v1/da-services/sso/login` with `username`, `password`, `key` (IAM login key) →
+`access_token` (+ `csrf_token` for staff/registry routes) →
+`GET /api/v1/da-services/me` (or auth whoami with `profiles.da_services`).
+Logout clears drafts client-side. Password reset and Fayda sign-in are not in the prototype.
 
 ### 1.3 Lists, filters, search, export
 
@@ -122,7 +122,7 @@ status (`On track` | `Watch` | `At risk`), search + advanced filters (Kebele / S
 | Status thresholds | server: `visit_pct >= 80` On track · `60–79` Watch · `< 60` At risk (same as FE `statusFor`) | derived from visit completion in range |
 | Avg data quality (interim) | `stats.data_quality` = round(mean of kebele `visit_pct`) | no dedicated quality DocType yet |
 | Filters | `kebele`, `status`, `agents` (exact count), `q`; apply to **kebeles only**; stats stay full-woreda | – |
-| Scope | Caller's `woreda_scopes` only; foreign woreda/kebele → 403/400. Multi-woreda supervisors must pass `woreda=` | DA RBAC Assignment |
+| Scope | `woreda=` is required for the woreda view; foreign kebele → 400 | – |
 
 `GET /dashboard/today` stays DA/agent day plan only. Executive / Admin / Comms roll-up dashboards
 (`WOREDA_ROLLUPS`, `REGION_SUMMARY`, `ADMIN_STATS`, …) remain out of scope here.
@@ -136,7 +136,7 @@ Filters: kebele, crop, status (`Verified, Pending, Enrolling, Inactive, Flagged`
 
 | Element | API | Source |
 |---|---|---|
-| Table + filters + facets + total | `GET /farmers?q&woreda&kebele&crop&status&education&limit&start` → `Farmer` fields above + `farmer_id` (registry id). A DA's `woreda` / `kebele` must be inside their assigned scope; an out-of-scope selection is 403, not an empty list | ours: DA Farmer Reference (projection) + DA Farmer Link; `visits`, `lastVisit` derived from DA Visit |
+| Table + filters + facets + total | `GET /farmers?current_page&page_size&filter_by&search_text` → the registry's rows and page, unchanged; geo filters filled in or checked from User Permissions (see [da-farmer-registry.md](da-farmer-registry.md)) | Farmer Registry `search_in_a_register` |
 | Status hover reason | `status_reason` | Farmer Registry (verification state) |
 | Row → profile | `/farmers/{id}` | – |
 | Bulk "Add to segment" (shared with Beneficiaries) | §2.9 | ours |
@@ -151,8 +151,9 @@ The API returns the Farmer Registry's own state and the UI maps it.
 |---|---|---|---|
 | Header + stats | `Farmer` | `GET /farmers/{id}` | Farmer Registry via projection |
 | Holdings | `Plot {code, crop, areaHa, soil, zone, lat, lng, tenure}` | `GET /farmers/{id}/plots` | Farmer Registry (Land Registry later) |
-| Crop history | `CropRecord {season, crop, yield, status Successful/Average/Below average}` | `GET /farmers/{id}/crops` | Farmer Registry / ODK results |
+| Crop history | Crop Sown rows (`source` split); GPS in section/tabs when staff returns it | `GET /farmers/{id}/crops?source=submission\|register` (required); `?submission_id=` for one draft; `?internal_record_id=&tab_id=` for one register tab; intake via `GET /crop-sown/intake-form?form=` (required) | Crop Sown staff |
 | Visit history | `Visit {title, summary, date, time}` | `GET /visits?farmer_id=&status=Completed` | ours: DA Visit |
+| Advisory (questions and answers) | one row per question `{question, answer, creation, modified}`, newest first | `GET /farmers/{id}/advisory?limit&start` (all of the farmer's Advisory Q&A, no permission filter; saved by `POST /visits`, answered by `POST /visits/{id}/submit`) | ours: DA Visit + `DA Visit Advisory QA` |
 | Documents | `FarmerDocument {name, uploadedAt, size}` + download | `GET /farmers/{id}/documents`, file URL | Farmer Registry (files) |
 | Advisory notes | `AdvisoryNote {date, author, text}`; Add note modal | `GET/POST /farmers/{id}/advisory-notes` | ours: new child of DA Farmer Link (`DA Advisory Note`, see §3) |
 | Action strip: Plan visit | §2.6 | | |
@@ -175,7 +176,6 @@ Exact form field names (`name=` attributes):
 
 | Element | API | Source |
 |---|---|---|
-| Cascading dropdowns | `GET /master/regions`, `/master/zones?region=`, `/master/woredas?zone=`, `/master/kebeles?woreda=` | ours: DA Administrative Area |
 | Reference lists (gender, id type, language, education tier, specialization, certificate type) | `GET /master/reference-values?type=` | ours: DA Reference Value |
 | File uploads | `POST /files` (returns `file_url`, `content_hash`) | Frappe File |
 | Submit | `POST /farmers` with the steps as nested objects + `client_op_id` → Farmer Registry create → `DA Farmer Link` (Automatic) → returns `{farmer_id, ticket_number, status}` | Farmer Registry + ours |
@@ -206,12 +206,17 @@ season"), selected farmer card (`registryCode FR-xxxxx, kebele, crop + landHa, l
 (`High — overdue by 4 days | Medium — due this week | Low — routine`), Save as draft / Plan visit.
 Schedule mode (from the priority list) presets `reason`, `visitType`, `level`.
 
+Batch (My Farmers grid, FE pending): select up to **5** farmers, fill schedule fields per farmer, one
+`POST /visits` with `visits: [ {...}, ... ]`. Same route as single plan — no `/visits/batch`. Server runs
+each item sequentially in that request and returns partial success so the DA can fix failed rows.
+
 | Element | API | Source |
 |---|---|---|
-| Farmer search + chips | `GET /farmers?q=&limit=10` → items + `flags[]` (`registered`, `voucher_redeemed_season`) | ours projection; voucher flag external (**contract pending**) |
-| Plan | `POST /visits` body: `client_op_id, farmer_id, visit_type, purpose, scheduled_at, duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng} (optional, server fills from parcel), notify_farmer_sms, advisory_qa[] {question, answer}` → `{id, physical_status: Planned}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
+| Farmer search + chips | `GET /farmers?search_text=&page_size=10` → registry rows + `flags[]` (`registered`, `voucher_redeemed_season`) | ours projection; voucher flag external (**contract pending**) |
+| Plan (single, legacy) | `POST /visits` flat body: `user` (required User Link), `client_op_id, farmer_id, farmer_name` (required FE snapshot), `visit_type, purpose, scheduled_at` (or `date`+`time`), `duration_min, priority (High/Medium/Low), priority_reason, location {lat,lng}` (optional), `notify_farmer_sms, advisory_qa[] {question, answer}`, optional `da_id` (Supervisor). No session-user fallback. → one visit `{name, physical_status: Planned, farmer_name, …}` | ours: DA Visit (+ `DA Visit Advisory QA` child, §3) |
+| Plan (single or batch list) | `POST /visits` body: `{ user?, da_id?, visits: [ { same fields as single plan per farmer }, … ] }` — length **1–5**, unique `farmer_id`, required `farmer_name` per item, per-item schedule allowed. `user` required per item or once on the envelope (not from session). Response `data`: `{ created: [visit…], failed: [ { status, error, code, request } ], summary: { total, created, failed } }`. `failed[].request` echoes that item as received; `code` is `conflict` \| `validation` \| `error`. HTTP **201** if any created; **400** if envelope invalid or zero created. When `visits` is present it is the list path. Row scope stays on Frappe hooks + User Permissions. | ours: loops `plan_visit` (one DA Visit per farmer) |
 | Save as draft | device | device |
-| "Planned offline" banner | idempotent on `client_op_id` | ours |
+| "Planned offline" banner | idempotent on per-item `client_op_id` | ours |
 
 ### 2.7 Visits list (`/visits`, Supervisor nav item; DA reaches it from the dashboard tile)
 
@@ -225,7 +230,7 @@ yet delivered / Other), farmer notified by SMS.
 
 | Element | API | Source |
 |---|---|---|
-| Table + stats + facets | `GET /visits?q&agent&region&zone&woreda&kebele&status&from&to&limit&start` → `VisitRecord` fields (`agent` = DA name, `assigned_by`) + `stats`. Explicit area selections are validated against the caller's scope; unauthorized areas are 403 | ours: DA Visit |
+| Table + stats + facets | `GET /visits?region&zone&woreda&kebele&status&from&to&da_id&farmer_id&limit&start` → visit rows (+ derived `ui_status` / `planner_status`). Row set from Role DocPerm + User Permissions; query args only narrow. Out-of-grant geography yields an empty page, not a service-layer 403 | ours: DA Visit |
 | View details | `GET /visits/{id}` → record + `timeline[]` (from DA Visit status history) | ours |
 | Reschedule | `POST /visits/{id}/reschedule {scheduled_at, reason}` → new DA Visit with `rescheduled_from`, old one `Rescheduled`; SMS job | ours + SMS |
 | Supervisor assigns a visit to a DA (`assignedBy`) | `POST /visits` with `da_id` by a Supervisor (scope: own Woreda) | ours |
@@ -269,6 +274,25 @@ can be created. (b) The evidence list on this screen shows the DA's own certific
 `EVIDENCE_DOCUMENTS`); visit evidence should be photos of the visit. (c) Mock dates "Jun 24, 2016" in the
 submitted list are a mock bug (the data file says 2026).
 
+### 2.Gatherings Plan a gathering (`/gatherings` — portal route TBD)
+
+A DA plans a gathering for **1–20 farmers** (FE picker is kebele-scoped; server requires name + phone snapshots). Client location inputs are
+**Venue** (`location.name`), optional `landmark` + lat/lng. Composed `address` + region/zone/woreda/kebele
+are stamped read-only from the DA's Effective Kebele Assignment. Access mirrors Visits: Role DocPerm + User
+Permissions; plan requires FE `user` (no session fallback). SMS gateway is not wired — create writes
+Queued/Skipped log rows and enqueues a stub job.
+
+| Element | API | Source |
+|---|---|---|
+| Plan | `POST /gatherings` body: `user` (required), `title`, `scheduled_at` (or `date`+`time`), `location {name, landmark?, lat?, lng?}`, `farmers[{farmer_id, farmer_name, phone}]` (1–20, all required), `notify_farmers_sms`, `client_op_id` → `{name, status: Planned, attendees[], sms_logs[], location}` (address + geo stamped) | ours: DA Gathering (+ Attendee, SMS Log children) |
+| List | `GET /gatherings?date\|from&to&status&da_id&region&zone&woreda&kebele&limit&start` | ours |
+| Detail | `GET /gatherings/{id}` | ours |
+| Cancel | `POST /gatherings/{id}/cancel {reason}` → `status: Cancelled` | ours |
+| Farmer picker | `GET /farmers` (Farmer Registry search, geo filters from User Permissions) | Farmer Registry |
+
+Contract docs: [gatherings-integration.md](gatherings-integration.md), [gatherings-frontend.md](gatherings-frontend.md).
+Postman: `postman/Gatherings/`.
+
 ### 2.10 Grievances (`/grievances`)
 
 Frontend `Grievance`: `ticketId, title, submitter, region, woreda, type, category (Inputs | Schemes | Payments |
@@ -286,6 +310,9 @@ description (≥10), attachments[]`; offline → "QUEUED — case ID assigned on
 | List + stats + facets | `GET /grievances?raised_by&category&status&priority&q` → records + `stats` | Grievance Service via adapter; DA Grievance Link for raised_by / farmer link |
 | Detail + thread + SLA | `GET /grievances/{ticket_id}` | Grievance Service |
 | Raise | `POST /grievances {raised_for: Self/Farmer, farmer_id, category, subject, description, attachments[], client_op_id}` → `{link_id, external_case_id | null, api_sync_state}` | ours: DA Grievance Link → Grievance Service |
+| Upload evidence (list row, Visits header) | `POST /grievances/{ticket_id}/attachments` multipart `files`, `document_type` → `[{attachment_id, file_name, mime_type, size_bytes, document_type, scan_status, scanned_at, uploaded_at}]` | Grievance Service |
+| Evidence list in the detail | `GET /grievances/{ticket_id}/attachments` → the same rows; `scan_status` Pending / Clean / Infected | Grievance Service |
+| Open / download evidence | `GET /grievances/{ticket_id}/attachments/{attachment_id}/view[?download=1]` → the file | Grievance Service; ours: the attachment must be on that ticket |
 | Service status banner | `GET /grievances/sync-status` | ours |
 | Retry failed push | `POST /grievances/sync/retry` | ours |
 
@@ -451,16 +478,32 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 | Element | API | Source |
 |---|---|---|
 | Header, stats, learning summary | `GET /profile/me` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
-| Edit demographics | `POST /profile/change-requests {changes {mobile, email, language, photo}}` → Supervisor approval | ours: DA Profile Change Request (data-model 4.4) |
+| Photo, Education & Professional records (certificates), family members | `GET /profile/me` (`photo`, `qualifications[]`, `dependents[]`); a certificate: `GET /profile/documents/{document_id}` | DA Registry (#66) |
+| Change photo, education records, certificates, family members | `POST /profile/photo`, `/profile/photo/remove`, `/profile/qualifications`, `/profile/certificates`, `/profile/certificates/remove`, `/profile/family-members`; pending and verified certificates: `GET /profile/certificates` → same two approvals → DA Registry | ours: DA Profile Change Request, DA Certificate |
+| Edit profile (Contact incl. home address, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`) | ours: DA Profile Change Request (data-model 4.4) |
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
+| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only | ours: DA Attendance Punch |
 
 Supervisor-side approvals for all of the above are the `ApprovalRequest` queue (`/approvals`): `kind
 (Onboarding | Profile change | Assignment | Specialization)`, `data[] {label, value, verified}`, `trail[]`,
 decisions approve / changes / reject with a note (min 5 chars). Onboarding is Registry; the other three are
 ours → `GET /approvals?kind&status&kebele`, `POST /approvals/{id}/decide {decision, note}` using the approval
 workflow pattern (data-model 6.1).
+
+### Attendance punches
+
+DA / Supervisor / Executive punch-in and punch-out. One `DA Attendance Punch` row per action.
+GET returns `next_action` for the button; POST does not enforce alternation (message-only response).
+Contract: [attendance-punches-integration.md](attendance-punches-integration.md),
+[attendance-punches-frontend.md](attendance-punches-frontend.md).
+Postman: `postman/AttendancePunches/`.
+
+| Element | API | Source |
+|---|---|---|
+| Today status / button | `GET /attendance-punches/today` → `next_action` | ours |
+| Punch In / Punch Out | `POST /attendance-punches {action, punched_date, punched_time, geo?, lat?, lng?}` | ours |
 
 ### 2.19 Notifications
 
@@ -507,7 +550,7 @@ two types.
 
 | # | Endpoints | Screen | Owner |
 |---|---|---|---|
-| 1 | `GET /me` (+ role, scope_label, menu hrefs, agent fields) | shell | Nikky (small change) |
+| 1 | `GET /me` (+ role, menu hrefs, agent fields) | shell | Nikky (small change) |
 | 2 | `GET /notifications`, `POST /notifications/{id}/read`, `/read-all` | shell | Nikky |
 | 3 | `GET /master/regions|zones|woredas|kebeles`, `GET /master/reference-values` | forms, filters | Pushkar |
 | 4 | `GET /dashboard/summary` (role-aware), `GET /dashboard/today` | DA + Supervisor dashboard | Nikky / DA-373 |
@@ -518,7 +561,7 @@ two types.
 | 9 | `GET /visits`, `GET /visits/{id}`, `POST /visits`, `/reschedule`, `/start`, `/submit`, `/attachments` | visits | Nikky |
 | 10 | `GET /tasks`, `POST /tasks/{id}/done` | dashboard tasks | Nikky |
 | 11 | `GET /reports/activity`, `/export` | outcome page | Nikky |
-| 12 | `GET /assignments/me`, `GET /assignments`, `GET /assignments/coverage` | assignments | Nikky |
+| 12 | `GET /assignments`, `GET /assignments/coverage` | assignments | Nikky |
 | 13 | `GET /beneficiaries/segments`, `GET /beneficiaries`, `POST /beneficiaries/link`, `POST /beneficiaries/{id}/remove` | beneficiaries | Nikky |
 | 14 | Grievances (list, detail, raise, sync-status, retry) | grievances | Pushkar (ticket written) |
 | 15 | `GET /my-team` | my teams | Nikky |

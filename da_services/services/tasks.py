@@ -4,8 +4,11 @@ Who may do what (FSD Appendix D, enforced here, not in the UI):
 
 - Development Agent: create and complete tasks for their own DA-ID only.
 - Supervisor: create and complete tasks for DAs in their Woreda.
-- Executive: read only (lists come through permission_query_conditions).
-- OAN Administrator / System Manager: unrestricted.
+- Executive: read only.
+
+Which rows a list returns: Role permissions, then the user's User Permissions on
+DA Region / Zone / Woreda (the `region` / `zone` / `woreda` Link fields), applied by
+frappe.get_list.
 - Communications Officer: nothing.
 """
 
@@ -17,10 +20,7 @@ from frappe.utils import get_datetime, getdate, now_datetime
 
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
-from da_services.utils.permissions import ScopeContext, require_roles
-
-TASK_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
+from da_services.utils.permissions import require_permission
 
 FIELDS = [
 	"name",
@@ -50,21 +50,15 @@ def serialize(doc) -> dict:
 	return out
 
 
-def _resolve_da_for_write(da_id: str | None, ctx: ScopeContext) -> str:
+def _resolve_da_for_write(da_id: str | None) -> str:
 	"""The DA-ID a caller may create / change tasks for.
 
-	A DA always acts on their own DA-ID (a different one in the body is ignored). An
-	officer must name the DA, and the DA's registry posting must be inside their scope;
-	get_da_reference applies that rule and audits a refusal.
+	The DA's registry posting must be inside the caller's scope; get_da_reference
+	applies that rule and audits a refusal.
 	"""
-	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
-		own = sorted(ctx.da_ids)
-		if not own:
-			frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
-		return own[0]
 	if not da_id:
 		frappe.throw(_("da_id is required."), frappe.ValidationError)
-	get_da_reference(da_id, ctx)  # raises PermissionError when out of scope
+	get_da_reference(da_id)  # raises PermissionError when out of scope
 	return da_id
 
 
@@ -80,12 +74,11 @@ def create_task(
 	visit: str | None = None,
 	generated_by_rule: str | None = None,
 	client_op_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
-	ctx = ctx or require_roles(*TASK_ROLES)
+	require_permission("DA Task", "create")
 	if not (title or "").strip():
 		frappe.throw(_("title is required."), frappe.ValidationError)
-	da_id = _resolve_da_for_write(da_id, ctx)
+	da_id = _resolve_da_for_write(da_id)
 
 	if client_op_id:
 		existing = frappe.db.get_value("DA Task", {"client_op_id": client_op_id}, "name")
@@ -113,43 +106,35 @@ def create_task(
 	return serialize(doc)
 
 
-def _load_in_scope(name: str, ctx: ScopeContext):
+def _load_in_scope(name: str, ptype: str = "read"):
+	"""The task, when the caller's role and User Permissions allow `ptype` on it."""
 	doc = frappe.get_doc("DA Task", name)
-	if ctx.unrestricted:
-		return doc
-	if ctx.has_any_role(C.ROLE_DA):
-		if ctx.owns_da(doc.da_id):
-			return doc
-	elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE) and ctx.covers(
-		doc.region, doc.woreda, doc.zone
-	):
-		return doc
-	frappe.throw(_("Task {0} is outside your scope.").format(name), frappe.PermissionError)
+	require_permission("DA Task", ptype, doc=doc, user=frappe.session.user)
+	return doc
 
 
-def get_task(name: str, ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(*READ_ROLES)
-	return serialize(_load_in_scope(name, ctx))
+def get_task(name: str) -> dict:
+	require_permission("DA Task", "read")
+	return serialize(_load_in_scope(name))
 
 
-def complete_task(name: str, ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(*TASK_ROLES)
-	doc = _load_in_scope(name, ctx)
+def complete_task(name: str) -> dict:
+	require_permission("DA Task", "write")
+	doc = _load_in_scope(name, "write")
 	doc.flags.ignore_permissions = True
 	doc.mark_done()
 	return serialize(doc)
 
 
-def cancel_task(name: str, reason: str | None = None, ctx: ScopeContext | None = None) -> dict:
-	ctx = ctx or require_roles(C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
-	doc = _load_in_scope(name, ctx)
+def cancel_task(name: str, reason: str | None = None) -> dict:
+	# No permission check: any signed-in user may cancel a task.
+	doc = frappe.get_doc("DA Task", name)
 	doc.flags.ignore_permissions = True
 	doc.cancel_task(reason)
 	return serialize(doc)
 
 
 def list_tasks(
-	ctx: ScopeContext | None = None,
 	*,
 	status: str | None = None,
 	due: str | None = None,
@@ -157,11 +142,11 @@ def list_tasks(
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Tasks the caller may see. Scope comes from permission_query_conditions via frappe.get_list.
+	"""Tasks the caller may see. Scope comes from the caller's User Permissions via frappe.get_list.
 
 	`due`: "today" (due today), "overdue" (open and past due), or an ISO date.
 	"""
-	ctx = ctx or require_roles(*READ_ROLES)
+	require_permission("DA Task", "read")
 	filters: dict = {}
 	if status:
 		filters["status"] = status
@@ -187,7 +172,7 @@ def list_tasks(
 		limit_page_length=limit,
 		limit_start=start,
 	)
-	# Scoped total: frappe.get_list applies permission_query_conditions; frappe.db.count would not.
+	# Scoped total: frappe.get_list applies User Permissions; frappe.db.count would not.
 	total = len(frappe.get_list("DA Task", filters=filters, pluck="name", limit_page_length=0))
 	return [serialize(frappe._dict(r)) for r in rows], total
 

@@ -49,4 +49,4 @@ Prefix: `/api/v1/da-services`
 | `GET /farmers/{id}/update-status` | Change-request status stored by DA Services |
 | `POST /farmers/updates/{event_id}/retry` | Retry a failed update event |
 
-`GET /farmers/{id}/visits` and `GET /farmers/{id}/permissions` are DA Services data. They do not call the Farmer staff host.
+`GET /farmers/{id}/visits`, `GET /farmers/{id}/advisory` and `GET /farmers/{id}/permissions` are DA Services data. They do not call the Farmer staff host.

@@ -10,8 +10,12 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.services import farmers as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_kebele_assignment
-from da_services.utils.permissions import get_scope_context
+from da_services.tests.fixtures import (
+	as_user,
+	create_administrative_areas,
+	ensure_da_user,
+	ensure_kebele_assignment,
+)
 
 DA_ID = "DA-000001"
 DA_OTHER = "DA-000004"
@@ -49,19 +53,19 @@ class TestResolveFarmerForCapture(IntegrationTestCase):
 				}
 			).insert(ignore_permissions=True, ignore_links=True)
 
-		self.ctx = get_scope_context("Administrator")
+		self.ctx = "Administrator"
 
 	def tearDown(self):
 		frappe.db.delete("DA Kebele Assignment", {"da_id": ("in", [DA_ID, DA_OTHER])})
 		frappe.db.delete("DA Farmer Reference", {"name": ("in", list(FARMERS))})
 
 	def _resolve(self, farmer_id, collector_da_id=DA_ID, survey_woreda=None):
-		return svc.resolve_farmer_for_capture(
-			farmer_id,
-			self.ctx,
-			collector_da_id=collector_da_id,
-			survey_woreda=survey_woreda,
-		)
+		with as_user(self.ctx):
+			return svc.resolve_farmer_for_capture(
+				farmer_id,
+				collector_da_id=collector_da_id,
+				survey_woreda=survey_woreda,
+			)
 
 	def test_internal_id_returns_canonical_location(self):
 		ref = self._resolve(FARMER_A)
@@ -101,6 +105,7 @@ class TestResolveFarmerForCapture(IntegrationTestCase):
 		frappe.get_doc(
 			{
 				"doctype": "DA Kebele Assignment",
+				"user": ensure_da_user(DA_ID),
 				"da_id": DA_ID,
 				"kebele": "ET04-W01-K02",
 				"state": "Effective",

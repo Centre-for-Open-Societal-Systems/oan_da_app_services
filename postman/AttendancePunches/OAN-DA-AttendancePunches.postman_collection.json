@@ -1,0 +1,205 @@
+{
+  "info": {
+    "_postman_id": "oan-da-attendance-punches",
+    "name": "OAN DA Attendance Punches",
+    "description": "Punch-in / punch-out for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET always returns {next_action, id, punched_date, punched_time}\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8200" },
+    { "key": "usr", "value": "" },
+    { "key": "pwd", "value": "" },
+    { "key": "sso_key", "value": "" },
+    { "key": "access_token", "value": "" },
+    { "key": "region", "value": "" },
+    { "key": "zone", "value": "" },
+    { "key": "woreda", "value": "" },
+    { "key": "kebele", "value": "" },
+    { "key": "lat", "value": "9.032" },
+    { "key": "lng", "value": "38.7469" },
+    { "key": "punched_date", "value": "" },
+    { "key": "punched_time", "value": "" },
+    { "key": "punch_id", "value": "" },
+    { "key": "next_action", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "SSO Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"SSO Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "if (data.access_token) { pm.collectionVariables.set(\"access_token\", data.access_token); pm.environment.set(\"access_token\", data.access_token); }",
+                  "if (data.csrf_token) { pm.collectionVariables.set(\"csrf_token\", data.csrf_token); pm.environment.set(\"csrf_token\", data.csrf_token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/sso/login",
+            "description": "Stores access_token for subsequent punch calls."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Today latest",
+      "item": [
+        {
+          "name": "GET today latest",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"GET today returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"envelope has data object\", function () { pm.expect(body.data).to.be.an(\"object\"); });",
+                  "const data = body.data || {};",
+                  "pm.test(\"next_action is Punch In or Punch Out\", function () {",
+                  "  pm.expect([\"Punch In\", \"Punch Out\"]).to.include(data.next_action);",
+                  "});",
+                  "if (data.next_action) { pm.collectionVariables.set(\"next_action\", data.next_action); pm.environment.set(\"next_action\", data.next_action); }",
+                  "if (data.id) { pm.collectionVariables.set(\"punch_id\", data.id); pm.environment.set(\"punch_id\", data.id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/attendance-punches/today",
+            "description": "Always returns {next_action, id, punched_date, punched_time}. Null id/date/time when none today."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Create punch",
+      "item": [
+        {
+          "name": "POST Punch In",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = new Date();",
+                  "const pad = (n) => String(n).padStart(2, \"0\");",
+                  "const date = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate());",
+                  "const time = pad(d.getHours()) + \":\" + pad(d.getMinutes()) + \":\" + pad(d.getSeconds());",
+                  "pm.collectionVariables.set(\"punched_date\", date);",
+                  "pm.collectionVariables.set(\"punched_time\", time);",
+                  "pm.environment.set(\"punched_date\", date);",
+                  "pm.environment.set(\"punched_time\", time);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"POST Punch In returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"message recorded\", function () { pm.expect(body.message).to.eql(\"Attendance punch recorded\"); });",
+                  "pm.test(\"no punch payload\", function () { pm.expect(body.data == null || Object.keys(body.data || {}).length === 0).to.be.true; });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"Punch In\",\n  \"punched_date\": \"{{punched_date}}\",\n  \"punched_time\": \"{{punched_time}}\",\n  \"region\": \"{{region}}\",\n  \"zone\": \"{{zone}}\",\n  \"woreda\": \"{{woreda}}\",\n  \"kebele\": \"{{kebele}}\",\n  \"lat\": {{lat}},\n  \"lng\": {{lng}}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/attendance-punches",
+            "description": "Create Punch In. Geo Links and lat/lng optional. Response is message-only."
+          }
+        },
+        {
+          "name": "POST Punch Out",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = new Date();",
+                  "const pad = (n) => String(n).padStart(2, \"0\");",
+                  "const date = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate());",
+                  "const time = pad(d.getHours()) + \":\" + pad(d.getMinutes()) + \":\" + pad(d.getSeconds());",
+                  "pm.collectionVariables.set(\"punched_date\", date);",
+                  "pm.collectionVariables.set(\"punched_time\", time);",
+                  "pm.environment.set(\"punched_date\", date);",
+                  "pm.environment.set(\"punched_time\", time);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"POST Punch Out returns 201\", function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"message recorded\", function () { pm.expect(body.message).to.eql(\"Attendance punch recorded\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"Punch Out\",\n  \"punched_date\": \"{{punched_date}}\",\n  \"punched_time\": \"{{punched_time}}\",\n  \"region\": \"{{region}}\",\n  \"zone\": \"{{zone}}\",\n  \"woreda\": \"{{woreda}}\",\n  \"lat\": {{lat}},\n  \"lng\": {{lng}}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/da-services/attendance-punches",
+            "description": "Create Punch Out. Example omits kebele."
+          }
+        }
+      ]
+    }
+  ]
+}

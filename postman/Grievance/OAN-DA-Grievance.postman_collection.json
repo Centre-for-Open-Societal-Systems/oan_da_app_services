@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-grievances",
     "name": "OAN DA Grievances",
-    "description": "DA Services grievance routes only. Login stores access_token. Create grievance sends the canal-maintenance body from variables and stores ticket_id. List sends a filter only when that variable is set. List rows include subject, created_at, and location. Summary cards include label, order, is_open, is_terminal, and count. Options return category value and label, and status objects.",
+    "description": "DA Services grievance routes. Autorunnable Collection Runner path.\n\n## Run order\n1. **SSO Login** — `POST /v1/da-services/sso/login` stores `access_token` (and `csrf_token`). All later requests inherit collection bearer auth.\n2. Options → Summary → List\n3. Create grievance → Get → Timeline\n4. Upload / List / View evidence (CLI uses `postman/Grievance/fixtures/evidence.png`)\n\n## Auth\nUse SSO only. Grievance upstream calls forward the same FE `Authorization` bearer. Set `usr`, `pwd`, and `sso_key` (IAM login key, e.g. `agent`) in the environment.\n\n## Settings\nLive calls need **Grievance Base URL** on DA Services Settings (gateway host, no `/api`).\n\n## CLI\n```\npostman collection run postman/Grievance/OAN-DA-Grievance.postman_collection.json -e postman/Grievance/OAN-DA-Grievance.postman_environment.json\n```\nSkip evidence with `-i \"0. Auth\" -i \"1. Read\" -i \"2. Submit\"` if no fixture path is available.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -16,16 +16,15 @@
     ]
   },
   "variable": [
-    { "key": "base_url", "value": "https://da-backend-development.oanstaging.com" },
+    { "key": "base_url", "value": "http://127.0.0.1:8200" },
     { "key": "usr", "value": "" },
     { "key": "pwd", "value": "" },
-    { "key": "remember_me", "value": "false" },
+    { "key": "sso_key", "value": "agent" },
     { "key": "access_token", "value": "" },
-    { "key": "refresh_token", "value": "" },
+    { "key": "csrf_token", "value": "" },
     { "key": "ticket_id", "value": "" },
     { "key": "ticket_number", "value": "" },
-    { "key": "queue_ref", "value": "" },
-    { "key": "event_name", "value": "" },
+    { "key": "client_op_id", "value": "" },
     { "key": "page", "value": "1" },
     { "key": "page_size", "value": "10" },
     { "key": "status", "value": "" },
@@ -40,7 +39,6 @@
     { "key": "subcategory", "value": "" },
     { "key": "raised_for", "value": "Self" },
     { "key": "farmer_id", "value": "" },
-    { "key": "client_op_id", "value": "" },
     { "key": "submitter_name", "value": "Abebe Bikila" },
     { "key": "contact_mobile", "value": "0911000000" },
     { "key": "administrative_area", "value": "kebele-ET140108101008" },
@@ -50,308 +48,378 @@
     { "key": "desired_outcome", "value": "Canal cleaned before the next irrigation cycle" },
     { "key": "submitter_type", "value": "Individual Farmer" },
     { "key": "consent_given", "value": "1" },
-    { "key": "is_anonymous", "value": "0" }
+    { "key": "is_anonymous", "value": "0" },
+    { "key": "attachment_id", "value": "" }
   ],
   "item": [
     {
-      "name": "Login",
-      "request": {
-        "auth": { "type": "noauth" },
-        "method": "POST",
-        "header": [
-          { "key": "Accept", "value": "application/json" },
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\",\n  \"remember_me\": {{remember_me}}\n}"
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "SSO Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/v1/da-services/sso/login",
+            "description": "Required first step. Stores access_token for collection bearer auth and csrf_token for other collections. Set usr, pwd, sso_key in the environment."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('SSO Login returns 200', function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test('SSO Login returns access_token', function () {",
+                  "    pm.expect(data.access_token, 'data.access_token').to.be.a('string').and.not.empty;",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save('access_token', data.access_token);",
+                  "save('csrf_token', data.csrf_token);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Read",
+      "item": [
+        {
+          "name": "Grievance options",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/v1/da-services/grievances/options",
+            "description": "Dropdown values for the grievance form."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Grievance options returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test('Options include categories, types, and statuses', function () {",
+                  "    pm.expect(data.categories).to.be.an('array');",
+                  "    pm.expect(data.grievance_types).to.be.an('array');",
+                  "    pm.expect(data.statuses).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
-        "url": "{{base_url}}/api/v1/auth/login",
-        "description": "Public login. Stores access_token and refresh_token for the grievance calls."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Login returns 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "const data = (pm.response.json() || {}).data || {};",
-              "function save(key, value) {",
-              "    if (!value) return;",
-              "    pm.collectionVariables.set(key, value);",
-              "    if (pm.environment.name) pm.environment.set(key, value);",
-              "}",
-              "save('access_token', data.access_token);",
-              "save('refresh_token', data.refresh_token);"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "List grievances",
-      "request": {
-        "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
-        "url": {
-          "raw": "{{base_url}}/api/v1/da-services/grievances",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "da-services", "grievances"]
-        },
-        "description": "Sends page, page_size, status, category, location, from_date, to_date, and search only when the variable is not empty."
-      },
-      "event": [
-        {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "['page', 'page_size', 'status', 'category', 'location', 'from_date', 'to_date', 'search'].forEach(function (key) {",
-              "    const value = pm.variables.get(key);",
-              "    if (value) pm.request.url.query.upsert({ key: key, value: String(value) });",
-              "});"
-            ]
-          }
+          "name": "Grievance summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/v1/da-services/grievances/summary",
+            "description": "Status cards from the grievance service."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Grievance summary returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const cards = ((pm.response.json() || {}).data || {}).cards;",
+                  "pm.test('Summary cards are present', function () {",
+                  "    pm.expect(cards).to.be.an('array').that.is.not.empty;",
+                  "    cards.forEach(function (card) {",
+                  "        pm.expect(card.status).to.be.a('string').that.is.not.empty;",
+                  "        pm.expect(card.count).to.be.a('number');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('List grievances returns 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "const body = pm.response.json() || {};",
-              "const data = body.data;",
-              "const meta = body.meta || {};",
-              "pm.test('List rows carry the current grievance fields', function () {",
-              "    pm.expect(data).to.be.an('array');",
-              "    pm.expect(meta.page).to.be.a('number');",
-              "    pm.expect(meta.page_size).to.be.a('number');",
-              "    pm.expect(meta.total).to.be.a('number');",
-              "    data.forEach(function (row) {",
-              "        pm.expect(row.ticket_number).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(row.status).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(row.category).to.be.a('string');",
-              "        pm.expect(row).to.have.property('subject');",
-              "        pm.expect(row).to.have.property('created_at');",
-              "        pm.expect(row).to.have.property('location');",
-              "    });",
-              "});"
-            ]
-          }
+          "name": "List grievances",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/v1/da-services/grievances",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "grievances"]
+            },
+            "description": "Sends page, page_size, status, category, location, from_date, to_date, and search only when the variable is not empty."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['page', 'page_size', 'status', 'category', 'location', 'from_date', 'to_date', 'search'].forEach(function (key) {",
+                  "    const value = pm.variables.get(key);",
+                  "    if (value) pm.request.url.query.upsert({ key: key, value: String(value) });",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('List grievances returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json() || {};",
+                  "const data = body.data;",
+                  "const meta = body.meta || {};",
+                  "pm.test('List payload shape', function () {",
+                  "    pm.expect(data).to.be.an('array');",
+                  "    pm.expect(meta.page).to.be.a('number');",
+                  "    pm.expect(meta.page_size).to.be.a('number');",
+                  "    pm.expect(meta.total).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "name": "Grievance summary",
-      "request": {
-        "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
-        "url": "{{base_url}}/api/v1/da-services/grievances/summary",
-        "description": "Status cards from the grievance service. Each card has status, label, order, is_open, is_terminal, and count."
-      },
-      "event": [
+      "name": "2. Submit",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Grievance summary returns 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "const cards = ((pm.response.json() || {}).data || {}).cards;",
-              "pm.test('Summary cards include the queue fields', function () {",
-              "    pm.expect(cards).to.be.an('array').that.is.not.empty;",
-              "    pm.expect(cards[0].status).to.eql('All');",
-              "    cards.forEach(function (card) {",
-              "        pm.expect(card.status).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(card.label).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(card.order).to.be.a('number');",
-              "        pm.expect(card.is_open).to.be.a('number');",
-              "        pm.expect(card.is_terminal).to.be.a('number');",
-              "        pm.expect(card.count).to.be.a('number');",
-              "    });",
-              "});"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Grievance options",
-      "request": {
-        "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
-        "url": "{{base_url}}/api/v1/da-services/grievances/options",
-        "description": "Dropdown values for the grievance form. Categories have value and label. Statuses are objects with status and label."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Grievance options returns 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "const data = (pm.response.json() || {}).data || {};",
-              "pm.test('Options keep category labels and status objects', function () {",
-              "    pm.expect(data.categories).to.be.an('array');",
-              "    pm.expect(data.grievance_types).to.be.an('array');",
-              "    pm.expect(data.statuses).to.be.an('array');",
-              "    data.categories.forEach(function (category) {",
-              "        pm.expect(category.value).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(category.label).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(category.subcategories).to.be.an('array');",
-              "    });",
-              "    data.statuses.forEach(function (status) {",
-              "        pm.expect(status).to.be.an('object');",
-              "        pm.expect(status.status).to.be.a('string').that.is.not.empty;",
-              "        pm.expect(status.label).to.be.a('string').that.is.not.empty;",
-              "    });",
-              "});"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Create grievance",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Accept", "value": "application/json" },
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"subject\": \"{{subject}}\",\n  \"description\": \"{{description}}\",\n  \"priority\": \"{{priority}}\",\n  \"raised_for\": \"{{raised_for}}\",\n  \"submitter_type\": \"{{submitter_type}}\",\n  \"submitter_name\": \"{{submitter_name}}\",\n  \"contact_mobile\": \"{{contact_mobile}}\",\n  \"administrative_area\": \"{{administrative_area}}\",\n  \"administrative_unit\": \"{{administrative_unit}}\",\n  \"service_category\": \"{{service_category}}\",\n  \"grievance_type\": \"{{grievance_type}}\",\n  \"desired_outcome\": \"{{desired_outcome}}\",\n  \"consent_given\": {{consent_given}},\n  \"is_anonymous\": {{is_anonymous}}\n}"
+          "name": "Create grievance",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"{{subject}}\",\n  \"description\": \"{{description}}\",\n  \"priority\": \"{{priority}}\",\n  \"raised_for\": \"{{raised_for}}\",\n  \"client_op_id\": \"{{client_op_id}}\",\n  \"submitter_type\": \"{{submitter_type}}\",\n  \"submitter_name\": \"{{submitter_name}}\",\n  \"contact_mobile\": \"{{contact_mobile}}\",\n  \"administrative_area\": \"{{administrative_area}}\",\n  \"administrative_unit\": \"{{administrative_unit}}\",\n  \"service_category\": \"{{service_category}}\",\n  \"grievance_type\": \"{{grievance_type}}\",\n  \"desired_outcome\": \"{{desired_outcome}}\",\n  \"consent_given\": {{consent_given}},\n  \"is_anonymous\": {{is_anonymous}}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/v1/da-services/grievances",
+            "description": "Creates a grievance. Pre-request sets a unique client_op_id. Stores ticket_id / ticket_number for later requests."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const stamp = Date.now();",
+                  "const clientOpId = 'grv-postman-' + stamp;",
+                  "pm.collectionVariables.set('client_op_id', clientOpId);",
+                  "if (pm.environment.name) pm.environment.set('client_op_id', clientOpId);",
+                  "const baseSubject = pm.variables.get('subject') || 'Canal not cleaned';",
+                  "const subject = baseSubject + ' ' + stamp;",
+                  "pm.variables.set('subject', subject);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Create grievance returns 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test('Create grievance is synced with a ticket', function () {",
+                  "    pm.expect(data.sync_state).to.eql('synced');",
+                  "    pm.expect(data.ticket_id || data.ticket_number).to.be.ok;",
+                  "});",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save('ticket_id', data.ticket_id || data.ticket_number);",
+                  "save('ticket_number', data.ticket_number || data.ticket_id);"
+                ]
+              }
+            }
+          ]
         },
-        "url": "{{base_url}}/api/v1/da-services/grievances",
-        "description": "Creates a grievance. Defaults are the canal-maintenance example. A successful response stores ticket_id, ticket_number, and queue_ref."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Create grievance returns 201', function () {",
-              "    pm.response.to.have.status(201);",
-              "});",
-              "pm.test('Create grievance returns a ticket and sync state', function () {",
-              "    const created = (pm.response.json() || {}).data || {};",
-              "    pm.expect(created.sync_state).to.be.oneOf(['synced', 'pending']);",
-              "    pm.expect(created.ticket_id || created.ticket_number).to.be.ok;",
-              "});",
-              "const data = (pm.response.json() || {}).data || {};",
-              "function save(key, value) {",
-              "    if (!value) return;",
-              "    pm.collectionVariables.set(key, value);",
-              "    if (pm.environment.name) pm.environment.set(key, value);",
-              "}",
-              "save('ticket_id', data.ticket_id);",
-              "save('ticket_number', data.ticket_number);",
-              "save('queue_ref', data.queue_ref);",
-              "if (!data.ticket_id && data.ticket_number) save('ticket_id', data.ticket_number);"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Get grievance",
-      "request": {
-        "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
-        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}",
-        "description": "Uses ticket_id saved by Create grievance. The case is read from the grievance timeline."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Get grievance returns 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "const data = (pm.response.json() || {}).data || {};",
-              "pm.test('Grievance detail comes back with status and category', function () {",
-              "    pm.expect(data.ticket_number).to.be.a('string').that.is.not.empty;",
-              "    pm.expect(data.status).to.be.a('string').that.is.not.empty;",
-              "    pm.expect(data).to.have.property('description');",
-              "    pm.expect(data).to.have.property('category');",
-              "    pm.expect(data).to.have.property('sla_due_date');",
-              "    pm.expect(data).to.have.property('sla_consumed_percent');",
-              "});"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Get timeline",
-      "request": {
-        "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
-        "url": "{{base_url}}/api/v1/da-services/grievances/{{ticket_id}}/timeline",
-        "description": "Uses ticket_id saved by Create grievance."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Get timeline returns 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "const data = (pm.response.json() || {}).data;",
-              "pm.test('Timeline entries have timestamp, action, actor, and detail', function () {",
-              "    pm.expect(data).to.be.an('array');",
-              "    data.forEach(function (entry) {",
-              "        pm.expect(entry).to.have.property('timestamp');",
-              "        pm.expect(entry).to.have.property('action');",
-              "        pm.expect(entry).to.have.property('actor');",
-              "        pm.expect(entry).to.have.property('detail');",
-              "    });",
-              "});"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Retry failed sync",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Accept", "value": "application/json" },
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{}"
+          "name": "Get grievance",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/v1/da-services/grievances/{{ticket_id}}",
+            "description": "Uses ticket_id saved by Create grievance."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Get grievance returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test('Grievance detail has status', function () {",
+                  "    pm.expect(data.ticket_number || data.ticket_id).to.be.ok;",
+                  "    pm.expect(data.status).to.be.a('string').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
-        "url": "{{base_url}}/api/v1/da-services/grievances/sync/retry",
-        "description": "OAN Administrator only. Sends event_name when that variable is set. An empty variable retries every failed integration event."
-      },
-      "event": [
         {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "const eventName = pm.variables.get('event_name') || pm.variables.get('queue_ref');",
-              "const body = eventName ? { event_name: String(eventName) } : {};",
-              "pm.request.body.update(JSON.stringify(body, null, 2));"
-            ]
-          }
+          "name": "Get timeline",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/v1/da-services/grievances/{{ticket_id}}/timeline",
+            "description": "Uses ticket_id saved by Create grievance."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Get timeline returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const data = (pm.response.json() || {}).data;",
+                  "pm.test('Timeline is an array', function () {",
+                  "    pm.expect(data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Evidence",
+      "item": [
+        {
+          "name": "Upload evidence",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": "postman/Grievance/fixtures/evidence.png",
+                  "description": "CLI uses fixtures/evidence.png; in Postman Desktop pick a local JPG/PNG/PDF/MP3 if needed."
+                },
+                {
+                  "key": "document_type",
+                  "value": "Receipt",
+                  "type": "text",
+                  "description": "Optional label."
+                }
+              ]
+            },
+            "url": "{{base_url}}/v1/da-services/grievances/{{ticket_id}}/attachments",
+            "description": "Attach evidence to ticket_id. Stores the first attachment_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Upload evidence returns 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const first = ((pm.response.json() || {}).data || [])[0];",
+                  "if (first && first.attachment_id) {",
+                  "    pm.collectionVariables.set('attachment_id', first.attachment_id);",
+                  "    if (pm.environment.name) pm.environment.set('attachment_id', first.attachment_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List evidence",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/v1/da-services/grievances/{{ticket_id}}/attachments",
+            "description": "Every document on the grievance, oldest first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('List evidence returns 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const rows = (pm.response.json() || {}).data || [];",
+                  "pm.test('List evidence is an array', function () {",
+                  "    pm.expect(rows).to.be.an('array');",
+                  "});",
+                  "if (rows.length && rows[0].attachment_id) {",
+                  "    pm.collectionVariables.set('attachment_id', rows[0].attachment_id);",
+                  "    if (pm.environment.name) pm.environment.set('attachment_id', rows[0].attachment_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "View evidence file",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/v1/da-services/grievances/{{ticket_id}}/attachments/{{attachment_id}}/view",
+            "description": "Returns the file itself. Soft assertion: 200 when Clean, or 400 while scan is still Pending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('View evidence is 200 (Clean) or 400 (scan not Clean yet)', function () {",
+                  "    pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     }

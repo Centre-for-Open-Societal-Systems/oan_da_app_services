@@ -19,7 +19,7 @@ class DATask(Document):
 
 	Scope codes (`region`, `woreda`) are copied from the DA's registry posting when the
 	row is created so that Supervisor / Executive list filters work without a registry
-	call per row (see permissions.da_task_query_conditions). The DA ↔ task relation is
+	call per row (they are Links, so User Permissions on them scope lists). The DA ↔ task relation is
 	`da_id`; `client_op_id` makes device replays idempotent.
 	"""
 

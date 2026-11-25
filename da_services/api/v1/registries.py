@@ -3,7 +3,6 @@
 GET /api/v1/da-services/registries/{registry}/registers
 GET /api/v1/da-services/registries/{registry}/intake-form
 GET /api/v1/da-services/registries/{registry}/field-options
-GET /api/v1/da-services/registries/{registry}/places?level=&parent=
 
 Only ``farmer`` is wired today. The ids come from the registry itself
 (get_all_registers, get_all_intake_forms, render_intake_form) and are cached,
@@ -25,9 +24,7 @@ from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryServerError,
 )
 from da_services.services import constants as C
-from da_services.utils.permissions import require_roles
 
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
 REGISTRIES = ("farmer",)
 _UNAVAILABLE = _("Farmer Registry is unavailable. Try again shortly.")
 
@@ -62,7 +59,6 @@ def list_registers(registry: str):
 	FarmerPhone, Land, Crop, Livestock, FarmInputs, MembershipDetails, Score.
 	The ids are what every other registry call keys on; cached for an hour.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	client = get_farmer_registry_client()
 	try:
@@ -88,7 +84,6 @@ def get_intake_form(registry: str):
 	register_mnemonic, is_list, order, has_identity_document}]}. The form id is
 	discovered from get_all_intake_forms when it is not configured.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	client = get_farmer_registry_client()
 	try:
@@ -120,7 +115,6 @@ def get_field_options(registry: str):
 	dropdowns without hard-coded values. Send the chosen value back to POST /farmers.
 	Cached for an hour.
 	"""
-	require_roles(*READ_ROLES)
 	_check_registry(registry)
 	client = get_farmer_registry_client()
 	try:
@@ -133,35 +127,3 @@ def get_field_options(registry: str):
 	except FarmerRegistryError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	return success_response(data={"registry": registry.lower(), "options": options})
-
-
-@route(
-	"/registries/<registry>/places", methods=("GET",), summary="Master Data places for the location picker"
-)
-@frappe.whitelist()
-@handle_api_errors
-def list_places(registry: str, level=None, parent=None):
-	"""Region > Zone > Woreda > Kebele, one level at a time (Master Data).
-
-	Query: level=region|zone|woreda|kebele, parent=<id of the place above> (not
-	for region). Returns {"level", "parent", "places": [{"id", "name"}]}; the
-	kebele id (for example ET04080101) is what POST /farmers takes as kebele.
-	Cached for a day.
-	"""
-	require_roles(*READ_ROLES)
-	_check_registry(registry)
-	level = (level or frappe.form_dict.get("level") or "region").strip().lower()
-	parent = (parent or frappe.form_dict.get("parent") or "").strip() or None
-	client = get_farmer_registry_client()
-	try:
-		places = intake.load_places(client, level, parent)
-	except intake.IntakeFormError as exc:
-		frappe.throw("; ".join(exc.problems), frappe.ValidationError)
-	except FarmerRegistryClientError as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	except FarmerRegistryServerError:
-		frappe.response["http_status_code"] = 503
-		return error_response(str(_UNAVAILABLE), "SERVICE_UNAVAILABLE")
-	except FarmerRegistryError as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	return success_response(data={"level": level, "parent": parent, "places": places})

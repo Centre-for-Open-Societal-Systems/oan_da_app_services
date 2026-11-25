@@ -3,6 +3,8 @@
 Tests farmer listing, profile retrieval, and permission checks with RBAC enforcement.
 """
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import now_datetime, today
@@ -10,10 +12,9 @@ from frappe.utils import now_datetime, today
 from da_services.services import constants as C
 from da_services.tests.fixtures import (
 	create_administrative_areas,
-	ensure_administrative_area,
+	ensure_da_user,
 	ensure_kebele_assignment,
 )
-from da_services.utils.permissions import get_scope_context
 
 # Test users
 DA1 = "farmer-api-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -87,7 +88,7 @@ class TestFarmersAPI(IntegrationTestCase):
 			"Abebe Kebede",
 			"ET04",
 			"ET04-W01",
-			"Bako 01",
+			"ET04-W01-K01",
 		)
 		self._create_farmer_reference(
 			self.farmer2_id,
@@ -95,7 +96,7 @@ class TestFarmersAPI(IntegrationTestCase):
 			"Almaz Tesfaye",
 			"ET04",
 			"ET04-W01",
-			"Bako 02",
+			"ET04-W01-K02",
 		)
 		self._create_farmer_reference(
 			self.farmer3_id,
@@ -110,8 +111,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		# Listing and edit rights for a DA follow the Effective Kebele assignment.
 		self._create_farmer_link(DA1, "DA-000001", self.farmer1_id, "Automatic")
 		create_administrative_areas()
-		ensure_administrative_area("Bako 01", "Kebele", "ET04-W01", "Bako 01")
-		ensure_kebele_assignment("DA-000001", "Bako 01")
+		ensure_kebele_assignment("DA-000001", "ET04-W01-K01")
 
 		# Create some visits for farmer1
 		self._create_visit("DA-000001", self.farmer1_id, "Physical Visit Complete")
@@ -175,14 +175,16 @@ class TestFarmersAPI(IntegrationTestCase):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Visit",
+				"user": ensure_da_user(da_id),
 				"da_id": da_id,
 				"farmer_id": farmer_id,
+				"farmer_name": "Test Farmer",
 				"visit_type": "Crop Survey",
 				"physical_status": initial_status,
 				"scheduled_at": now_datetime(),
 				"region": "ET04",
 				"woreda": "ET04-W01",
-				"kebele": "Bako 01",
+				"kebele": "ET04-W01-K01",
 			}
 		)
 		doc.insert(ignore_permissions=True, ignore_links=True)
@@ -225,99 +227,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		doc.insert(ignore_permissions=True, ignore_links=True)
 		return doc
 
-	def test_list_farmers_as_da(self):
-		"""DA sees only linked farmers."""
-		frappe.set_user(DA1)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers()
-		self.assertEqual(result["status"], "success")
-
-		farmers = result["data"]["farmers"]
-		self.assertEqual(len(farmers), 1)
-		self.assertEqual(farmers[0]["farmer_id"], self.farmer1_id)
-		self.assertEqual(result["data"]["total"], 1)
-
-	def test_list_farmers_as_supervisor(self):
-		"""Supervisor sees all farmers in their Woreda."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers()
-		self.assertEqual(result["status"], "success")
-
-		farmers = result["data"]["farmers"]
-		self.assertEqual(len(farmers), 2)  # farmer1 and farmer2 in ET04-W01
-		self.assertEqual(result["data"]["total"], 2)
-
-	def test_list_farmers_with_filters(self):
-		"""Test filtering by kebele."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers(kebele="Bako 01")
-		farmers = result["data"]["farmers"]
-
-		self.assertEqual(len(farmers), 1)
-		self.assertEqual(farmers[0]["kebele"], "Bako 01")
-
 	# -- DA-272: live search, change requests, registry metadata ---------------
-
-	def test_list_farmers_search_text_asks_the_registry(self):
-		"""search_text bypasses the cache: the mock registry is searched in the caller's Woreda."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers(search_text="almaz", page=1, page_size=10)
-		self.assertEqual(result["status"], "success")
-		self.assertEqual(result["data"]["source"], "registry")
-		farmers = result["data"]["farmers"]
-		self.assertEqual([f["farmer_id"] for f in farmers], [self.farmer2_id])
-		self.assertEqual(farmers[0]["farmer_name"], "Almaz Tesfaye")
-		self.assertEqual(farmers[0]["registration_state"], "APPROVED")
-		self.assertEqual(result["data"]["total"], 1)
-		self.assertEqual(result["data"]["page"]["page"], 1)
-		self.assertEqual(result["data"]["page"]["page_size"], 10)
-		self.assertEqual(result["data"]["page"]["number_of_pages"], 1)
-
-	def test_list_farmers_search_stays_inside_woreda_scope(self):
-		"""Chaltu (ET03) is in the mock registry but outside the Supervisor's Woreda."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers(search_text="chaltu")
-		self.assertEqual(result["data"]["farmers"], [])
-		self.assertEqual(result["data"]["total"], 0)
-
-	def test_list_farmers_search_as_da_narrows_to_assigned_kebele(self):
-		"""DA1 is posted to Bako 01: Almaz (Bako 02) is not returned even on a name match."""
-		frappe.set_user(DA1)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		self.assertEqual(
-			[f["farmer_id"] for f in list_farmers(search_text="abebe")["data"]["farmers"]], [self.farmer1_id]
-		)
-		self.assertEqual(list_farmers(search_text="almaz")["data"]["farmers"], [])
-
-	def test_list_farmers_page_params_map_to_offsets(self):
-		"""page / page_size are accepted on the cache path too."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers(page=2, page_size=1)
-		self.assertEqual(len(result["data"]["farmers"]), 1)
-		self.assertEqual(result["data"]["total"], 2)
-		self.assertEqual(
-			result["data"]["page"], {"limit": 1, "start": 1, "page": 2, "page_size": 1, "number_of_pages": 2}
-		)
-		self.assertEqual(result["data"]["source"], "cache")
 
 	def test_change_requests_for_farmer_in_scope(self):
 		frappe.set_user(SUP)
@@ -377,7 +287,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		plots = get_farmer_plots("FR-000101")
 		self.assertEqual(plots["status"], "success", plots)
 		self.assertEqual(len(plots["data"]["plots"]), 1)
-		self.assertTrue(check_farmer_permissions("FR-000101")["data"]["is_linked"])
+		self.assertTrue(check_farmer_permissions("FR-000101")["data"]["can_edit"])
 
 	def test_get_farmer_profile_success(self):
 		"""Get farmer profile with merged visit data."""
@@ -391,9 +301,9 @@ class TestFarmersAPI(IntegrationTestCase):
 		profile = result["data"]
 		self.assertEqual(profile["farmer_id"], self.farmer1_id)
 		self.assertEqual(profile["name"], "Abebe Kebede")
-		self.assertEqual(profile["kebele"], "Bako 01")
-		self.assertTrue(profile["can_edit"])  # Linked farmer
-		self.assertTrue(profile["is_linked"])
+		self.assertEqual(profile["kebele"], "ET04-W01-K01")
+		self.assertTrue(profile["can_edit"])
+		self.assertFalse(profile["is_linked"])  # no caller DA-ID to link against
 		self.assertIsNotNone(profile["last_visit_date"])
 		self.assertEqual(profile["pending_actions"], 1)  # One task
 
@@ -414,50 +324,6 @@ class TestFarmersAPI(IntegrationTestCase):
 
 		result = get_farmer_profile("non-existent-farmer-id")
 		self.assertEqual(result["status"], "error")
-
-	def test_check_farmer_permissions_linked(self):
-		"""Check permissions for linked farmer."""
-		frappe.set_user(DA1)
-
-		from da_services.api.v1.farmers import check_farmer_permissions
-
-		result = check_farmer_permissions(self.farmer1_id)
-		permissions = result["data"]
-
-		self.assertTrue(permissions["can_edit"])
-		self.assertTrue(permissions["is_linked"])
-		self.assertEqual(permissions["link_type"], "Automatic")
-		self.assertIsNone(permissions["reason"])
-
-	def test_check_farmer_permissions_not_linked(self):
-		"""Check permissions for non-linked farmer (Supervisor can edit)."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import check_farmer_permissions
-
-		result = check_farmer_permissions(self.farmer2_id)
-		permissions = result["data"]
-
-		self.assertTrue(permissions["can_edit"])  # Supervisor can edit in their woreda
-
-	def test_check_farmer_permissions_da_not_linked(self):
-		"""DA cannot edit non-linked farmer."""
-		frappe.set_user(DA1)
-
-		# farmer2 is in same woreda but not linked to DA1
-		from da_services.api.v1.farmers import check_farmer_permissions
-
-		# Link farmer2 temporarily then deactivate to test permission check
-		link = self._create_farmer_link(DA1, "DA-000001", self.farmer2_id, "Manual")
-		frappe.db.set_value("DA Farmer Link", link.name, "is_active", 0)
-		frappe.db.commit()
-
-		result = check_farmer_permissions(self.farmer2_id)
-		permissions = result["data"]
-
-		self.assertFalse(permissions["can_edit"])
-		self.assertFalse(permissions["is_linked"])
-		self.assertIn("not linked", permissions["reason"])
 
 	def test_get_farmer_visits(self):
 		"""Get visit history for a farmer."""
@@ -497,37 +363,6 @@ class TestFarmersAPI(IntegrationTestCase):
 		self.assertEqual(result["data"]["document_id"], "mock-photo-001")
 		self.assertTrue(result["data"]["photo_url"].startswith("https://"))
 
-	def test_pagination(self):
-		"""Test pagination parameters."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		# Page 1
-		result = list_farmers(limit=1, start=0)
-		self.assertEqual(len(result["data"]["farmers"]), 1)
-		self.assertEqual(result["data"]["page"]["limit"], 1)
-		self.assertEqual(result["data"]["page"]["start"], 0)
-
-		# Page 2
-		result = list_farmers(limit=1, start=1)
-		self.assertEqual(len(result["data"]["farmers"]), 1)
-		self.assertEqual(result["data"]["page"]["start"], 1)
-
-	def test_pagination_validation(self):
-		"""Test pagination validation."""
-		frappe.set_user(SUP)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		# Invalid limit
-		result = list_farmers(limit=999)
-		self.assertEqual(result["status"], "error")
-
-		# Invalid start
-		result = list_farmers(start=-1)
-		self.assertEqual(result["status"], "error")
-
 	def test_visits_scope_leak_denied(self):
 		"""Test DA cannot read visits of out-of-scope farmer (PR #12 fix)."""
 		frappe.set_user(DA1)
@@ -538,7 +373,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		# API functions use @handle_api_errors which returns error response
 		result = get_farmer_visits("farmer-uuid-003")
 		self.assertEqual(result["status"], "error")
-		self.assertIn("not linked", result["message"].lower())
+		self.assertIn("permission", result["message"].lower())
 
 	def test_plots_scope_leak_denied(self):
 		"""Test DA cannot read plots of out-of-scope farmer (PR #12 fix)."""
@@ -549,49 +384,4 @@ class TestFarmersAPI(IntegrationTestCase):
 		# farmer-uuid-003 is in ET03-W02, outside DA1's scope
 		result = get_farmer_plots("farmer-uuid-003")
 		self.assertEqual(result["status"], "error")
-		self.assertIn("not linked", result["message"].lower())
-
-	def test_woreda_filter_scope_override_denied(self):
-		"""Test Supervisor cannot query outside their Woreda with ?woreda= (PR #12 fix)."""
-		frappe.set_user(SUP)  # Supervisor of ET04-W01
-
-		from da_services.api.v1.farmers import list_farmers
-
-		# Try to query ET03-W02 (outside supervisor's Woreda)
-		result = list_farmers(woreda="ET03-W02")
-		self.assertEqual(result["status"], "error")
-		self.assertIn("not in your scope", result["message"].lower())
-
-	def test_da_area_filters_cannot_escape_assigned_scope(self):
-		frappe.set_user(DA1)
-
-		from da_services.api.v1.farmers import list_farmers
-
-		result = list_farmers(woreda="ET03-W02")
-		self.assertEqual(result["status"], "error")
-		self.assertIn("not in your scope", result["message"].lower())
-
-		result = list_farmers(kebele="Bako 02")
-		self.assertEqual(result["status"], "error")
-		self.assertIn("not in your assigned kebeles", result["message"].lower())
-
-		result = list_farmers(kebele="Bako 01")
-		self.assertEqual(result["status"], "success")
-		self.assertEqual(len(result["data"]["farmers"]), 1)
-
-	def test_zone_scoped_supervisor_denied(self):
-		"""Test zone-scoped Supervisor is denied when no zone on records (PR #12 fix)."""
-		# Note: Can't create zone-only supervisor without woreda due to RBAC validation
-		# Instead, test that permission hook denies access when using frappe.get_list
-		# This tests the da_farmer_reference_query_conditions hook with zone scope
-
-		# Note: Supervisor RBAC requires woreda_scope, so we test the hook behavior
-		# by verifying that frappe.get_list applies the permission hook correctly
-		frappe.set_user(SUP)  # Use existing supervisor
-
-		from da_services.api.v1.farmers import list_farmers
-
-		# Supervisor with woreda scope should see farmers in their woreda
-		result = list_farmers()
-		# Should see farmer1 and farmer2 (both in ET04-W01)
-		self.assertGreaterEqual(len(result["data"]["farmers"]), 2)
+		self.assertIn("permission", result["message"].lower())

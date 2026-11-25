@@ -3,7 +3,7 @@
 PATCH /api/v1/da-services/farmers/{id}
 
 Implements queued farmer profile updates (server-side outbox pattern):
-- Permission validation (linked farmers only)
+- No edit permission check (any signed-in caller)
 - Field validation (approved fields only)
 - Server-side queue with retry (not client-side offline storage)
 - Version conflict detection (mock-only, real API pending)
@@ -21,10 +21,9 @@ from oan_auth_service.api.utils import handle_api_errors, success_response
 from da_services.api.router import route
 from da_services.services import constants as C
 from da_services.services import farmer_updates
-from da_services.utils.permissions import require_roles
+from da_services.utils.permissions import require_permission
 
 # Roles that can update farmers (DA only)
-WRITE_ROLES = (C.ROLE_DA,)
 
 
 @route("/farmers/<farmer_id>", methods=("PATCH",), summary="Update farmer profile")
@@ -82,9 +81,6 @@ def update_farmer_profile(farmer_id: str):
 	        - No fields to update
 	        - Invalid field (readonly or unknown)
 	        - Invalid field value (format, range)
-	    PermissionError (403):
-	        - Farmer not linked to current DA
-	        - User is not DA role
 	    DoesNotExistError (404):
 	        - Farmer not found in Registry
 
@@ -116,7 +112,6 @@ def update_farmer_profile(farmer_id: str):
 	        }
 	    }
 	"""
-	ctx = require_roles(*WRITE_ROLES)
 
 	# Validate farmer_id
 	if not farmer_id or not isinstance(farmer_id, str):
@@ -153,7 +148,6 @@ def update_farmer_profile(farmer_id: str):
 	event_id = farmer_updates.queue_farmer_update(
 		farmer_id=farmer_id,
 		updates=updates,
-		ctx=ctx,
 		client_op_id=client_op_id,
 	)
 
@@ -200,7 +194,6 @@ def get_farmer_update_status(farmer_id: str):
 	        }
 	    }
 	"""
-	ctx = require_roles(*WRITE_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
@@ -211,7 +204,7 @@ def get_farmer_update_status(farmer_id: str):
 
 	farmer_id = resolve_farmer_id(farmer_id)
 	try:
-		get_farmer_profile(farmer_id, ctx)  # Will throw if not in scope
+		get_farmer_profile(farmer_id)  # Will throw if not in scope
 	except frappe.DoesNotExistError:
 		frappe.throw(_("Farmer {0} not found.").format(farmer_id), frappe.DoesNotExistError)
 	except frappe.PermissionError:
@@ -253,7 +246,7 @@ def retry_farmer_update(event_id: str):
 	    DoesNotExistError (404): Event not found
 	    ValidationError (400): Event not in Failed/Conflict status
 	"""
-	require_roles(C.ROLE_ADMIN)  # Admin only
+	require_permission("DA Integration Event", "write")  # Admin only
 
 	if not event_id:
 		frappe.throw(_("Event ID is required."), frappe.ValidationError)

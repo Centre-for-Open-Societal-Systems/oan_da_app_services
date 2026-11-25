@@ -127,3 +127,12 @@ class GrievanceResult:
 	message: str | None = None
 	retryable: bool = False
 	raw: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EvidenceFile:
+	"""One document to attach to a grievance."""
+
+	file_name: str
+	content: bytes
+	mime_type: str | None = None

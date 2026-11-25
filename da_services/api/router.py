@@ -61,16 +61,19 @@ def _register() -> None:
 	import frappe.api
 
 	from da_services.api import middleware
-	from da_services.api.middleware import check_da_assignment
 	from da_services.api.v1 import grievance  # register Werkzeug routes
 
 	ensure_auth_routes()
 
 	# Importing the endpoint modules executes their @route(...) registrations.
 	from da_services.api.v1 import (
+		advisors,
 		agent_import,
 		agents,
 		assignments,
+		attendance_punches,
+		beneficiary,
+		charts,
 		crop_sown,
 		da,
 		dashboard,
@@ -78,7 +81,7 @@ def _register() -> None:
 		farmer_links,
 		farmers,
 		farmers_update,
-		leave,
+		gatherings,
 		livestock,
 		master,
 		me,
@@ -98,6 +101,4 @@ def _register() -> None:
 		if rule not in frappe.api.API_URL_MAP._rules:
 			frappe.api.API_URL_MAP.add(rule.empty())
 
-	register_namespace(
-		prefix=NAMESPACE, exempt_paths=sorted(_exempt_paths), revocation_check=check_da_assignment
-	)
+	register_namespace(prefix=NAMESPACE, exempt_paths=sorted(_exempt_paths))

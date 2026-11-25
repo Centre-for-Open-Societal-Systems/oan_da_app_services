@@ -75,8 +75,7 @@ selected code through `DA Administrative Area`, requires an active record at the
 level, and rejects unknown, inactive or out-of-scope selections with **400** / **403**.
 A filter always narrows the caller's scope; it never widens it or returns unrelated rows.
 Survey responses store display names for Region / Zone / Woreda / Kebele, so a Kebele
-filter matches both the stored code and its English display name. Visit and farmer list
-endpoints use the same scope rule (`da_services/services/area_scope.py`).
+filter matches both the stored code and its English display name.
 
 ### HTTP statuses
 

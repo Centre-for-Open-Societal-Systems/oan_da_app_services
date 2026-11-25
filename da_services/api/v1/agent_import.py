@@ -25,7 +25,7 @@ from da_services.integrations.da_registry.client import (
 )
 from da_services.services import agent_import as svc
 from da_services.services import constants as C
-from da_services.utils.permissions import require_roles
+from da_services.utils.permissions import require_permission
 from da_services.utils.ratelimit import rate_limited
 
 
@@ -56,7 +56,7 @@ def _registry_error(exc: DARegistryError):
 @frappe.whitelist()
 @handle_api_errors
 def template():
-	require_roles(*C.UNRESTRICTED_ROLES)
+	require_permission("DA Integration Event", "create")
 	return success_response(
 		data={
 			"version": "v3",
@@ -75,7 +75,7 @@ def template():
 @rate_limited(limit=30, seconds=60)
 @handle_api_errors
 def validate():
-	require_roles(*C.UNRESTRICTED_ROLES)
+	require_permission("DA Integration Event", "create")
 	filename, content = _upload()
 	out = svc.validate_file(filename, content)
 	return success_response(
@@ -91,10 +91,10 @@ def validate():
 @rate_limited(limit=10, seconds=60)
 @handle_api_errors
 def import_agents():
-	ctx = require_roles(*C.UNRESTRICTED_ROLES)
+	require_permission("DA Integration Event", "create")
 	filename, content = _upload()
 	try:
-		out = svc.import_agents(filename, content, ctx=ctx)
+		out = svc.import_agents(filename, content)
 	except DARegistryError as exc:
 		return _registry_error(exc)
 	if out["status"] == "Rejected":
@@ -113,8 +113,8 @@ def import_agents():
 @frappe.whitelist()
 @handle_api_errors
 def list_imports(limit=20, start=0):
-	ctx = require_roles(*C.UNRESTRICTED_ROLES)
-	rows = svc.list_imports(limit=limit, start=start, ctx=ctx)
+	require_permission("DA Integration Event", "read")
+	rows = svc.list_imports(limit=limit, start=start)
 	return success_response(data=rows, meta={"count": len(rows), "limit": limit, "start": start})
 
 
@@ -122,9 +122,9 @@ def list_imports(limit=20, start=0):
 @frappe.whitelist()
 @handle_api_errors
 def exceptions(page=1, page_size=50):
-	ctx = require_roles(*C.UNRESTRICTED_ROLES)
+	require_permission("DA Integration Event", "read")
 	try:
-		out = svc.import_exceptions(page=page, page_size=page_size, ctx=ctx)
+		out = svc.import_exceptions(page=page, page_size=page_size)
 	except DARegistryError as exc:
 		return _registry_error(exc)
 	return success_response(

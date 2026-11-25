@@ -18,7 +18,7 @@
   "started_at",
   "completed_at",
   "sec_answers",
-  "answers_json",
+  "answers",
   "sec_scope",
   "region",
   "zone",
@@ -103,9 +103,10 @@
    "label": "Answers"
   },
   {
-   "fieldname": "answers_json",
-   "fieldtype": "Long Text",
-   "label": "Answers JSON"
+   "fieldname": "answers",
+   "fieldtype": "Table",
+   "label": "Answers",
+   "options": "DA Survey Answer"
   },
   {
    "fieldname": "sec_scope",
@@ -114,14 +115,16 @@
   },
   {
    "fieldname": "region",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Region",
+   "options": "DA Region",
    "read_only": 1
   },
   {
    "fieldname": "zone",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Zone",
+   "options": "DA Zone",
    "read_only": 1
   },
   {
@@ -130,8 +133,9 @@
   },
   {
    "fieldname": "woreda",
-   "fieldtype": "Data",
+   "fieldtype": "Link",
    "label": "Woreda",
+   "options": "DA Woreda",
    "read_only": 1
   },
   {
@@ -156,13 +160,13 @@
    "fieldname": "duplicate_guard_key",
    "fieldtype": "Data",
    "label": "Duplicate Guard Key",
-   "unique": 1,
-   "read_only": 1
+   "read_only": 1,
+   "unique": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-06 10:34:14.000000",
+ "modified": "2026-11-21 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Survey Response",
@@ -194,11 +198,13 @@
    "write": 1
   },
   {
+   "create": 1,
    "read": 1,
    "report": 1,
    "role": "Supervisor"
   },
   {
+   "create": 1,
    "read": 1,
    "role": "Development Agent"
   },

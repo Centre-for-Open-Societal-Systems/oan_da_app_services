@@ -11,7 +11,14 @@ import unittest
 
 from openpyxl import load_workbook
 
-from da_services.services.surveys import EXPORT_BASE_COLUMNS, build_export_rows, build_export_xlsx
+from da_services.services.surveys import (
+	EXPORT_ANSWER_COLUMNS,
+	EXPORT_ANSWERS_SHEET,
+	EXPORT_BASE_COLUMNS,
+	build_export_answer_rows,
+	build_export_rows,
+	build_export_xlsx,
+)
 
 PARAMETERS = [
 	{"id": "p1", "prompt": "Consent"},
@@ -94,3 +101,22 @@ class TestSurveyExportWorkbook(unittest.TestCase):
 		header = rows[0]
 		row = rows[1]
 		self.assertEqual(row[header.index("Template Version")], "")
+
+	def test_answers_sheet_lists_each_written_question_with_its_answer(self):
+		parameters = [
+			{"id": "p1", "prompt": "Consent", "type": "consent"},
+			{"id": "p2", "prompt": "Farmer ID", "type": "auto"},
+			{"id": "p4", "prompt": "How useful was the advice?", "type": "rating"},
+			{"id": "p5", "prompt": "Which crops?", "type": "multi"},
+		]
+		response = {**RESPONSE, "answers": {"p4": "4", "p5": ["Maize", "Teff"]}}
+		rows = build_export_answer_rows(parameters, [response])
+		self.assertEqual(rows[0], list(EXPORT_ANSWER_COLUMNS))
+		self.assertEqual(
+			[r[-3:] for r in rows[1:]],
+			[[1, "How useful was the advice?", "4"], [2, "Which crops?", "Maize, Teff"]],
+		)
+
+		workbook = load_workbook(filename=io.BytesIO(build_export_xlsx(parameters, [response])))
+		self.assertEqual(workbook.sheetnames[1], EXPORT_ANSWERS_SHEET)
+		self.assertEqual(workbook[EXPORT_ANSWERS_SHEET].max_row, 3)

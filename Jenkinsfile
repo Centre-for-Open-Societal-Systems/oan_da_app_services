@@ -3,7 +3,7 @@ pipeline {
 
     options {
         disableConcurrentBuilds()
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')
     }
 
     environment {
@@ -20,6 +20,11 @@ pipeline {
         // resolved to a commit at build time so a new commit there rebuilds the bench layer.
         AUTH_APP_URL    = 'https://github.com/Centre-for-Open-Societal-Systems/oan_auth_service'
         AUTH_APP_BRANCH = 'develop'
+        // develop is also installed on the oan_dev k3s node (stage "develop → oan_dev (helm)"), from the same
+        // image pushed again under this repository with the tag <__version__>-develop.<build>.
+        ECR_REPO        = 'eoan/oan-da-services/da-services'
+        // oan_dev's private address: APISIX binds its ports 80/443, the oan_dev verify calls it from the VPN agent.
+        OAN_DEV_EDGE_IP = '10.0.1.131'
     }
 
     stages {
@@ -29,12 +34,17 @@ pipeline {
                 checkout scm
                 script {
                     // Branches that build and deploy. Every other branch only runs the checks.
-                    // staging is not listed yet: the staging namespace has no services-backend /
-                    // services-backend-deps releases (create them with the Ansible apps role first).
+                    // Each target needs the services-backend / services-backend-deps releases and the
+                    // ecr-regcred secret in its namespace on the DA node (Ansible apps role); the
+                    // Deploy stage fails fast if they are missing.
                     def targets = [
                         develop: [
                             namespace: 'develop',
                             verifyUrl: 'https://da-backend-development.oanstaging.com'
+                        ],
+                        staging: [
+                            namespace: 'staging',
+                            verifyUrl: 'https://da-backend-staging.oanstaging.com'
                         ]
                     ]
                     def target = targets[env.BRANCH_NAME]
@@ -47,6 +57,14 @@ pipeline {
                     env.GIT_SHA = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
                     env.IMAGE_TAG_BUILD = "${env.TARGET_ENV}-${env.BUILD_NUMBER}-${env.GIT_SHA.substring(0, 7)}"
                     env.FULL_IMAGE      = "${env.IMAGE_REPO}:${env.IMAGE_TAG_BUILD}"
+                    // develop only: the oan_dev image, eoan/oan-da-services/da-services:<__version__>-develop.<build>,
+                    // which is also the chart version (ci/package_chart.py version)
+                    if (env.BRANCH_NAME == 'develop') {
+                        env.IMMUTABLE_TAG = sh(returnStdout: true, script: 'python3 ci/package_chart.py version').trim()
+                        env.HELM_IMAGE    = "${env.IMAGE_REGISTRY}/${env.ECR_REPO}:${env.IMMUTABLE_TAG}"
+                    } else {
+                        env.HELM_IMAGE    = ''
+                    }
                     echo "Branch ${env.BRANCH_NAME} -> deploy=${env.DEPLOY}, namespace ${env.K8S_NAMESPACE}, image ${env.FULL_IMAGE}"
                 }
             }
@@ -132,19 +150,31 @@ ENDSSH
                     usernameVariable: 'SSH_USER'
                 )]) {
                     // The node has no AWS credentials: Jenkins hands it a 12h ECR token, and the
-                    // push logs out again when it is done.
+                    // push logs out again when it is done. develop also pushes HELM_IMAGE for oan_dev,
+                    // here because the node deletes its copy of the image after the push.
                     sh '''
+if [ -n "$HELM_IMAGE" ]; then
+    # ECR does not create a repository on push.
+    aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$ECR_REPO" >/dev/null 2>&1 \
+        || aws ecr create-repository --region "$AWS_REGION" --repository-name "$ECR_REPO" >/dev/null
+fi
+
 aws ecr get-login-password --region "$AWS_REGION" \
     | ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "$SSH_USER@$DA_NODE" \
         "sudo docker login --username AWS --password-stdin '$IMAGE_REGISTRY'"
 
 ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "$SSH_USER@$DA_NODE" \
-    bash -s -- "$FULL_IMAGE" "$IMAGE_REPO:$TARGET_ENV" "$IMAGE_REGISTRY" <<'ENDSSH'
+    bash -s -- "$FULL_IMAGE" "$IMAGE_REPO:$TARGET_ENV" "$IMAGE_REGISTRY" "$HELM_IMAGE" <<'ENDSSH'
 set -euo pipefail
-IMAGE="$1"; MOVING="$2"; REGISTRY="$3"
+IMAGE="$1"; MOVING="$2"; REGISTRY="$3"; HELM_IMAGE="${4:-}"
 trap 'sudo docker logout "$REGISTRY" > /dev/null' EXIT
 sudo docker push "$IMAGE"
 sudo docker push "$MOVING"
+if [ -n "$HELM_IMAGE" ]; then
+    sudo docker tag "$IMAGE" "$HELM_IMAGE"
+    sudo docker push "$HELM_IMAGE"
+    sudo docker rmi "$HELM_IMAGE" > /dev/null
+fi
 
 # k3s pulls from ECR into its own containerd, so Docker's copy is no longer needed.
 # Cap the build cache too: the node's root disk also holds k3s images and volumes.
@@ -213,6 +243,146 @@ ENDSSH
                     echo "da-services did not report healthy at $url"
                     exit 1
                 '''
+            }
+        }
+
+        // Flow (develop): Checkout (version) -> Build image -> Push image -> Package chart -> deploy -> Publish chart.
+        // helm/oan-da-services is zipped with this build's image before the oan_dev deploy; the deploy installs
+        // that archive, and the same archive is published to oan-helm afterwards.
+        stage('Package chart') {
+            when { branch 'develop' }
+            steps {
+                script {
+                    env.IMAGE_TAG = env.IMMUTABLE_TAG
+                    env.SOURCE_COMMIT = env.GIT_SHA
+                    env.COMMIT_SUBJECT = sh(returnStdout: true, script: 'git log -1 --pretty=%s').trim()
+                    env.IMAGE_REPOSITORY = "${env.IMAGE_REGISTRY}/${env.ECR_REPO}"
+                }
+                sh 'python3 ci/package_chart.py package'
+                // The deploy stages run on the VPN deploy agent, which gets the archive from here.
+                stash name: 'built-chart', includes: 'built-chart/**'
+            }
+        }
+
+        // The routes chart (apisix/k8s) is packaged and published like the app chart, but only for a build that
+        // changed the routes or the gateway values: those are the builds that install it.
+        stage('Package gateway chart') {
+            when {
+                beforeAgent true
+                allOf {
+                    branch 'develop'
+                    anyOf {
+                        changeset 'apisix/**'
+                        changeset 'da_services/api/**'
+                        changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
+                    }
+                }
+            }
+            steps {
+                sh 'python3 ci/package_chart.py gateway-package'
+                stash name: 'built-gateway-chart', includes: 'built-gateway-chart/**'
+            }
+        }
+
+        // ---- develop -> Helm release `da-services` on the oan_dev k3s node ----
+        // Runs after the DA node deploy above, so a problem here never blocks it. Same image, pushed
+        // under eoan/oan-da-services/da-services:<__version__>-develop.<build> by "Push image".
+        stage('develop → oan_dev (helm)') {
+            when { beforeAgent true; branch 'develop' }
+            agent { label 'oan-ci-deploy' }   // VPN agent with helm and kubectl that reaches the oan_dev API
+            options { timeout(time: 45, unit: 'MINUTES') }
+            steps {
+                checkout scm
+                unstash 'built-chart'
+                withCredentials([file(credentialsId: 'oan-dev-kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh 'bash ci/deploy-helm-dev.sh'
+                }
+            }
+        }
+
+        // develop -> APISIX routes (chart apisix/k8s) on the oan_dev node, after the app deploy.
+        // Installs when the merged change touched the routes or the gateway values, or when the release is
+        // missing. Not `changeset`: Jenkins compares with the previous build, so a branch's first build has an
+        // empty changeset and skipped the install. The diff is against the first parent, as for a merge
+        // commit; a shallow clone without it counts as changed (the install is idempotent).
+        stage('develop → gateway (apisix)') {
+            when { beforeAgent true; branch 'develop' }
+            agent { label 'oan-ci-deploy' }
+            options { timeout(time: 15, unit: 'MINUTES') }
+            steps {
+                checkout scm
+                unstash 'built-gateway-chart'
+                withCredentials([file(credentialsId: 'oan-dev-kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        changed=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || echo apisix/)
+                        if echo "$changed" | grep -qE '^(apisix/|da_services/api/|helm/environments/dev/oan-da-services-gateway\\.yaml$)'; then
+                            echo "=== gateway files changed: deploying ==="
+                        elif ! helm -n "${DA_NAMESPACE:-da-app}" status da-services-gateway >/dev/null 2>&1; then
+                            echo "=== da-services-gateway is not installed: deploying ==="
+                        else
+                            echo "=== gateway unchanged and installed: skipping ==="
+                            exit 0
+                        fi
+                        bash ci/deploy-gateway.sh
+                    '''
+                }
+            }
+        }
+
+        // Through APISIX on oan_dev by its private address: public DNS may still point elsewhere.
+        stage('Verify (oan_dev)') {
+            when { beforeAgent true; branch 'develop' }
+            agent { label 'oan-ci-deploy' }
+            steps {
+                sh '''
+                    host=da-services.development.oanstaging.com
+                    url="https://$host/v1/da-services/health"
+                    for i in $(seq 1 10); do
+                        body=$(curl -sL -m 10 --resolve "$host:443:$OAN_DEV_EDGE_IP" "$url" || true)
+                        echo "attempt $i: $url -> $body"
+                        echo "$body" | grep -q '"status": *"healthy"' && exit 0
+                        sleep 6
+                    done
+                    echo "da-services did not report healthy at $url"
+                    exit 1
+                '''
+            }
+        }
+
+        // ---- Helm chart publish ----
+        // Adds the archive built by 'Package chart' to repository/develop/ of oan-helm, only after
+        // the oan_dev deploy and its verify succeeded.
+        stage('Publish chart') {
+            when { branch 'develop' }
+            steps {
+                // UNSTABLE, not failed: the image is already deployed.
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    withCredentials([usernamePassword(credentialsId: 'oan-helm-fork-token', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+                        sh 'python3 ci/package_chart.py publish'
+                    }
+                }
+            }
+        }
+
+        stage('Publish gateway chart') {
+            when {
+                beforeAgent true
+                allOf {
+                    branch 'develop'
+                    anyOf {
+                        changeset 'apisix/**'
+                        changeset 'da_services/api/**'
+                        changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
+                    }
+                }
+            }
+            steps {
+                // UNSTABLE, not failed: the routes are already installed.
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    withCredentials([usernamePassword(credentialsId: 'oan-helm-fork-token', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+                        sh 'python3 ci/package_chart.py gateway-publish'
+                    }
+                }
             }
         }
     }

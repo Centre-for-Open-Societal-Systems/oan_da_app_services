@@ -16,7 +16,6 @@ from werkzeug.wrappers import Request
 from da_services.integrations.farmer_registry import intake
 from da_services.integrations.farmer_registry.client import FarmerRegistryServerError
 from da_services.integrations.farmer_registry.mock import MockFarmerRegistryClient
-from da_services.services import constants as C
 
 FORM = {
 	"first_name": "Abebe",
@@ -92,17 +91,6 @@ class TestIntakeMapping(IntegrationTestCase):
 		self.assertEqual([o["value"] for o in options["Farmer"]["gender"]], ["FEMALE", "MALE", "OTHER"])
 		self.assertEqual(options["Farmer"]["gender"][1], {"value": "MALE", "label": "Male"})
 		self.assertIn("CROP_SHARE", [o["value"] for o in options["Land"]["land_ownership_type"]])
-
-	def test_places_walk_the_master_data_hierarchy(self):
-		client = MockFarmerRegistryClient()
-		self.assertEqual(intake.load_places(client, "region"), [{"id": "ET04", "name": "Oromia"}])
-		self.assertEqual(
-			[p["id"] for p in intake.load_places(client, "kebele", "ET040801")], ["ET04080101", "ET04080102"]
-		)
-		with self.assertRaises(intake.IntakeFormError):
-			intake.load_places(client, "woreda")  # needs a parent
-		with self.assertRaises(intake.IntakeFormError):
-			intake.load_places(client, "village", "ET04")
 
 	def test_wizard_extra_fields_reach_the_registry_rows(self):
 		form = {
@@ -382,7 +370,7 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 			"da_services.services.farmers.get_farmer_registry_client",
 			return_value=client or MockFarmerRegistryClient(),
 		):
-			return svc.register_farmer(dict(form), ctx=None)
+			return svc.register_farmer(dict(form))
 
 	def test_success_records_submission_on_the_event(self):
 		result = self._register(FORM)
@@ -467,15 +455,12 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 		self.assertIn("kept: registry down", last_error)
 
 	def test_registration_details_route(self):
-		from types import SimpleNamespace
 
 		from da_services.api.v1 import farmers as api
 
 		client = MockFarmerRegistryClient()
 		submitted = self._register(FORM, client)
-		admin = SimpleNamespace(unrestricted=True, has_any_role=lambda *r: False)
 		with (
-			patch.object(api, "require_roles", return_value=admin),
 			patch("da_services.services.farmers.get_farmer_registry_client", return_value=client),
 		):
 			out = api.get_registration(submitted["submission_id"])
@@ -494,10 +479,8 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 			missing = api.get_registration("not-a-mock-submission")
 			self.assertEqual((missing["status"], missing["code"]), ("error", "NOT_FOUND"))
 
-		# A DA sees only their own submissions; an unknown one is 404, not a registry call.
-		da = SimpleNamespace(unrestricted=False, has_any_role=lambda *r: C.ROLE_DA in r)
+		# An unknown submission is 404, not a registry call.
 		with (
-			patch.object(api, "require_roles", return_value=da),
 			patch("da_services.services.farmers.get_farmer_registry_client", return_value=client),
 		):
 			not_ours = api.get_registration("mock-sub-someone-else")
@@ -520,7 +503,6 @@ class TestRegisterFarmerIntakeMode(IntegrationTestCase):
 		)
 		frappe.local.form_dict = frappe._dict(FORM)
 		with (
-			patch.object(api, "require_roles", return_value=None),
 			patch("da_services.services.farmers.get_farmer_registry_client", return_value=client),
 		):
 			res = api.register_farmer()
@@ -547,7 +529,6 @@ class TestRegistrationDocumentUpload(IntegrationTestCase):
 		)
 		frappe.local.request = Request(builder.get_environ())
 		with (
-			patch.object(api, "require_roles", return_value=None),
 			patch(
 				"da_services.services.farmers.get_farmer_registry_client",
 				return_value=MockFarmerRegistryClient(),

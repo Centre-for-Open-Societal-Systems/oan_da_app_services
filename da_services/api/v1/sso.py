@@ -7,7 +7,6 @@ from frappe import _
 from oan_auth_service.api.router import prefixed
 from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
 
-from da_services.api.middleware import check_da_assignment
 from da_services.integrations.sso import SSOLoginError, sso_login
 
 sso_route = prefixed("/api/v1/da-services")
@@ -52,7 +51,6 @@ def login():
 			key=key,
 			return_url=conf.get("sso_return_url") or frappe.utils.get_url(),
 			timeout=int(conf.get("sso_timeout_seconds") or 20),
-			revocation_check=check_da_assignment,
 		)
 	except SSOLoginError as exc:
 		status, code = _ERRORS.get(exc.kind, _ERRORS["upstream"])

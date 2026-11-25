@@ -13,20 +13,9 @@ ROLE_EXECUTIVE = "Executive"
 ROLE_ADMIN = "OAN Administrator"
 ROLE_COMMS = "Communications Officer"
 
-DA_SERVICES_ROLES = (ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN, ROLE_COMMS)
+# DA Kebele row created on migrate (setup/install.py) for "no Kebele"; it keeps this spelling.
+NOT_ASSIGNED_KEBELE = "Not Assigned"
 
-# Grievance access: Comms is excluded — FSD Appendix D forbids Comms seeing DA identity.
-GRIEVANCE_ROLES = (ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN)
-
-# Roles whose scope is the whole country. Everyone else is bounded by the Region /
-# Woreda on their DA RBAC Assignment rows.
-UNRESTRICTED_ROLES = frozenset({ROLE_ADMIN, "System Manager", "Administrator"})
-
-# Roles that may read DA records at all. Communications Officer is deliberately absent:
-# FSD Appendix D gives it no access to DA identity.
-DA_READ_ROLES = frozenset(
-	{ROLE_DA, ROLE_SUPERVISOR, ROLE_EXECUTIVE, ROLE_ADMIN, "System Manager", "Administrator"}
-)
 
 # Registry-owned vocabulary mirrored here so code does not scatter string literals.
 # Active Status (FSD 3.2.1 column 5) is set by Part 2 lifecycle outcomes.
@@ -37,3 +26,6 @@ ACTIVE_STATUSES = (ACTIVE_STATUS_ACTIVE, ACTIVE_STATUS_ON_LEAVE, ACTIVE_STATUS_S
 
 # Approval Status (FSD 3.2.1 column 9).
 APPROVAL_STATUSES = ("Draft", "Awaiting review", "Approved", "Published")
+
+# Keycloak staff-realm client role for central dashboard chart feeders (not a Frappe Role).
+CHARTS_READ_ROLE = "charts:read"

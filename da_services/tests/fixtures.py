@@ -56,24 +56,183 @@ def ensure_administrative_area(code: str, level: str, parent: str | None, name_e
 	doc.insert(ignore_permissions=True, ignore_links=True)
 
 
+# Geo masters (DA Country / Region / Zone / Woreda / Kebele) with the same codes as the
+# administrative areas above, plus the extra Zones / Woredas that RBAC scopes in tests use.
+# DA Kebele Assignment.kebele and DA RBAC Assignment scopes link to these masters.
+GEO_COUNTRY = ("ET", "Ethiopia")
+GEO_EXTRA = [
+	("ET04-Z02", "Zone", "ET04", "Zone 02"),
+	("ET03-Z01", "Zone", "ET03", "Zone 01"),
+	("ET04-W02", "Woreda", "ET04-Z01", "Woreda 02"),
+	("ET04-W09", "Woreda", "ET04-Z02", "Woreda 09"),
+	("ET03-W01", "Woreda", "ET03-Z01", "Woreda 01"),
+	("ET04-W09-K01", "Kebele", "ET04-W09", "Kebele 09-01"),
+]
+# level -> (doctype, parent link field)
+GEO_LEVELS = {
+	"Country": ("DA Country", None),
+	"Region": ("DA Region", "country"),
+	"Zone": ("DA Zone", "region"),
+	"Woreda": ("DA Woreda", "zone"),
+	"Kebele": ("DA Kebele", "woreda"),
+}
+
+
+def ensure_geo_masters() -> None:
+	"""Create the test geo master rows that are missing and reactivate inactive ones.
+
+	Idempotent; test_geo_master_sync empties these tables, so call it from setUp.
+	"""
+	rows = [(GEO_COUNTRY[0], "Country", None, GEO_COUNTRY[1])]
+	rows += [
+		(code, level, parent or GEO_COUNTRY[0], name) for code, level, parent, name in ADMINISTRATIVE_AREAS
+	]
+	rows += GEO_EXTRA
+	order = list(GEO_LEVELS)
+	for code, level, parent, name_en in sorted(rows, key=lambda r: order.index(r[1])):
+		doctype, parent_field = GEO_LEVELS[level]
+		if frappe.db.exists(doctype, code):
+			if not frappe.db.get_value(doctype, code, "is_active"):
+				frappe.db.set_value(doctype, code, "is_active", 1, update_modified=False)
+			continue
+		prefix = level.lower()
+		doc = {"doctype": doctype, f"{prefix}_code": code, f"{prefix}_name": name_en, "is_active": 1}
+		if parent_field:
+			doc[parent_field] = parent
+		frappe.get_doc(doc).insert(ignore_permissions=True)
+
+
+def set_da_registry_id(user: str, da_id: str) -> None:
+	"""Give `user` the DA Registry ID `da_id`, taking it off any other user (it is unique)."""
+	User = frappe.qb.DocType("User")
+	(
+		frappe.qb.update(User)
+		.set(User.da_registry_id, None)
+		.where((User.da_registry_id == da_id) & (User.name != user))
+	).run()
+	frappe.db.set_value("User", user, "da_registry_id", da_id, update_modified=False)
+
+
+def ensure_da_user(da_id: str) -> str:
+	"""The User that holds DA Registry ID `da_id`, for a DA Kebele Assignment.
+
+	DA Kebele Assignment requires `user` and fetches `da_id` from its DA Registry ID.
+	The user of the DA's latest RBAC assignment is preferred, so the posting belongs to
+	the login the test acts as; then a user already holding the ID; else one is created.
+	"""
+	user = frappe.db.get_value("DA RBAC Assignment", {"da_id": da_id}, "user", order_by="creation desc")
+	if not user:
+		user = frappe.db.get_value("User", {"da_registry_id": da_id})
+	if not user:
+		user = f"{da_id.lower()}@da-test.local"
+		if not frappe.db.exists("User", user):
+			frappe.get_doc(
+				{"doctype": "User", "email": user, "first_name": da_id, "send_welcome_email": 0}
+			).insert(ignore_permissions=True)
+	set_da_registry_id(user, da_id)
+	return user
+
+
+def kebele_chain(kebele: str) -> dict:
+	"""Region / zone / woreda / kebele codes for a master Kebele name."""
+	woreda = frappe.db.get_value("DA Kebele", kebele, "woreda")
+	zone = frappe.db.get_value("DA Woreda", woreda, "zone")
+	region = frappe.db.get_value("DA Zone", zone, "region")
+	return {"kebele": kebele, "woreda": woreda, "zone": zone, "region": region}
+
+
+def live_geo() -> dict:
+	"""Active master chain for this site (do not invent Admin Area / dummy codes).
+
+	Seeds/reactivates the shared test masters first so callers stay green after
+	``test_geo_master_sync`` clears tables (or on a fresh CI site with no kebeles).
+	"""
+	ensure_geo_masters()
+	rows = frappe.get_all(
+		"DA Kebele", filters={"is_active": 1}, fields=["name", "woreda"], order_by="name asc", limit=1
+	)
+	if not rows:
+		frappe.throw("ensure_geo_masters left no active DA Kebele for live_geo()")
+	row = rows[0]
+	primary = kebele_chain(row.name)
+	siblings = frappe.get_all(
+		"DA Kebele",
+		filters={"woreda": primary["woreda"], "is_active": 1, "name": ("!=", primary["kebele"])},
+		pluck="name",
+		order_by="name asc",
+		limit=1,
+	)
+	foreign = None
+	for other_region in frappe.get_all(
+		"DA Region", filters={"name": ("!=", primary["region"])}, pluck="name", order_by="name asc"
+	):
+		zones = frappe.get_all("DA Zone", filters={"region": other_region}, pluck="name", limit=1)
+		if not zones:
+			continue
+		woredas = frappe.get_all("DA Woreda", filters={"zone": zones[0]}, pluck="name", limit=1)
+		if not woredas:
+			continue
+		kebeles = frappe.get_all(
+			"DA Kebele", filters={"woreda": woredas[0], "is_active": 1}, pluck="name", limit=1
+		)
+		if kebeles:
+			foreign = kebele_chain(kebeles[0])
+			break
+	if foreign is None:
+		cand = frappe.get_all(
+			"DA Kebele",
+			filters={"is_active": 1, "woreda": ("!=", primary["woreda"])},
+			pluck="name",
+			order_by="name asc",
+			limit=1,
+		)
+		if not cand:
+			frappe.throw("ensure_geo_masters left no foreign DA Kebele for live_geo()")
+		foreign = kebele_chain(cand[0])
+	return {
+		**primary,
+		"other_kebele": siblings[0] if siblings else primary["kebele"],
+		"foreign_kebele": foreign["kebele"],
+		"foreign_woreda": foreign["woreda"],
+		"foreign_region": foreign["region"],
+	}
+
+
+def stamp_visit_geo(name: str, geo: dict) -> None:
+	"""Overwrite visit posting codes with live master links (registry mock may use legacy codes)."""
+	frappe.db.set_value(
+		"DA Visit",
+		name,
+		{
+			"region": geo["region"],
+			"zone": geo["zone"],
+			"woreda": geo["woreda"],
+			"kebele": geo["kebele"],
+		},
+		update_modified=False,
+	)
+
+
 def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic") -> None:
 	"""Replace this DA's assignments with one Effective posting for `kebele`.
 
 	Visit and farmer lists for a Development Agent are scoped to Effective
 	DA Kebele Assignment rows, so tests that read those lists need one.
+	Uses ignore_links so the posting can reference a synced master row that
+	tests already assume exists (do not invent Admin Area / master rows here).
 	"""
-	create_administrative_areas()
 	frappe.db.delete("DA Kebele Assignment", {"da_id": da_id})
 	frappe.get_doc(
 		{
 			"doctype": "DA Kebele Assignment",
+			"user": ensure_da_user(da_id),
 			"da_id": da_id,
 			"kebele": kebele,
 			"state": "Effective",
 			"mode": mode,
 			"effective_date": "2026-10-01",
 		}
-	).insert(ignore_permissions=True)
+	).insert(ignore_permissions=True, ignore_links=True)
 
 
 def create_administrative_areas():
@@ -90,6 +249,7 @@ def create_administrative_areas():
 	"""
 	for code, level, parent, name_en in ADMINISTRATIVE_AREAS:
 		ensure_administrative_area(code, level, parent, name_en)
+	ensure_geo_masters()
 
 
 def cleanup_test_data():
@@ -108,3 +268,57 @@ def cleanup_test_data():
 	for doctype in doctypes_to_clean:
 		frappe.db.delete(doctype, {"da_id": ["like", "%TEST%"]})
 		frappe.db.delete(doctype, {"farmer_id": ["like", "%TEST%"]})
+
+
+def cleanup_test_rows(
+	*,
+	users: list[str] | tuple[str, ...] = (),
+	da_ids: list[str] | tuple[str, ...] = (),
+	farmer_ids: list[str] | tuple[str, ...] = (),
+) -> None:
+	"""Delete only rows owned by the given test users / DA-IDs / farmers. Never wipe a whole DocType.
+
+	Use in setUp/tearDown instead of ``frappe.db.delete("DA Visit")`` with no filters.
+	"""
+	users = tuple(u for u in users if u)
+	da_ids = tuple(d for d in da_ids if d)
+	farmer_ids = tuple(f for f in farmer_ids if f)
+	if not users and not da_ids and not farmer_ids:
+		return
+
+	if da_ids:
+		frappe.db.delete("DA Visit", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Gathering", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Task", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Farmer Link", {"da_id": ["in", da_ids]})
+		frappe.db.delete("DA Profile Change Request", {"da_id": ["in", da_ids]})
+		# Prefer user-scoped kebele deletes below so shared demo DA-IDs are not wiped.
+		if not users:
+			frappe.db.delete("DA Kebele Assignment", {"da_id": ["in", da_ids]})
+	if farmer_ids:
+		frappe.db.delete("DA Visit", {"farmer_id": ["in", farmer_ids]})
+		frappe.db.delete("DA Farmer Link", {"farmer_id": ["in", farmer_ids]})
+		frappe.db.delete("DA Farmer Reference", {"farmer_id": ["in", farmer_ids]})
+	if users:
+		frappe.db.delete("DA Visit", {"user": ["in", users]})
+		frappe.db.delete("DA Visit", {"assigned_by": ["in", users]})
+		frappe.db.delete("DA Gathering", {"user": ["in", users]})
+		frappe.db.delete("DA Gathering", {"assigned_by": ["in", users]})
+		frappe.db.delete("DA Notification", {"user": ["in", users]})
+		frappe.db.delete("DA RBAC Assignment", {"user": ["in", users]})
+		frappe.db.delete("DA Profile Change Request", {"requested_by": ["in", users]})
+		frappe.db.delete("DA Kebele Assignment", {"user": ["in", users]})
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def as_user(user: str):
+	"""Run the block signed in as `user`, then restore the previous session user."""
+	previous = frappe.session.user
+	frappe.set_user(user)
+	try:
+		yield
+	finally:
+		frappe.set_user(previous)

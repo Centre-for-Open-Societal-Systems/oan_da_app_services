@@ -1,0 +1,146 @@
+{
+ "actions": [],
+ "autoname": "format:DA-CERT-{YYYY}-{#######}",
+ "creation": "2026-11-16 00:00:00",
+ "description": "A certificate's details kept in DA Services; the DA Registry keeps the file. Written through the profile API only.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "da_id",
+  "record_id",
+  "title",
+  "issuer",
+  "col_main",
+  "issued_on",
+  "expires_on",
+  "file_name",
+  "sec_registry",
+  "change_request",
+  "replaces_document_id",
+  "registry_document_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "da_id",
+   "fieldtype": "Data",
+   "label": "DA-ID",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "record_id",
+   "fieldtype": "Data",
+   "label": "Education & Professional Record",
+   "read_only": 1,
+   "description": "internal_record_id of the record in the DA Registry"
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "issuer",
+   "fieldtype": "Data",
+   "label": "Issuer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "issued_on",
+   "fieldtype": "Date",
+   "label": "Issued On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "expires_on",
+   "fieldtype": "Date",
+   "label": "Expires On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "file_name",
+   "fieldtype": "Data",
+   "label": "File Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_registry",
+   "fieldtype": "Section Break",
+   "label": "Request and DA Registry"
+  },
+  {
+   "fieldname": "change_request",
+   "fieldtype": "Link",
+   "label": "Change Request",
+   "options": "DA Profile Change Request",
+   "reqd": 1,
+   "search_index": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "replaces_document_id",
+   "fieldtype": "Data",
+   "label": "Replaces Document",
+   "read_only": 1
+  },
+  {
+   "fieldname": "registry_document_id",
+   "fieldtype": "Data",
+   "label": "Registry Document",
+   "search_index": 1,
+   "read_only": 1,
+   "description": "document_id in the DA Registry, once the change was applied"
+  }
+ ],
+ "in_create": 1,
+ "links": [],
+ "modified": "2026-11-21 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DA Services",
+ "name": "DA Certificate",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "System Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "OAN Administrator"
+  },
+  {
+   "role": "Development Agent",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Supervisor",
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "Executive",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "title",
+ "track_changes": 1
+}

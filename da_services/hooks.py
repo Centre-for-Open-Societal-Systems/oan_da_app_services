@@ -22,7 +22,6 @@ add_to_apps_screen = [
 		"name": "da_services",
 		"title": "DA Services",
 		"route": "/desk/da-services",
-		"has_permission": "da_services.api.permission.has_app_permission",
 	}
 ]
 
@@ -31,7 +30,7 @@ add_to_apps_screen = [
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/da_services/css/da_services.css"
-# app_include_js = "/assets/da_services/js/da_services.js"
+app_include_js = "/assets/da_services/js/geo_cascade.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/da_services/css/da_services.css"
@@ -139,36 +138,6 @@ after_migrate = "da_services.setup.install.after_migrate"
 # -----------
 # Permissions evaluated in scripted ways
 
-# FSD 3.1.1 deny-by-default RBAC. The query condition filters list views, reports and
-# the REST API uniformly; has_permission mirrors it for a single document.
-permission_query_conditions = {
-	"DA RBAC Assignment": "da_services.permissions.rbac_assignment_query_conditions",
-	"DA Task": "da_services.permissions.da_task_query_conditions",
-	"DA Visit": "da_services.permissions.da_visit_query_conditions",
-	"DA Notification": "da_services.permissions.da_notification_query_conditions",
-	"DA Kebele Assignment": "da_services.permissions.da_kebele_assignment_query_conditions",
-	"DA Profile Change Request": "da_services.permissions.da_profile_change_request_query_conditions",
-	"DA Leave Request": "da_services.permissions.da_leave_request_query_conditions",
-	"DA Farmer Link": "da_services.permissions.da_farmer_link_query_conditions",
-	"DA Farmer Reference": "da_services.permissions.da_farmer_reference_query_conditions",
-	"DA Survey Template": "da_services.permissions.da_survey_template_query_conditions",
-	"DA Survey Response": "da_services.permissions.da_survey_response_query_conditions",
-}
-
-has_permission = {
-	"DA RBAC Assignment": "da_services.permissions.has_rbac_assignment_permission",
-	"DA Task": "da_services.permissions.has_da_task_permission",
-	"DA Visit": "da_services.permissions.has_da_visit_permission",
-	"DA Notification": "da_services.permissions.has_da_notification_permission",
-	"DA Kebele Assignment": "da_services.permissions.has_da_kebele_assignment_permission",
-	"DA Profile Change Request": "da_services.permissions.has_da_profile_change_request_permission",
-	"DA Leave Request": "da_services.permissions.has_da_leave_request_permission",
-	"DA Farmer Link": "da_services.permissions.has_da_farmer_link_permission",
-	"DA Farmer Reference": "da_services.permissions.has_da_farmer_reference_permission",
-	"DA Survey Template": "da_services.permissions.has_da_survey_template_permission",
-	"DA Survey Response": "da_services.permissions.has_da_survey_response_permission",
-}
-
 # Document Events
 # ---------------
 # Hook on document methods and events
@@ -180,6 +149,16 @@ has_permission = {
 # 		"on_trash": "method"
 # 	}
 # }
+
+doc_events = {
+	"User": {
+		# On create with a DA Registry ID: create the DA's RBAC and Kebele assignments from
+		# their DA Registry record (in the request, not a job). A later change of
+		# da_registry_id does not sync.
+		"after_insert": "da_services.services.da_registry_assignment_sync.on_user_update",
+		# "on_update": "da_services.services.da_registry_assignment_sync.on_user_update",
+	},
+}
 
 # Scheduled Tasks
 # ---------------
@@ -196,13 +175,17 @@ scheduler_events = {
 		],
 	},
 	"daily": [
-		# Start approved leaves on their first day; end active leaves after their last day.
-		"da_services.services.leave.process_leave_schedule",
+		# Grant DA RBAC Assignment scopes as User Permissions on effective_from; revoke after effective_to.
+		"da_services.services.rbac_user_permissions.sync_all_user_permissions",
+		# DA Kebele User Permission for an Effective DA Kebele Assignment from its effective_date.
+		"da_services.services.kebele_user_permissions.sync_all_user_permissions",
+		# User Permissions on User from DA Hierarchy: each user and everyone below them.
+		"da_services.services.hierarchy_user_permissions.sync_all_user_permissions",
 	],
 	"daily_long": [
-		# Region / Zone / Woreda / Kebele from Master Data: about a thousand calls, needs
-		# the long queue's timeout and the service identity.
-		"da_services.services.area_sync.sync_areas_scheduled",
+		# DA Country / Region / Zone / Woreda / Kebele masters, logged in with the
+		# Master Data Sync account of DA Services Settings.
+		"da_services.services.geo_master_sync.sync_geo_masters_scheduled",
 	],
 }
 

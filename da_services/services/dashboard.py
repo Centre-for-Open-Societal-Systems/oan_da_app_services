@@ -28,10 +28,7 @@ from da_services.da_services.doctype.da_visit.da_visit import COMPLETE, PLANNED_
 from da_services.services import assignments, da_service, tasks, visits
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
-from da_services.utils.permissions import ScopeContext, require_roles
 
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-WOREDA_HEALTH_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
 DEFAULT_RANGE_DAYS = 30
 DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 500
@@ -46,16 +43,11 @@ KEBELE_STATUSES = frozenset({STATUS_ON_TRACK, STATUS_WATCH, STATUS_AT_RISK})
 OPEN_GRIEVANCE_STATUSES = frozenset({"Open", "Submitted", "Reopened", "In Progress", "More Info Needed"})
 
 
-def resolve_da(da_id: str | None, ctx: ScopeContext) -> str:
-	"""The DA-ID the dashboard is about. A DA is always shown their own."""
-	if ctx.has_any_role(C.ROLE_DA) and not ctx.unrestricted:
-		own = sorted(ctx.da_ids)
-		if not own:
-			frappe.throw(_("Your account is not bound to a DA-ID."), frappe.PermissionError)
-		return own[0]
+def resolve_da(da_id: str | None) -> str:
+	"""The DA-ID the dashboard is about: the one named."""
 	if not da_id:
 		frappe.throw(_("da_id is required."), frappe.ValidationError)
-	get_da_reference(da_id, ctx)  # PermissionError when outside the officer's scope
+	get_da_reference(da_id)  # PermissionError when outside the officer's scope
 	return da_id
 
 
@@ -93,9 +85,9 @@ def sync_status(da_id: str, user: str) -> dict:
 	}
 
 
-def _agent_summary(ctx: ScopeContext, *, from_date=None, to_date=None, da_id: str | None = None) -> dict:
+def _agent_summary(*, from_date=None, to_date=None, da_id: str | None = None) -> dict:
 	"""Development Agent (or officer with ``da_id``) home tiles: visits / tasks / sync."""
-	da_id = resolve_da(da_id, ctx)
+	da_id = resolve_da(da_id)
 	from_d, to_d = _parse_range(from_date, to_date)
 	return {
 		"view": "agent",
@@ -103,23 +95,16 @@ def _agent_summary(ctx: ScopeContext, *, from_date=None, to_date=None, da_id: st
 		"range": {"from": str(from_d), "to": str(to_d)},
 		"visits": visits.dashboard_counts(da_id, from_d, to_d),
 		"tasks": tasks.dashboard_counts(da_id, from_d, to_d),
-		"sync": sync_status(da_id, ctx.user),
+		"sync": sync_status(da_id, frappe.session.user),
 	}
 
 
-def _wants_woreda_summary(ctx: ScopeContext, da_id: str | None) -> bool:
-	"""Supervisor / Admin programme-health view when no ``da_id`` is named."""
-	if da_id:
-		return False
-	if ctx.unrestricted:
-		return True
-	if ctx.has_any_role(C.ROLE_SUPERVISOR):
-		return True
-	return False
+def _wants_woreda_summary(da_id: str | None) -> bool:
+	"""Programme-health view when no ``da_id`` is named."""
+	return not da_id
 
 
 def summary(
-	ctx: ScopeContext | None = None,
 	*,
 	from_date=None,
 	to_date=None,
@@ -139,10 +124,8 @@ def summary(
 	- Officer with ``da_id`` → that DA's agent tiles (scope-checked).
 	- Executive without ``da_id`` → still requires ``da_id`` (no region roll-up here yet).
 	"""
-	ctx = ctx or require_roles(*READ_ROLES)
-	if _wants_woreda_summary(ctx, da_id):
+	if _wants_woreda_summary(da_id):
 		out = woreda_health(
-			ctx,
 			from_date=from_date,
 			to_date=to_date,
 			woreda=woreda,
@@ -155,7 +138,7 @@ def summary(
 		)
 		out["view"] = "woreda"
 		return out
-	return _agent_summary(ctx, from_date=from_date, to_date=to_date, da_id=da_id)
+	return _agent_summary(from_date=from_date, to_date=to_date, da_id=da_id)
 
 
 def _task_items(da_id: str, date) -> list[dict]:
@@ -193,9 +176,8 @@ def _task_items(da_id: str, date) -> list[dict]:
 	return items
 
 
-def today(ctx: ScopeContext | None = None, *, date=None, da_id: str | None = None) -> dict:
-	ctx = ctx or require_roles(*READ_ROLES)
-	da_id = resolve_da(da_id, ctx)
+def today(*, date=None, da_id: str | None = None) -> dict:
+	da_id = resolve_da(da_id)
 	d = getdate(date) if date else getdate()
 	items = visits.today_items(da_id, d) + _task_items(da_id, d)
 	# Timed entries first in clock order, undated tasks at the end.
@@ -215,13 +197,13 @@ def status_for_visit_pct(visit_pct: int) -> str:
 	return STATUS_AT_RISK
 
 
-def resolve_supervisor_woreda(ctx: ScopeContext, woreda: str | None = None) -> str:
+def resolve_supervisor_woreda(woreda: str | None = None) -> str:
 	"""Assigned Woreda code for the Supervisor Programme Health screen.
 
 	Single grant → that Woreda. Multiple grants / Admin → ``woreda`` query required and
 	must fall inside the caller's scope (``assignments._resolve_officer_scope``).
 	"""
-	code, _region = assignments._resolve_officer_scope(ctx, woreda)
+	code, _region = assignments._resolve_officer_scope(woreda)
 	if not code:
 		frappe.throw(_("woreda is required."), frappe.ValidationError)
 	return code
@@ -283,9 +265,9 @@ def _farmer_total(woreda: str) -> int:
 	return frappe.db.count("DA Farmer Reference", {"woreda": woreda})
 
 
-def _agent_counts(ctx: ScopeContext, woreda: str, kebele_codes: list[str]) -> tuple[int, dict[str, int]]:
+def _agent_counts(woreda: str, kebele_codes: list[str]) -> tuple[int, dict[str, int]]:
 	"""Active agents in the Woreda and per-Kebele agent counts (any active_status except Separated)."""
-	agents, _total = da_service.list_agents(ctx, woreda=woreda, limit=MAX_PAGE_LIMIT, start=0)
+	agents, _total = da_service.list_agents(woreda=woreda, limit=MAX_PAGE_LIMIT, start=0)
 	by_kebele = {code: 0 for code in kebele_codes}
 	active = 0
 	for agent in agents:
@@ -436,7 +418,6 @@ def _apply_kebele_filters(
 
 
 def woreda_health(
-	ctx: ScopeContext | None = None,
 	*,
 	from_date=None,
 	to_date=None,
@@ -452,11 +433,8 @@ def woreda_health(
 
 	Stats are full-woreda. Kebele / status / agents / q filters apply only to ``kebeles``.
 	"""
-	ctx = ctx or require_roles(*WOREDA_HEALTH_ROLES)
-	if not ctx.unrestricted and not ctx.has_any_role(C.ROLE_SUPERVISOR):
-		frappe.throw(_("Supervisor Programme Health is for Supervisors."), frappe.PermissionError)
 
-	woreda_code = resolve_supervisor_woreda(ctx, woreda)
+	woreda_code = resolve_supervisor_woreda(woreda)
 	from_d, to_d = _parse_range(from_date, to_date)
 	page_limit, page_start = _parse_page(limit, start)
 
@@ -467,7 +445,7 @@ def woreda_health(
 		_validate_kebele_in_woreda(woreda_code, kebele, allowed)
 
 	farmer_by_kebele = _farmer_counts_by_kebele(woreda_code, kebele_codes)
-	active_agents, agents_by_kebele = _agent_counts(ctx, woreda_code, kebele_codes)
+	active_agents, agents_by_kebele = _agent_counts(woreda_code, kebele_codes)
 	visit_metrics, last_sync = _visit_metrics_by_kebele(kebele_codes, from_d, to_d)
 	all_rows = _build_kebele_rows(
 		kebeles,

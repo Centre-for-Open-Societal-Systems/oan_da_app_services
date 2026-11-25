@@ -44,8 +44,8 @@ Location. Mnemonic `ls_livestock_location`. Screen alias `address`, `location`. 
 
 | Field | Label | Type | Required | Read-only | Control |
 | --- | --- | --- | --- | --- | --- |
-| `geo_lowest_level_value_id` | Administrative hierarchy | string | yes | no | Geography `geo-level-values`. Writes `hierarchy` → `geo_code_hierarchy_json`, `value` → `geo_lowest_level_value_id`. |
-| `latitude` | Holding location | number | no | no | Geography `geo-level-values`. Writes `hierarchy` → `geo_code_hierarchy_json`, `latitude` → `latitude`, `location` → `geo_lowest_level_value_id`, `longitude` → `longitude`. |
+| `geo_lowest_level_value_id` | Administrative hierarchy | string | yes | no | Geography. Writes `hierarchy` → `geo_code_hierarchy_json`, `value` → `geo_lowest_level_value_id`. |
+| `latitude` | Holding location | number | no | no | Geography. Writes `hierarchy` → `geo_code_hierarchy_json`, `latitude` → `latitude`, `location` → `geo_lowest_level_value_id`, `longitude` → `longitude`. |
 
 ## `livestock_animal_details_section_01`
 

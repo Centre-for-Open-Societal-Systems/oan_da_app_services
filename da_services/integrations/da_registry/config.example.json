@@ -3,12 +3,15 @@
 
   "da_registry_backend": "http",
 
-  "_comment_auth": "Whose token reaches the registry. user: the signed-in user's own staff IAM access token (Authorization: Bearer) and CSRF value (X-CSRF-Token), forwarded by DA Services after its RBAC check; da_registry_keycloak is not needed. service: the da-services-backend service account below. The scheduled registry read-back only runs with service.",
+  "_comment_auth": "Whose token reaches the registry. user: the signed-in user's own staff IAM access token (Authorization: Bearer) and CSRF value (X-CSRF-Token), forwarded by DA Services after its RBAC check; da_registry_keycloak is not needed. A profile change request is created only in an OAN Administrator's request (the second approval), so only the Administrator's token writes. service: the da-services-backend service account below, kept for a later security phase. The scheduled registry read-back only runs with service.",
   "da_registry_auth": "user",
   "da_registry_base_url": "https://staff-da-registry.development.oanstaging.com",
   "da_registry_timeout_seconds": 10,
   "da_registry_register_id": "6f1c2d8e-4a7b-4c3e-9d2f-8b5a1e7c3f90",
   "da_registry_sender_app": "da-services",
+
+  "_comment_readback": "Profile changes: after the Administrator's second approval creates the registry change request, DA Services reads its approval_status for up to this many seconds (every 2 s) in the same request. The registry applies a change in about 4 s once its own approval is off; 0 reads once. What is still PENDING is read again on later profile calls.",
+  "da_registry_cr_readback_seconds": 6,
 
   "_comment_master_data": "Optional. Labels for the coded profile fields (Mr, Degree, Development agent) come from Master Data with the same token; without it codes are shown as words.",
   "da_registry_master_data_url": "https://master-data.development.oanstaging.com",

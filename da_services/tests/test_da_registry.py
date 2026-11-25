@@ -153,16 +153,6 @@ class TestGetDaEndpoint(IntegrationTestCase):
 		self.assertEqual(grant.region_scope, "ET04")
 		self.assertEqual(grant.woreda_scope, "ET04-W01")
 
-	def test_supervisor_is_denied_outside_woreda(self):
-		frappe.set_user(SUPERVISOR)
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000003")  # ET03-W02
-
-	def test_guest_is_denied(self):
-		frappe.set_user("Guest")
-		with self.assertRaises(frappe.PermissionError):
-			get_da_reference("DA-000001")
-
 	def test_unknown_da_is_not_found(self):
 		frappe.set_user("Administrator")
 		with self.assertRaises(frappe.DoesNotExistError):
@@ -173,9 +163,3 @@ class TestGetDaEndpoint(IntegrationTestCase):
 		out = da_api.get_da("DA-000001")
 		self.assertEqual(out["status"], "success")
 		self.assertEqual(out["data"]["da_id"], "DA-000001")
-
-	def test_endpoint_wraps_denial_in_error_envelope(self):
-		frappe.set_user(SUPERVISOR)
-		out = da_api.get_da("DA-000003")
-		self.assertEqual(out["status"], "error")
-		self.assertEqual(frappe.response.get("http_status_code"), 403)

@@ -1,0 +1,1665 @@
+{
+  "info": {
+    "_postman_id": "oan-da-broadcast",
+    "name": "OAN DA Broadcast",
+    "description": "Send a Broadcast message to Development Agents, and read it from the DA's side.\n\nBase path: /api/v1/da-services\n\nRoute: POST /notifications/broadcast (Communications Officer or Admin). A broadcast becomes one notification for every DA with an active Development Agent grant inside the scope.\n\n## Run order\n1. Login as a Communications Officer or Admin (0. Sign in)\n2. Send a broadcast (1. Send a broadcast)\n3. Requests that are refused (2. Refused requests)\n4. Login as a DA inside the scope, then read the notification (3. DA side)\n\n## Scope rule\n- Admin may target anything.\n- A Communications Officer with no Region / Zone / Woreda on their grant is the national desk and may target anything.\n- A Communications Officer with a scoped grant may only target inside that scope; scope=all is refused with 403.\n\n## Auth\nBearer {{access_token}}. These routes are DA Services DocTypes and call no registry, so the local Login token works. SSO login works too and is what a deployed server uses; the collection then also sends X-CSRF-Token.\n\nSaved responses are written from the API contract (da_services/api/v1/notifications.py), not captured live. Tokens, usr and pwd stay empty in the committed environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const csrf = pm.variables.get(\"csrf_token\");",
+          "if (csrf) pm.request.headers.upsert({ key: \"X-CSRF-Token\", value: csrf });"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8200"
+    },
+    {
+      "key": "usr",
+      "value": ""
+    },
+    {
+      "key": "pwd",
+      "value": ""
+    },
+    {
+      "key": "sso_key",
+      "value": ""
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "csrf_token",
+      "value": ""
+    },
+    {
+      "key": "region",
+      "value": "ET04"
+    },
+    {
+      "key": "zone",
+      "value": "ET04-Z01"
+    },
+    {
+      "key": "woreda",
+      "value": "ET04-W01"
+    },
+    {
+      "key": "client_op_id",
+      "value": ""
+    },
+    {
+      "key": "notification_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Sign in",
+      "description": "Sign in as a Communications Officer or Admin to send, and as a Development Agent to read. Login is the local DA Services login; SSO login is the Keycloak login a deployed server uses.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Local DA Services login. Stores access_token and refresh_token. Field names are usr and pwd. Set usr and pwd in the environment.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"refresh_token\", data.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "SSO login (staff token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/sso/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "sso",
+                "login"
+              ]
+            },
+            "description": "Keycloak login through OAN IAM in one call. Stores access_token and csrf_token; the collection then sends both on every request. Set usr, pwd and sso_key in the environment (sso_key is the login key of the user's role, for example agent). Use this on a deployed server, or whenever a route calls a registry.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"SSO login returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"csrf_token\", data.csrf_token);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "SSO login success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/sso/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "sso",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"access_token\": \"ACCESS_TOKEN\",\n    \"csrf_token\": \"CSRF_TOKEN\",\n    \"user\": {\n      \"...\": \"...\"\n    }\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Refresh access_token using refresh_token (local Login only).",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "save(\"access_token\", data.access_token);",
+                  "save(\"refresh_token\", data.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Who am I",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "me"
+              ]
+            },
+            "description": "Role, role label, menu paths and scope of the signed-in user. Check the role is Communications Officer or Admin before sending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Who am I returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Send a broadcast",
+      "description": "Body: title (required, 140 characters or fewer), body, href (a portal path such as /notifications), scope (all, region, zone or woreda; default all), scope_value (required unless scope is all) and client_op_id (optional idempotency key).\n\nReturns broadcast_id, scope, scope_value, recipients and duplicate. Every send is recorded as a DA Broadcast row and a DA Audit Event.",
+      "item": [
+        {
+          "name": "Send to all DAs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "scope=all reaches every DA with an active grant. Allowed for Admin and for a Communications Officer with no Region / Zone / Woreda on their grant.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Fertiliser distribution starts Monday\",\n  \"body\": \"Collect vouchers at the Woreda office.\",\n  \"href\": \"/notifications\",\n  \"scope\": \"all\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Send to all DAs returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"recipients is at least 1\", function () { pm.expect(data.recipients).to.be.at.least(1); });",
+                  "pm.test(\"not a duplicate\", function () { pm.expect(data.duplicate).to.eql(false); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Sent to all",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "broadcast"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Fertiliser distribution starts Monday\",\n  \"body\": \"Collect vouchers at the Woreda office.\",\n  \"href\": \"/notifications\",\n  \"scope\": \"all\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Broadcast sent to 12 DA(s).\",\n  \"data\": {\n    \"broadcast_id\": \"BROADCAST_ID\",\n    \"scope\": \"all\",\n    \"scope_value\": null,\n    \"recipients\": 12,\n    \"duplicate\": false\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send to a Region",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "Reaches the DAs whose grant has this Region code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Regional training on 20 November\",\n  \"body\": \"All Development Agents attend at the Region office.\",\n  \"scope\": \"region\",\n  \"scope_value\": \"{{region}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Send to a Region returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"recipients is at least 1\", function () { pm.expect(data.recipients).to.be.at.least(1); });",
+                  "pm.test(\"not a duplicate\", function () { pm.expect(data.duplicate).to.eql(false); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Sent to a Region",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "broadcast"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Regional training on 20 November\",\n  \"body\": \"All Development Agents attend at the Region office.\",\n  \"scope\": \"region\",\n  \"scope_value\": \"{{region}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Broadcast sent to 8 DA(s).\",\n  \"data\": {\n    \"broadcast_id\": \"BROADCAST_ID\",\n    \"scope\": \"region\",\n    \"scope_value\": \"ET04\",\n    \"recipients\": 8,\n    \"duplicate\": false\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send to a Zone",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "Reaches the DAs whose grant has this Zone code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Zone review meeting on Friday\",\n  \"scope\": \"zone\",\n  \"scope_value\": \"{{zone}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Send to a Zone returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"recipients is at least 1\", function () { pm.expect(data.recipients).to.be.at.least(1); });",
+                  "pm.test(\"not a duplicate\", function () { pm.expect(data.duplicate).to.eql(false); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Sent to a Zone",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "broadcast"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Zone review meeting on Friday\",\n  \"scope\": \"zone\",\n  \"scope_value\": \"{{zone}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Broadcast sent to 5 DA(s).\",\n  \"data\": {\n    \"broadcast_id\": \"BROADCAST_ID\",\n    \"scope\": \"zone\",\n    \"scope_value\": \"ET04-Z01\",\n    \"recipients\": 5,\n    \"duplicate\": false\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send to a Woreda",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "Reaches the DAs whose grant has this Woreda code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Seed distribution at the Woreda store\",\n  \"body\": \"Open 08:00 to 16:00 this week.\",\n  \"href\": \"/notifications\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"{{woreda}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Send to a Woreda returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"recipients is at least 1\", function () { pm.expect(data.recipients).to.be.at.least(1); });",
+                  "pm.test(\"not a duplicate\", function () { pm.expect(data.duplicate).to.eql(false); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Sent to a Woreda",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "broadcast"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Seed distribution at the Woreda store\",\n  \"body\": \"Open 08:00 to 16:00 this week.\",\n  \"href\": \"/notifications\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"{{woreda}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Broadcast sent to 3 DA(s).\",\n  \"data\": {\n    \"broadcast_id\": \"BROADCAST_ID\",\n    \"scope\": \"woreda\",\n    \"scope_value\": \"ET04-W01\",\n    \"recipients\": 3,\n    \"duplicate\": false\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send with client_op_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "A new client_op_id is generated before the request and stored. The broadcast_id in the response is that client_op_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Market price update\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = require(\"uuid\").v4();",
+                  "pm.collectionVariables.set(\"client_op_id\", id);",
+                  "if (pm.environment.name) pm.environment.set(\"client_op_id\", id);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Send with client_op_id returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"recipients is at least 1\", function () { pm.expect(data.recipients).to.be.at.least(1); });",
+                  "pm.test(\"not a duplicate\", function () { pm.expect(data.duplicate).to.eql(false); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Sent with client_op_id",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "broadcast"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Market price update\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Broadcast sent to 3 DA(s).\",\n  \"data\": {\n    \"broadcast_id\": \"CLIENT_OP_ID\",\n    \"scope\": \"woreda\",\n    \"scope_value\": \"ET04-W01\",\n    \"recipients\": 3,\n    \"duplicate\": false\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send again with the same client_op_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "Run after 'Send with client_op_id'. The original broadcast is returned with duplicate=true and nobody is notified twice.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Market price update\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Send again with the same client_op_id returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"duplicate is true\", function () { pm.expect(data.duplicate).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Already sent",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "broadcast"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Market price update\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"{{woreda}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Broadcast already sent.\",\n  \"data\": {\n    \"broadcast_id\": \"CLIENT_OP_ID\",\n    \"scope\": \"woreda\",\n    \"scope_value\": \"ET04-W01\",\n    \"recipients\": 3,\n    \"duplicate\": true\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Refused requests",
+      "description": "Each request is refused before anything is saved or sent.",
+      "item": [
+        {
+          "name": "No title",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "title is required.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"A body without a title.\",\n  \"scope\": \"all\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"No title returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Title longer than 140 characters",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "title must be 140 characters or fewer.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"scope\": \"all\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Title longer than 140 characters returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Unknown scope",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "scope must be one of all, region, zone, woreda.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Kebele notice\",\n  \"scope\": \"kebele\",\n  \"scope_value\": \"ET04-W01-K01\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Unknown scope returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Scope without scope_value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "scope_value is required for scope region, zone and woreda.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Woreda notice\",\n  \"scope\": \"woreda\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Scope without scope_value returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "External href",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "href must be a portal path starting with '/', never an external URL.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Read this\",\n  \"href\": \"https://example.com/page\",\n  \"scope\": \"all\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"External href returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Scope with no DA",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "No active Development Agent is assigned to the scope value, so nothing is sent and no DA Broadcast row is kept.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Notice\",\n  \"scope\": \"woreda\",\n  \"scope_value\": \"NO-SUCH-WOREDA\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Scope with no DA returns 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Signed in as a DA",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/broadcast",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "broadcast"
+              ]
+            },
+            "description": "Sign in as a Development Agent (or any role other than Communications Officer and Admin) and send: refused with 403 and recorded as a denied DA Audit Event.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Notice\",\n  \"scope\": \"all\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Signed in as a DA returns 403\", function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. DA side: read the broadcast",
+      "description": "Sign in as a DA inside the scope that was targeted. A user only ever sees and changes their own notifications.",
+      "item": [
+        {
+          "name": "My notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications?limit=20&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "The signed-in user's notifications, newest first. A broadcast has kind Broadcast. Stores the first notification's id as notification_id. meta carries unread_count, limit and start."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"My notifications returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const rows = (pm.response.json() || {}).data || [];",
+                  "function save(key, value) {",
+                  "    if (!value) return;",
+                  "    pm.collectionVariables.set(key, value);",
+                  "    if (pm.environment.name) pm.environment.set(key, value);",
+                  "}",
+                  "if (rows.length) save(\"notification_id\", rows[0].id);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Notifications",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications?limit=20&start=0",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    },
+                    {
+                      "key": "start",
+                      "value": "0"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": [\n    {\n      \"id\": \"NOTIFICATION_ID\",\n      \"kind\": \"Broadcast\",\n      \"title\": \"Fertiliser distribution starts Monday\",\n      \"body\": \"Collect vouchers at the Woreda office.\",\n      \"href\": \"/notifications\",\n      \"read\": false,\n      \"read_at\": null,\n      \"event\": \"broadcast:BROADCAST_ID\",\n      \"reference_doctype\": null,\n      \"reference_name\": null,\n      \"at\": \"2026-11-13T10:15:00\"\n    }\n  ],\n  \"meta\": {\n    \"api_version\": \"v1\",\n    \"unread_count\": 1,\n    \"limit\": 20,\n    \"start\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "My unread notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications?unread=1&limit=20&start=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications"
+              ],
+              "query": [
+                {
+                  "key": "unread",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "start",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Only the notifications not read yet."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"My unread notifications returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Mark one notification read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/{{notification_id}}/read",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "{{notification_id}}",
+                "read"
+              ]
+            },
+            "description": "Marks the notification read and returns it. Another user's notification is refused with 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Mark one notification read returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const data = (pm.response.json() || {}).data || {};",
+                  "pm.test(\"read is true\", function () { pm.expect(data.read).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Marked read",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/{{notification_id}}/read",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "{{notification_id}}",
+                    "read"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Notification marked read\",\n  \"data\": {\n    \"id\": \"NOTIFICATION_ID\",\n    \"kind\": \"Broadcast\",\n    \"title\": \"Fertiliser distribution starts Monday\",\n    \"body\": \"Collect vouchers at the Woreda office.\",\n    \"href\": \"/notifications\",\n    \"read\": true,\n    \"read_at\": \"2026-11-13T10:20:00\",\n    \"event\": \"broadcast:BROADCAST_ID\",\n    \"reference_doctype\": null,\n    \"reference_name\": null,\n    \"at\": \"2026-11-13T10:15:00\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Mark all notifications read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/notifications/read-all",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "notifications",
+                "read-all"
+              ]
+            },
+            "description": "Marks every unread notification of the signed-in user read. Returns how many were updated."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Mark all notifications read returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "All marked read",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/notifications/read-all",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "notifications",
+                    "read-all"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"All notifications marked read\",\n  \"data\": {\n    \"updated\": 3\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

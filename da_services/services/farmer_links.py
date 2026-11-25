@@ -20,10 +20,7 @@ from frappe.utils import now_datetime
 
 from da_services.da_services.doctype.da_kebele_assignment.da_kebele_assignment import LIVE_STATES
 from da_services.services import constants as C
-from da_services.utils.permissions import ScopeContext, require_roles
-
-WRITE_ROLES = (C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
-LOCK_TIMEOUT_SECONDS = 5
+from da_services.utils.permissions import require_permission
 
 
 def create_farmer_link(
@@ -31,7 +28,6 @@ def create_farmer_link(
 	da_id: str,
 	farmer_id: str,
 	client_op_id: str | None = None,
-	ctx: ScopeContext | None = None,
 ) -> dict:
 	"""Create a manual farmer-to-DA link (Supervisor only).
 
@@ -39,7 +35,6 @@ def create_farmer_link(
 		da_id: DA identifier
 		farmer_id: Farmer Registry internal_record_id
 		client_op_id: Idempotency key
-		ctx: Authorization context
 
 	Returns:
 		Created link details: {link_id, da_id, farmer_id, link_type, linked_at, kebele}
@@ -48,15 +43,7 @@ def create_farmer_link(
 		ValidationError: Invalid input, DA has no assignment, mode is Automatic
 		PermissionError: Supervisor scope violation, Kebele mismatch
 	"""
-	ctx = ctx or require_roles(*WRITE_ROLES)
-
-	if not ctx.unrestricted and not ctx.has_any_role(*WRITE_ROLES):
-		frappe.throw(
-			_(
-				"Permission denied. Only users with 'Supervisor' or 'Administrator' role can manually assign farmers to DAs."
-			),
-			frappe.PermissionError,
-		)
+	require_permission("DA Farmer Link", "create")
 
 	if not da_id or not farmer_id:
 		frappe.throw(
@@ -127,16 +114,6 @@ def create_farmer_link(
 			frappe.ValidationError,
 		)
 
-	# Validate Supervisor has scope over the DA's Woreda
-	if not ctx.unrestricted:
-		if not ctx.covers(woreda=assignment["woreda"]):
-			frappe.throw(
-				_(
-					"Permission denied. DA {0} is assigned to Kebele {1} in Woreda {2}, which is outside your authorized scope."
-				).format(da_id, assignment["kebele"], assignment["woreda"]),
-				frappe.PermissionError,
-			)
-
 	# Get farmer details from DA Farmer Reference
 	farmer = frappe.db.get_value(
 		"DA Farmer Reference",
@@ -193,7 +170,7 @@ def create_farmer_link(
 			"farmer_id": farmer_id,
 			"link_type": "Manual",
 			"linked_at": now_datetime(),
-			"linked_by": ctx.user,
+			"linked_by": frappe.session.user,
 			"kebele": assignment["kebele"],
 			"woreda": assignment["woreda"],
 			"is_active": 1,
@@ -219,7 +196,6 @@ def list_farmer_links(
 	farmer_id: str | None = None,
 	link_type: str | None = None,
 	is_active: bool = True,
-	ctx: ScopeContext | None = None,
 ) -> list[dict]:
 	"""List farmer links with filters.
 
@@ -228,12 +204,11 @@ def list_farmer_links(
 		farmer_id: Filter by farmer
 		link_type: Filter by Automatic/Manual
 		is_active: Filter by active status (default True)
-		ctx: Authorization context
 
 	Returns:
 		List of farmer links
 	"""
-	ctx = ctx or require_roles(*WRITE_ROLES)
+	require_permission("DA Farmer Link", "read")
 
 	filters = {}
 
@@ -246,28 +221,8 @@ def list_farmer_links(
 	if is_active is not None:
 		filters["is_active"] = 1 if is_active else 0
 
-	# Apply scope filtering (mirrors da_farmer_link_query_conditions)
-	if not ctx.unrestricted:
-		if ctx.has_any_role(C.ROLE_DA):
-			# DAs see only their own links
-			if not ctx.da_ids:
-				return []
-			filters["da_id"] = ("in", list(ctx.da_ids))
-		elif ctx.has_any_role(C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE):
-			# Supervisors/Executives see by geographic scope
-			if ctx.woreda_scopes:
-				filters["woreda"] = ("in", list(ctx.woreda_scopes))
-			elif ctx.zone_scopes:
-				return []  # rows have no zone field
-			elif ctx.region_scopes:
-				filters["region"] = ("in", list(ctx.region_scopes))
-			else:
-				return []  # no scope defined
-		else:
-			# No authorized role
-			return []
-
-	links = frappe.get_all(
+	# get_list: the caller's User Permissions (DA Region / Zone / Woreda / Kebele) scope it.
+	links = frappe.get_list(
 		"DA Farmer Link",
 		filters=filters,
 		fields=["name as link_id", "da_id", "farmer_id", "link_type", "linked_at", "kebele", "is_active"],

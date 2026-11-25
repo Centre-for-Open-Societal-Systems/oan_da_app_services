@@ -6,8 +6,6 @@ service: the geography (country, region, zone, woreda, kebele) and code lists su
 frontend builds every dropdown from the same call.
 
 The endpoint reads Master Data live with the **caller's own token**. It keeps no copy of the data.
-(The local `DA Administrative Area` table behind `/master/areas` is a different, synced copy:
-see `area-master-sync.md`.)
 
 ## Request
 
@@ -38,7 +36,7 @@ server-to-server call needs). Master Data therefore applies the caller's own acc
 identity is involved.
 
 The caller needs a DA Services role (Development Agent, Supervisor, Executive, OAN Administrator,
-Communications Officer) or an unrestricted role, the same rule as `/master/areas`.
+Communications Officer) or an unrestricted role.
 
 ### Examples
 

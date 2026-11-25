@@ -14,6 +14,8 @@ The planning form was read from Postman run `58813371-a25cffbb-4cc0-4ab5-8376-0f
 | `crop_registry_master_data_url` | `https://master-data.development.oanstaging.com` |
 | `crop_registry_backend` | `http` on the site that serves the Crop Report. `mock` is the local default. |
 
+`source` and register `tab_id` are caller-supplied. DA requires them when the mode needs them, then forwards to staff; unknown values are rejected by the registry (or by the client when `source` is not a known staff path). They are not Desk allowlists.
+
 `config.example.json` keeps `crop_registry_backend` as `mock`. A copied example does not log in to staff. The serving site must set `http`, the staff URL, the staff username and password, and the master-data URL. An empty master-data URL leaves `catalog_loaded: false` and refuses the geography route.
 
 Login is once per worker, through `da_services/integrations/staff_api`. Later calls reuse the bearer and the matching `X-CSRF-Token` cookie. The envelope sender is `OAN_REGISTRY_API_TEST`. Page size is 100.
@@ -30,7 +32,7 @@ The Crop Report page has five tabs. The staff register has four intake forms.
 | Sowing, including infestation when that form contains it | Crop sowing intake | `sowing` |
 | Harvesting | Crop harvesting intake | `harvesting` |
 
-`planning` is the default, from `crop_registry_form_name_contains`. Identity and location are sections of the planning form, verified on the planning run. They are not a fifth form.
+`GET /crop-sown/intake-form` requires query `form`. There is no Planning fallback. Identity and location are sections of the planning form, verified on the planning run. They are not a fifth form. `crop_registry_form_name_contains` still defaults other client paths that omit `form_name` (for example save without body `form`).
 
 ## Calls for one open form
 
@@ -58,13 +60,6 @@ sequenceDiagram
   Crop-->>DA: sections, labels, options, choices
   DA-->>Agent: form payload
 
-  Agent->>DA: GET /crop-sown/geo-level-values?level_id=l1
-  DA->>MD: get_geo_level_values
-  MD-->>Agent: level_value_id and level_value_mnemonic
-
-  Agent->>DA: GET /crop-sown/geo-level-values?level_id=l2&parent_level_value_id=ET01
-  DA->>MD: get_geo_level_values for that parent only
-
   Agent->>DA: POST /farmers/{id}/crops
   DA->>Staff: save_intake_form_submission, root section first
   Staff-->>DA: submission_id
@@ -80,18 +75,23 @@ Prefix: `/api/v1/da-services`
 
 | Route | Staff or master-data call |
 | --- | --- |
-| `GET /crop-sown/intake-form?form=` | Discover CropSown, render the named form, `get_register_fields`, then every catalog page for that form |
-| `GET /crop-sown/geo-level-values?level_id=&parent_level_value_id=` | `POST /geo/get_geo_level_values` |
-| `GET /farmers/{id}/crops` | Search submissions and the register |
-| `GET /farmers/{id}/crops?submission_id=` | `get_intake_form_submission` and `get_tab_records` |
+| `GET /crop-sown/intake-form?form=` | Required `form`. Discover CropSown, render that form only, `get_register_fields`, then every catalog page for that form |
+| `GET /farmers/{id}/crops?source=submission` | One staff search: `search_in_intake_form_submissions`; response includes `source` |
+| `GET /farmers/{id}/crops?source=register` | One staff search: `search_in_a_register`; rows use `internal_record_id` |
+| `GET /farmers/{id}/crops?submission_id=` | `get_intake_form_submission` and submission `get_tab_records` |
+| `GET /farmers/{id}/crops?internal_record_id=&tab_id=` | One staff call: register `get_tab_records` for the named tab; `tab_id` required |
 | `POST /farmers/{id}/crops` | `save_intake_form_submission` |
 | `POST /farmers/{id}/crops/{submission_id}/finalize` | `finalize_intake_form_submission` |
+
+List without `source` returns 400. Register detail without `tab_id` returns 400. Do not pass `submission_id` and `internal_record_id` together.
+
+GPS is not reshaped into a top-level `location` object. When present, it stays inside staff section `cropsown_cropsown_location_section_03` on `sections` / `tabs`.
 
 `POST` accepts `form` with the same names as the query above. Omit it to save the configured form.
 
 A field is required when its widget has `widget-required` and it is not read-only. `get_register_fields.required` is true for managed columns on the planning server. Those columns are not caller inputs. A read-only widget value is rejected. The registry fills it.
 
-A catalog field returns `choices` of `value_id` and `value_display` when the master-data URL is set. The stored value is `value_id`. A static choice returns `options` with `label` and `value`. Geography fields point at `geo.endpoint` `geo-level-values`. Their rows are the geography route, not the form payload.
+A catalog field returns `choices` of `value_id` and `value_display` when the master-data URL is set. The stored value is `value_id`. A static choice returns `options` with `label` and `value`. Geography fields are not filled by the form payload. DA Services has no geography route.
 
 `level_id` is forwarded unchanged. The planning run used `l1`, `l2`, `l3`, and `l4` from `get_all_geo_levels`. A child level sends the selected `level_value_id` as `parent_level_value_id`. Submit stores that id in `geo_lowest_level_value_id`.
 

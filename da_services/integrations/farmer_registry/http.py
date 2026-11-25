@@ -201,9 +201,14 @@ class HTTPFarmerRegistryClient(FarmerRegistryClient):
 		Raises FarmerRegistryClientError if called outside a request context or
 		if the required headers are missing.
 		"""
-
-		token = frappe.get_request_header("Authorization")
-		csrf = frappe.get_request_header("X-CSRF-Token")
+		try:
+			token = frappe.get_request_header("Authorization")
+			csrf = frappe.get_request_header("X-CSRF-Token")
+		except RuntimeError:
+			# No bound WSGI request (unit/integration tests, background jobs).
+			raise FarmerRegistryClientError(
+				"Missing Authorization or X-CSRF-Token header", status_code=401
+			) from None
 
 		if not token or not csrf:
 			raise FarmerRegistryClientError("Missing Authorization or X-CSRF-Token header", status_code=401)

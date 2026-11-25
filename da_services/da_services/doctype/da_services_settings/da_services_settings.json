@@ -5,20 +5,116 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "master_data_domain"
+  "master_data_domain",
+  "farmer_registry_domain",
+  "farmer_registry_form_register_id",
+  "column_break_cciq",
+  "da_registry_domain",
+  "da_registry_form_register_id",
+  "grievance_base_url",
+  "sec_master_sync",
+  "master_sync_username",
+  "master_sync_password",
+  "col_master_sync",
+  "master_sync_login_key",
+  "sec_charts_auth",
+  "charts_auth_enabled",
+  "charts_auth_issuer",
+  "charts_auth_audience"
  ],
  "fields": [
   {
    "fieldname": "master_data_domain",
    "fieldtype": "Data",
    "label": "Master Data Domain"
+  },
+  {
+   "description": "Account the daily geo master sync (DA Country / Region / Zone / Woreda / Kebele) logs in with through SSO. Its access token and CSRF token are sent to Master Data.",
+   "fieldname": "sec_master_sync",
+   "fieldtype": "Section Break",
+   "label": "Master Data Sync"
+  },
+  {
+   "fieldname": "master_sync_username",
+   "fieldtype": "Data",
+   "label": "Username"
+  },
+  {
+   "fieldname": "master_sync_password",
+   "fieldtype": "Password",
+   "label": "Password"
+  },
+  {
+   "fieldname": "col_master_sync",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Login key of the IAM service (the key of /sso/login), e.g. agent.",
+   "fieldname": "master_sync_login_key",
+   "fieldtype": "Data",
+   "label": "Login Key"
+  },
+  {
+   "fieldname": "column_break_cciq",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "da_registry_domain",
+   "fieldtype": "Data",
+   "label": "DA Registry Domain"
+  },
+  {
+   "fieldname": "da_registry_form_register_id",
+   "fieldtype": "Data",
+   "label": "DA Registry Form Register ID"
+  },
+  {
+   "description": "Grievance APISIX gateway host only (e.g. https://grievance-service.development.oanstaging.com). Public paths are /v1/... rewritten to /api/v1/... . Do not use the Desk hostname and do not append /api.",
+   "fieldname": "grievance_base_url",
+   "fieldtype": "Data",
+   "label": "Grievance Base URL"
+  },
+  {
+   "fieldname": "farmer_registry_domain",
+   "fieldtype": "Data",
+   "label": "Farmer Registry Domain"
+  },
+  {
+   "fieldname": "farmer_registry_form_register_id",
+   "fieldtype": "Data",
+   "label": "Farmer Registry Form Register ID"
+  },
+  {
+   "description": "Staff-realm Keycloak client-credentials for the central dashboard Visit chart feeder. Leave Enabled unchecked for local / empty clientId.",
+   "fieldname": "sec_charts_auth",
+   "fieldtype": "Section Break",
+   "label": "Charts Auth"
+  },
+  {
+   "default": "0",
+   "description": "When checked, GET /charts/visits requires a staff-realm Bearer token with client role charts:read.",
+   "fieldname": "charts_auth_enabled",
+   "fieldtype": "Check",
+   "label": "Charts Auth Enabled"
+  },
+  {
+   "description": "Staff-realm issuer URL, e.g. https://keycloak.example/realms/staff. JWKS is {issuer}/protocol/openid-connect/certs.",
+   "fieldname": "charts_auth_issuer",
+   "fieldtype": "Data",
+   "label": "Charts Auth Issuer"
+  },
+  {
+   "description": "Charts API client id (JWT aud or azp), e.g. da-services-dashboard-api",
+   "fieldname": "charts_auth_audience",
+   "fieldtype": "Data",
+   "label": "Charts Auth Audience"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-05 16:12:16.330515",
+ "modified": "2026-11-24 17:50:00.000000",
  "modified_by": "Administrator",
  "module": "DA Services",
  "name": "DA Services Settings",
@@ -33,11 +129,18 @@
    "role": "System Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "OAN Administrator",
+   "write": 1
   }
  ],
  "row_format": "Dynamic",
  "rows_threshold_for_grid_search": 20,
  "sort_field": "creation",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "track_changes": 1
 }

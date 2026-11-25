@@ -1,8 +1,9 @@
 """v1: Farmer profile and listing APIs (DA-40, DA-39).
 
-GET /api/v1/da-services/farmers                (?search_text= searches the live registry, DA-272)
+GET /api/v1/da-services/farmers                (Farmer Registry search_in_a_register)
 GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
+GET /api/v1/da-services/farmers/{id}/advisory       (questions and answers of Advisory visits)
 GET /api/v1/da-services/farmers/{id}/permissions
 GET /api/v1/da-services/farmers/{id}/plots
 GET /api/v1/da-services/farmers/{id}/photo          (signed link, read fresh)
@@ -31,6 +32,9 @@ from oan_auth_service.api.utils import error_response, handle_api_errors, succes
 from pydantic import ValidationError as PydanticValidationError
 
 from da_services.api.router import route
+from da_services.api.v1.common import request_fields
+from da_services.api.v1.master import _forwarded_credentials, _positive_int
+from da_services.integrations import da_farmer_registry
 from da_services.integrations.farmer_registry import get_farmer_registry_client
 from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryClientError,
@@ -39,177 +43,76 @@ from da_services.integrations.farmer_registry.client import (
 from da_services.integrations.farmer_registry.schemas import FarmerRegistrationForm
 from da_services.services import constants as C
 from da_services.services import farmers
-from da_services.utils.permissions import require_roles
-
-# Roles that may read farmers
-READ_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN)
-
-# Roles that may register a new farmer (Executive is read-only)
-REGISTER_ROLES = (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_ADMIN)
+from da_services.services import visits as visit_svc
+from da_services.services.utils import apply_geo_user_permissions
 
 _REGISTRY_UNAVAILABLE = _("Farmer Registry is unavailable. Try again shortly.")
 
 
-@route("/farmers", methods=("GET",), summary="List farmers with scope selector")
+@route("/farmers", methods=("GET",), summary="Search the Farmer Registry register")
 @frappe.whitelist()
 @handle_api_errors
-def list_farmers(
-	woreda=None,
-	kebele=None,
-	state=None,
-	da_id=None,
-	limit=None,
-	start=None,
-	search_text=None,
-	page=None,
-	page_size=None,
-):
-	"""List farmers visible to the user with scope enforcement (DA-40, DA-39, DA-272).
+def list_farmers(**kwargs):
+	"""One page of the Farmer Registry register (``search_in_a_register``).
 
-	Scope selector:
-	- Development Agent: Only linked farmers
-	- Supervisor: All farmers in their Woreda
-	- Executive: All farmers in their Region (read-only)
-	- Admin: All farmers
+	Query (or JSON body): ``current_page`` (default 1), ``page_size`` (default 100, at most
+	1000), ``filter_by`` (an object, e.g. ``{"first_name": {"eq": "test"}}``; a JSON string
+	on a GET) and ``search_text``. They are sent to the registry as its
+	``pagination_request`` with the same keys. The geo keys of ``filter_by`` are filled in
+	or checked from the caller's User Permissions (``apply_geo_user_permissions``).
 
-	Query parameters:
-	- woreda: Filter by woreda code
-	- kebele: Filter by kebele code
-	- state: Filter by registration state (APPROVED, PENDING_APPROVAL, etc.)
-	- da_id: Filter by linked DA
-	- limit: Page size (default 50, max 500)
-	- start: Offset (default 0)
-	- page / page_size: 1-based alternative to limit / start (registry style)
-	- search_text: Free text (name, Farmer-ID, phone). When given, the live
-	  Farmer register is searched inside the caller's scope instead of the
-	  DA Farmer Reference cache, so newly registered farmers are found too.
-	  Supervisors of several Woredas, Zone and Region officers must pass
-	  ``woreda`` with it. ``da_id`` does not apply to a live search.
+	The registry is ``farmer_registry_domain`` of DA Services Settings, the register is
+	``farmer_registry_form_register_id``, and the caller's own ``Authorization`` bearer and
+	``X-CSRF-Token`` are forwarded to it.
 
-	Returns:
-	    {
-	        "success": true,
-	        "data": {
-	            "farmers": [
-	                {
-	                    "farmer_id": "...",
-	                    "reg_id": "FR-xxxxx",
-	                    "farmer_name": "...",
-	                    "phone": "...",
-	                    "kebele": "...",
-	                    "woreda": "...",
-	                    "region": "...",
-	                    "total_land_hectares": 2.5,
-	                    "registration_state": "APPROVED",
-	                    "registered_at": "...",
-	                    "visit_count": 5,
-	                    "last_visit": "...",
-	                    "pending_action": "Crop survey due",
-	                    "pending_action_priority": "high",
-	                    "pending_action_reason": "Last crop survey 45 days ago"
-	                }
-	            ],
-	            "total": 123,
-	            "page": {"limit": 50, "start": 0}
-	        }
-	    }
-
-	DA-39 Pending Actions:
-	- pending_action: "Crop survey due" | "Livestock due" | "Credit in review" |
-	                  "Fayda check" | "No action due" (system-derived)
-	- pending_action_priority: "high" | "medium" | "low"
-	- pending_action_reason: Optional description
+	Returns the registry's ``response_payload`` as ``data`` and its ``pagination_response``
+	as ``meta``, both with the registry's own keys.
 	"""
-	ctx = require_roles(*READ_ROLES)
-
-	# Parse params
-	woreda = woreda or frappe.form_dict.get("woreda")
-	kebele = kebele or frappe.form_dict.get("kebele")
-	state = state or frappe.form_dict.get("state")
-	da_id = da_id or frappe.form_dict.get("da_id")
-
-	search_text = (search_text or frappe.form_dict.get("search_text") or "").strip()
-	page = page or frappe.form_dict.get("page")
-	page_size = page_size or frappe.form_dict.get("page_size")
+	b = request_fields(
+		kwargs, "current_page", "page_size", "filter_by", "search_text", json_keys=("filter_by",)
+	)
+	current_page = _positive_int(b.get("current_page"), "current_page", default=1)
+	page_size = _positive_int(
+		b.get("page_size"),
+		"page_size",
+		default=da_farmer_registry.DEFAULT_PAGE_SIZE,
+		maximum=da_farmer_registry.MAX_PAGE_SIZE,
+	)
+	filter_by = b.get("filter_by") or {}
+	if not isinstance(filter_by, dict):
+		frappe.throw(_("filter_by must be an object."), frappe.ValidationError)
+	filter_by = apply_geo_user_permissions(filter_by)
+	search_text = str(b.get("search_text") or "").strip()
+	token, csrf = _forwarded_credentials()
 
 	try:
-		if page or page_size:
-			# Registry-style paging; converted to limit / start for the cache path.
-			page = cint(page or 1)
-			limit = cint(page_size or limit or frappe.form_dict.get("limit") or 50)
-			if page < 1:
-				frappe.throw(_("Page must be >= 1."), frappe.ValidationError)
-			start = (page - 1) * limit
-		else:
-			limit = cint(limit or frappe.form_dict.get("limit") or 50)
-			start = cint(start or frappe.form_dict.get("start") or 0)
-	except ValueError, TypeError:
-		frappe.throw(_("Pagination parameters must be integers."), frappe.ValidationError)
-
-	if limit < 1 or limit > 500:
-		frappe.throw(_("Limit must be between 1 and 500."), frappe.ValidationError)
-	if start < 0:
-		frappe.throw(_("Start must be >= 0."), frappe.ValidationError)
-
-	if search_text:
-		try:
-			found = farmers.search_farmers(
-				ctx,
-				search_text=search_text,
-				woreda=woreda,
-				kebele=kebele,
-				state=state,
-				page=start // limit + 1,
-				page_size=limit,
-			)
-		except FarmerRegistryClientError as exc:
-			frappe.throw(str(exc), frappe.ValidationError)
-		except FarmerRegistryServerError:
-			frappe.response["http_status_code"] = 503
-			return error_response(str(_REGISTRY_UNAVAILABLE), "SERVICE_UNAVAILABLE")
-		return success_response(
-			data={
-				"farmers": found["farmers"],
-				"total": found["total"],
-				"page": {
-					"limit": limit,
-					"start": start,
-					"page": found["page"],
-					"page_size": found["page_size"],
-					"number_of_pages": found["number_of_pages"],
-					# True when scope was applied here because the registry ignored the
-					# filter; total / number_of_pages are then the registry's figures.
-					"filtered_client_side": found["filtered_client_side"],
-				},
-				"source": "registry",
-			}
+		client = da_farmer_registry.client_from_settings(token, csrf)
+		payload, pagination = client.search_in_a_register(
+			current_page=current_page, page_size=page_size, filter_by=filter_by, search_text=search_text
 		)
+	except da_farmer_registry.FarmerRegistryError as exc:
+		status, code = _SEARCH_ERRORS.get(exc.kind, _SEARCH_ERRORS["rejected"])
+		# The message can name internal hosts; log it, return a stable one.
+		frappe.log_error(title="Farmer Registry search failed", message=f"{exc.kind}: {exc}")
+		frappe.response["http_status_code"] = status
+		return error_response(str(_(_SEARCH_MESSAGES.get(exc.kind, _SEARCH_MESSAGES["rejected"]))), code)
 
-	# Get farmers
-	farmer_list, total = farmers.list_farmers(
-		ctx,
-		woreda=woreda,
-		kebele=kebele,
-		state=state,
-		da_id=da_id,
-		limit=limit,
-		start=start,
-	)
+	return success_response(data=payload, meta=pagination)
 
-	return success_response(
-		data={
-			"farmers": farmer_list,
-			"total": total,
-			"page": {
-				"limit": limit,
-				"start": start,
-				"page": start // limit + 1,
-				"page_size": limit,
-				"number_of_pages": (total + limit - 1) // limit,
-			},
-			"source": "cache",
-		}
-	)
+
+# kind -> (HTTP status, error code)
+_SEARCH_ERRORS = {
+	"config": (500, "FARMER_REGISTRY_NOT_CONFIGURED"),
+	"unauthorized": (401, "AUTHENTICATION_ERROR"),
+	"unavailable": (503, "SERVICE_UNAVAILABLE"),
+	"rejected": (502, "BAD_GATEWAY"),
+}
+_SEARCH_MESSAGES = {
+	"config": "Farmer Registry is not configured.",
+	"unauthorized": "Farmer Registry refused your token. Sign in again.",
+	"unavailable": "Farmer Registry is unavailable. Try again shortly.",
+	"rejected": "Farmer Registry could not complete the request.",
+}
 
 
 @route(
@@ -238,7 +141,6 @@ def get_farmer_change_requests(farmer_id: str, status=None, tab=None):
 
 	404 when the farmer does not exist, 403 when outside the caller's scope.
 	"""
-	ctx = require_roles(*READ_ROLES)
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 	status = (status or frappe.form_dict.get("status") or "").strip().upper() or None
@@ -247,7 +149,7 @@ def get_farmer_change_requests(farmer_id: str, status=None, tab=None):
 		frappe.throw(_("status must be PENDING, APPROVED or REJECTED."), frappe.ValidationError)
 
 	try:
-		data = farmers.get_farmer_change_requests(farmer_id, ctx, status=status, tab=tab)
+		data = farmers.get_farmer_change_requests(farmer_id, status=status, tab=tab)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryServerError:
@@ -298,13 +200,12 @@ def get_farmer_profile(farmer_id: str):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id or not isinstance(farmer_id, str):
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	# The path may carry the Farmer-ID people see (FR-…); the registry wants the internal id.
-	profile = farmers.get_farmer_profile(farmers.resolve_farmer_id(farmer_id), ctx)
+	profile = farmers.get_farmer_profile(farmers.resolve_farmer_id(farmer_id))
 	return success_response(data=profile)
 
 
@@ -341,7 +242,6 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
@@ -349,7 +249,7 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 	# Scope check: Ensure farmer is in user's scope before showing visits
 	# This prevents a DA from reading another DA's farmer visits
 	farmer_id = farmers.resolve_farmer_id(farmer_id)
-	farmers.get_farmer_profile(farmer_id, ctx)
+	farmers.get_farmer_profile(farmer_id)
 
 	# Validate pagination
 	try:
@@ -387,6 +287,25 @@ def get_farmer_visits(farmer_id: str, limit=None, start=None):
 	)
 
 
+@route("/farmers/<farmer_id>/advisory", methods=("GET",), summary="Get farmer advisory questions and answers")
+@frappe.whitelist()
+@handle_api_errors
+def get_farmer_advisory(farmer_id: str, limit=None, start=None):
+	"""Questions and answers of a farmer's Advisory visits (farmer profile, Advisory tab).
+
+	One row per question, newest first; each row carries ``question``, ``answer``,
+	``creation`` and ``modified``. Every Advisory Q&A of the farmer is returned, with no
+	permission or scope filter.
+	"""
+	farmer_id = (farmer_id or "").strip()
+	if not farmer_id:
+		frappe.throw(_("farmer_id is required."), frappe.ValidationError)
+	limit = cint(limit or 50)
+	start = cint(start or 0)
+	rows = visit_svc.list_farmer_advisory(farmer_id, limit=limit, start=start)
+	return success_response(data=rows, meta={"total": len(rows), "limit": limit, "start": start})
+
+
 @route("/farmers/<farmer_id>/permissions", methods=("GET",), summary="Check farmer edit permissions")
 @frappe.whitelist()
 @handle_api_errors
@@ -409,12 +328,11 @@ def check_farmer_permissions(farmer_id: str):
 	        }
 	    }
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
-	permissions = farmers.check_farmer_edit_permissions(farmers.resolve_farmer_id(farmer_id), ctx)
+	permissions = farmers.check_farmer_edit_permissions(farmers.resolve_farmer_id(farmer_id))
 	return success_response(data=permissions)
 
 
@@ -449,14 +367,13 @@ def get_farmer_plots(farmer_id: str):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	# Scope check: Ensure farmer is in user's scope before showing plots
 	farmer_id = farmers.resolve_farmer_id(farmer_id)
-	farmers.get_farmer_profile(farmer_id, ctx)
+	farmers.get_farmer_profile(farmer_id)
 
 	# Get plots from Farmer Registry
 	client = get_farmer_registry_client()
@@ -486,13 +403,12 @@ def get_farmer_photo(farmer_id: str):
 	    DoesNotExistError: Farmer not found
 	    PermissionError: Farmer not in scope
 	"""
-	ctx = require_roles(*READ_ROLES)
 
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
 	farmer_id = farmers.resolve_farmer_id(farmer_id)
-	farmers.get_farmer_profile(farmer_id, ctx)
+	farmers.get_farmer_profile(farmer_id)
 
 	photo = get_farmer_registry_client().get_farmer_photo(farmer_id) or {}
 	return success_response(data={"photo_url": photo.get("url"), "document_id": photo.get("document_id")})
@@ -565,7 +481,6 @@ def register_farmer():
 	registry's status and error code, and for intake the section that failed;
 	the registry's own message (e.g. a household rule) is in "message".
 	"""
-	ctx = require_roles(*REGISTER_ROLES)
 
 	# Parse JSON body (silent=True avoids a 500 on malformed JSON)
 	request_data = frappe.request.get_json(silent=True) if frappe.request else None
@@ -586,7 +501,7 @@ def register_farmer():
 		)
 		frappe.throw(_("Invalid registration form: {0}").format(problems), frappe.ValidationError)
 
-	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True), ctx)
+	result = farmers.register_farmer(form.model_dump(mode="json", exclude_none=True))
 
 	# The registry answered but did not accept the submission (e.g. SYS-ERR-001):
 	# nothing was registered, so this must not read as a success to the DA.
@@ -645,11 +560,10 @@ def get_registration(submission_id: str):
 	Admin reads any submission; other roles only ones made through DA
 	Services, and a DA only their own. 404 when unknown.
 	"""
-	ctx = require_roles(*READ_ROLES)
 	if not submission_id:
 		frappe.throw(_("submission_id is required."), frappe.ValidationError)
 	try:
-		data = farmers.get_registration(submission_id, ctx)
+		data = farmers.get_registration(submission_id)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryServerError:
@@ -673,12 +587,11 @@ def upload_registration_document(**kwargs):
 	Returns {"document_id", "file_name", "size"}; send document_id as
 	identity_document_id in POST /farmers. Needed for intake-mode registration.
 	"""
-	ctx = require_roles(*REGISTER_ROLES)
 	request = getattr(frappe.local, "request", None)
 	upload = request.files.get("file") if request is not None and request.files else None
 	if upload is None:
 		frappe.throw(_("file is required (multipart/form-data)."), frappe.ValidationError)
 	out = farmers.upload_registration_document(
-		upload.read(), upload.filename, upload.mimetype or upload.content_type, ctx
+		upload.read(), upload.filename, upload.mimetype or upload.content_type
 	)
 	return success_response(data=out, message=_("Document uploaded."))

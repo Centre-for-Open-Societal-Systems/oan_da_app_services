@@ -1,8 +1,17 @@
-"""v1 Grievance API: proxy to OAN Grievance Service, scoped by the caller's RBAC.
+"""v1 Grievance API: thin proxy to OAN Grievance Service.
 
-Writes that fail against the upstream service are queued in DA Integration Event and
-retried automatically. Reads are pass-through; if the upstream is down the caller gets
-a 503 error.
+Auth is the caller's FE bearer, forwarded upstream. Role, permission, and row
+scope are owned by the Grievance Service (and Frappe session for being logged
+in). This module does not hard-code roles or geography filters.
+
+If the upstream is down the caller gets a 503. Offline queue / retry is not
+finalized yet (see ``integrations.grievance.queue``).
+
+Evidence (documents attached to a filed grievance):
+
+POST /api/v1/da-services/grievances/<ticket_id>/attachments                       upload
+GET  /api/v1/da-services/grievances/<ticket_id>/attachments                       list
+GET  /api/v1/da-services/grievances/<ticket_id>/attachments/<attachment_id>/view  open / download
 """
 
 from __future__ import annotations
@@ -11,8 +20,10 @@ import uuid
 
 import frappe
 from frappe import _
+from frappe.utils import cint
 from oan_auth_service.api.router import prefixed
 from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
+from werkzeug.wrappers import Response
 
 from da_services.integrations.grievance.client import (
 	GrievanceNotFound,
@@ -21,10 +32,9 @@ from da_services.integrations.grievance.client import (
 	GrievanceServiceUnavailable,
 	get_client,
 )
-from da_services.integrations.grievance.queue import enqueue_event, retry_failed
-from da_services.integrations.grievance.schemas import GrievanceSubmission
-from da_services.services import constants as C
-from da_services.utils.permissions import require_roles
+from da_services.integrations.grievance.queue import retry_failed
+from da_services.integrations.grievance.schemas import EvidenceFile, GrievanceSubmission
+from da_services.services import grievance_evidence
 
 grievance_route = prefixed("/api/v1/da-services")
 
@@ -50,12 +60,10 @@ def _upstream_error() -> dict:
 	return error_response(str(_UPSTREAM_MSG), "BAD_GATEWAY")
 
 
-@grievance_route("/grievances", methods=("GET",), summary="List grievances scoped to caller")
+@grievance_route("/grievances", methods=("GET",), summary="List grievances")
 @frappe.whitelist()
 @handle_api_errors
 def list_grievances():
-	ctx = require_roles(*C.GRIEVANCE_ROLES)
-
 	page = int(frappe.form_dict.get("page", 1) or 1)
 	page_size = int(frappe.form_dict.get("page_size", 10) or 10)
 
@@ -65,16 +73,6 @@ def list_grievances():
 		if value is None or value == "":
 			continue
 		kwargs[name] = value
-
-	if ctx.has_any_role(C.ROLE_DA):
-		da_ids = list(ctx.da_ids)
-		if da_ids:
-			kwargs["complainant_id"] = da_ids if len(da_ids) > 1 else da_ids[0]
-	elif not ctx.unrestricted and not _constrain_area_scope(kwargs, ctx):
-		return success_response(
-			data=[],
-			meta={"page": page, "page_size": page_size, "total": 0},
-		)
 
 	try:
 		client = get_client()
@@ -96,8 +94,6 @@ def list_grievances():
 @frappe.whitelist()
 @handle_api_errors
 def submit_grievance():
-	ctx = require_roles(*C.GRIEVANCE_ROLES)
-
 	body = frappe.request.get_json(silent=True) or {}
 	subject = body.get("subject", "").strip()
 	description = body.get("description", "").strip()
@@ -123,14 +119,15 @@ def submit_grievance():
 	if raised_for == "Farmer" and not farmer_id:
 		frappe.throw(_("farmer_id is required when raised_for is Farmer."), frappe.ValidationError)
 
-	complainant_id, complainant_name = _resolve_complainant_identity(ctx)
+	# Local display / submitter_name fallback only — not sent as complainant_id upstream.
+	# Identity and authorization are the FE bearer on the Grievance Service.
+	user = frappe.session.user
+	session_name = frappe.get_value("User", user, "full_name") or user
 
 	submission = GrievanceSubmission(
-		complainant_id=complainant_id,
-		complainant_name=complainant_name,
-		complainant_role=_resolve_complainant_role(ctx),
-		region=sorted(ctx.region_scopes)[0] if ctx.region_scopes else None,
-		woreda=sorted(ctx.woreda_scopes)[0] if ctx.woreda_scopes else None,
+		complainant_id=user,
+		complainant_name=session_name,
+		complainant_role="",
 		category=category,
 		subcategory=subcategory,
 		subject=subject,
@@ -140,7 +137,7 @@ def submit_grievance():
 		attachments=body.get("attachments") or [],
 		client_submission_uuid=client_op_id or str(uuid.uuid4()),
 		submitter_type=submitter_type,
-		submitter_name=submitter_name,
+		submitter_name=submitter_name or session_name,
 		contact_mobile=contact_mobile,
 		administrative_area=administrative_area,
 		administrative_unit=administrative_unit,
@@ -150,8 +147,6 @@ def submit_grievance():
 		is_anonymous=is_anonymous,
 		consent_given=consent_given,
 	)
-
-	reference_id = client_op_id or f"{complainant_id}:{subject[:50]}"
 
 	try:
 		client = get_client()
@@ -168,20 +163,8 @@ def submit_grievance():
 	except GrievanceRejected as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except GrievanceServiceUnavailable:
-		event_name = enqueue_event(
-			event_type="Grievance Submit",
-			payload=submission.to_dict(),
-			reference_id=reference_id,
-		)
-		frappe.response["http_status_code"] = 201
-		return success_response(
-			data={
-				"ticket_id": None,
-				"sync_state": "pending",
-				"queue_ref": event_name,
-				"message": "Grievance queued for submission — the service is temporarily unavailable.",
-			},
-		)
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
 	except GrievanceServiceError:
 		return _upstream_error()
 
@@ -191,8 +174,6 @@ def submit_grievance():
 @handle_api_errors
 def get_grievance_summary():
 	"""KPI cards from the Grievance Service, passed through on success."""
-	require_roles(*C.GRIEVANCE_ROLES)
-
 	try:
 		client = get_client()
 		return success_response(data=client.get_summary())
@@ -209,8 +190,6 @@ def get_grievance_summary():
 @frappe.whitelist()
 @handle_api_errors
 def get_grievance(ticket_id: str):
-	require_roles(*C.GRIEVANCE_ROLES)
-
 	try:
 		client = get_client()
 		detail = client.get_grievance(ticket_id)
@@ -230,8 +209,6 @@ def get_grievance(ticket_id: str):
 @frappe.whitelist()
 @handle_api_errors
 def get_timeline(ticket_id: str):
-	require_roles(*C.GRIEVANCE_ROLES)
-
 	try:
 		client = get_client()
 		entries = client.get_timeline(ticket_id)
@@ -253,8 +230,6 @@ def get_timeline(ticket_id: str):
 @frappe.whitelist()
 @handle_api_errors
 def get_options():
-	require_roles(*C.GRIEVANCE_ROLES)
-
 	params = {}
 	for name in (
 		"service_category",
@@ -287,8 +262,6 @@ def get_options():
 @frappe.whitelist()
 @handle_api_errors
 def retry_sync():
-	require_roles(C.ROLE_ADMIN)
-
 	body = frappe.request.get_json(silent=True) or {}
 	event_name = body.get("event_name")
 
@@ -298,61 +271,108 @@ def retry_sync():
 	)
 
 
-def _split_values(value) -> list[str]:
-	if value is None or value == "":
-		return []
-	if isinstance(value, (list, tuple)):
-		return [str(item).strip() for item in value if str(item).strip()]
-	return [part.strip() for part in str(value).split(",") if part.strip()]
+# ---------------------------------------------------------------------------
+# Evidence
+# ---------------------------------------------------------------------------
 
 
-def _intersect_scope(requested, allowed: frozenset[str]) -> list[str]:
-	"""Values the caller asked for that their grant also covers.
+@grievance_route(
+	"/grievances/<ticket_id>/attachments",
+	methods=("POST",),
+	summary="Upload evidence documents for a grievance",
+)
+@frappe.whitelist(methods=["POST"])
+@handle_api_errors
+def upload_attachments(ticket_id: str):
+	"""Attach evidence to a filed grievance.
 
-	No request means the whole grant. A request outside the grant is an empty list.
+	multipart/form-data:
+	    files          one or more files (the key ``file`` is accepted too)
+	    document_type  optional label, for example "Receipt" or "Photo"
+
+	The Grievance Service owns the rules and its refusal comes back as a 400 with its
+	message: JPG, PNG, PDF or MP3, 10 MB a file, 10 files a grievance in total. One
+	request is all or nothing. Each stored file is scan_status "Pending" until the
+	service's virus scan finishes.
+
+	Returns 201: {"data": [{"attachment_id", "file_name", "mime_type", "size_bytes",
+	"document_type", "scan_status", "scanned_at", "uploaded_at", "timeline_entry"}]}
 	"""
-	requested_values = _split_values(requested)
-	if not requested_values:
-		return sorted(allowed)
-	return [value for value in requested_values if value in allowed]
+	uploads = [u for key in ("files", "file") for u in frappe.request.files.getlist(key)]
+	if not uploads:
+		frappe.throw(_("files is required (multipart/form-data)."), frappe.ValidationError)
+	files = [EvidenceFile(u.filename, u.read(), u.mimetype) for u in uploads]
+
+	try:
+		rows = get_client().upload_attachments(
+			ticket_id, files, document_type=frappe.form_dict.get("document_type") or None
+		)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
+
+	frappe.response["http_status_code"] = 201
+	return success_response(data=rows)
 
 
-def _constrain_area_scope(kwargs: dict, ctx) -> bool:
-	"""Narrow region, zone, and woreda to the caller's grant.
+@grievance_route(
+	"/grievances/<ticket_id>/attachments",
+	methods=("GET",),
+	summary="List the evidence documents of a grievance",
+)
+@frappe.whitelist()
+@handle_api_errors
+def list_attachments(ticket_id: str):
+	"""Evidence on a grievance, oldest first, each with its scan_status (Pending, Clean, Infected)."""
+	try:
+		return success_response(data=get_client().list_attachments(ticket_id))
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
 
-	Returns False when a requested area is entirely outside that grant.
+
+@grievance_route(
+	"/grievances/<ticket_id>/attachments/<attachment_id>/view",
+	methods=("GET",),
+	summary="Open or download one evidence document",
+)
+@frappe.whitelist()
+@handle_api_errors
+def view_attachment(ticket_id: str, attachment_id: str):
+	"""The file itself, not JSON. Inline by default; ``?download=1`` for Save As.
+
+	404 when the attachment is not on this ticket. The Grievance Service refuses a file
+	whose virus scan is not Clean; that comes back as a 400 with its message.
 	"""
-	if ctx.woreda_scopes:
-		allowed = _intersect_scope(kwargs.get("woreda"), ctx.woreda_scopes)
-		if not allowed:
-			return False
-		kwargs["woreda"] = allowed if len(allowed) > 1 else allowed[0]
-	elif ctx.region_scopes:
-		allowed = _intersect_scope(kwargs.get("region"), ctx.region_scopes)
-		if not allowed:
-			return False
-		kwargs["region"] = allowed if len(allowed) > 1 else allowed[0]
+	try:
+		row, content = grievance_evidence.read_attachment(ticket_id, attachment_id)
+	except GrievanceNotFound:
+		frappe.throw(_("Grievance {0} not found.").format(ticket_id), frappe.DoesNotExistError)
+	except GrievanceRejected as exc:
+		frappe.throw(str(exc), frappe.ValidationError)
+	except GrievanceServiceUnavailable:
+		frappe.response["http_status_code"] = 503
+		return error_response(str(_UNAVAILABLE_MSG), "SERVICE_UNAVAILABLE")
+	except GrievanceServiceError:
+		return _upstream_error()
 
-	if ctx.zone_scopes and kwargs.get("zone") is not None:
-		allowed = _intersect_scope(kwargs.get("zone"), ctx.zone_scopes)
-		if not allowed:
-			return False
-		kwargs["zone"] = allowed if len(allowed) > 1 else allowed[0]
-	return True
-
-
-def _resolve_complainant_identity(ctx) -> tuple[str, str]:
-	"""Derive complainant identity from the RBAC context — never from the request body."""
-	if ctx.has_any_role(C.ROLE_DA) and ctx.da_ids:
-		da_id = sorted(ctx.da_ids)[0]
-		full_name = frappe.get_value("User", ctx.user, "full_name") or ctx.user
-		return da_id, full_name
-	full_name = frappe.get_value("User", ctx.user, "full_name") or ctx.user
-	return ctx.user, full_name
-
-
-def _resolve_complainant_role(ctx) -> str:
-	for role in (C.ROLE_DA, C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN):
-		if ctx.has_any_role(role):
-			return role
-	return "Unknown"
+	response = Response(content, mimetype=row["mime_type"])
+	disposition = "attachment" if cint(frappe.form_dict.get("download")) else "inline"
+	response.headers.add("Content-Disposition", disposition, filename=row["file_name"])
+	response.headers["Cache-Control"] = "private, no-store"
+	response.headers["X-Content-Type-Options"] = "nosniff"
+	# Tells handle_api_errors to hand the Response back as it is, not inside the JSON envelope.
+	frappe.response["type"] = "download"
+	return response

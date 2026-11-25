@@ -590,13 +590,6 @@ class MockLivestockRegistryClient(LivestockRegistryClient):
 	def describe_intake_form(self) -> dict:
 		return describe_form(MOCK_FORM, MOCK_FIELDS, MOCK_CATALOGS)
 
-	def geo_level_values(self, level_id: str, parent_level_value_id: str | None = None) -> list[dict]:
-		# One synthetic place per level. The parent is accepted and not applied.
-		del parent_level_value_id
-		if not str(level_id or "").strip():
-			raise LivestockRegistryClientError("level_id is required")
-		return [{"level_value_id": "ET01", "level_value_mnemonic": "SYNTHETIC", "display_name": "Synthetic"}]
-
 	def submit_sections(
 		self,
 		requests: list[dict],

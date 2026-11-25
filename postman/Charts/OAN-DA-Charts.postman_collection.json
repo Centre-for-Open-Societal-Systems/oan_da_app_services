@@ -1,0 +1,566 @@
+{
+  "info": {
+    "_postman_id": "oan-da-charts",
+    "name": "OAN DA Charts",
+    "description": "Central dashboard Visit chart feeder (Confluence Dashboard APIs contract).\n\nBase path: /api/v1/da-services\n\nRoute: GET /charts/visits → **raw JSON array** (no status/data envelope).\nChart id for BFF: `visits`\n\n## Auth\nKeycloak staff realm client-credentials + role `charts:read`.\nLeave `charts_client_id` empty for local (Charts Auth Enabled unchecked on DA Services Settings).\nWhen client id is set, the collection pre-request fetches a token from `charts_token_url`.\n\n## Query params\n| Param | Env key | Notes |\n|-------|---------|-------|\n| region, zone, woreda, kebele | same | Empty / `all` = no filter |\n| from, to | same | Inclusive calendar days on `scheduled_at`. Both omitted → current month |\n| da_id, visit_type, status | same | Optional equality (`status` → `physical_status`) |\n| groupBy | groupBy | Omit → one KPI object. Else `visit_type` \\| `woreda` \\| `da_id` \\| `month` |\n\n## Docs\ndocs/charts-visits-integration.md",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const clientId = pm.environment.get('charts_client_id') || pm.collectionVariables.get('charts_client_id') || '';",
+          "const secret = pm.environment.get('charts_client_secret') || '';",
+          "const tokenUrl = pm.environment.get('charts_token_url') || '';",
+          "if (!clientId || !secret || !tokenUrl) { return; }",
+          "const existing = pm.environment.get('access_token');",
+          "if (existing) { return; }",
+          "pm.sendRequest({",
+          "  url: tokenUrl,",
+          "  method: 'POST',",
+          "  header: { 'Content-Type': 'application/x-www-form-urlencoded' },",
+          "  body: {",
+          "    mode: 'urlencoded',",
+          "    urlencoded: [",
+          "      { key: 'grant_type', value: 'client_credentials' },",
+          "      { key: 'client_id', value: clientId },",
+          "      { key: 'client_secret', value: secret }",
+          "    ]",
+          "  }",
+          "}, function (err, res) {",
+          "  if (err) { console.warn('charts token request failed', err); return; }",
+          "  const body = res.json() || {};",
+          "  if (body.access_token) {",
+          "    pm.environment.set('access_token', body.access_token);",
+          "    pm.collectionVariables.set('access_token', body.access_token);",
+          "  }",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8200" },
+    { "key": "charts_client_id", "value": "" },
+    { "key": "access_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Health (no token)",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/da-services/health",
+            "description": "Open health check — no charts token required."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Health 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Envelope status success\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql(\"success\");",
+                  "  pm.expect(body.data.service).to.eql(\"da_services\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Healthy",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/health"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"status\": \"healthy\",\n    \"service\": \"da_services\",\n    \"api_version\": \"v1\"\n  },\n  \"meta\": {\n    \"api_version\": \"router\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Visits chart",
+      "description": "GET /charts/visits — raw KPI array for BFF chart id `visits`. Sample bodies captured against local site with Charts Auth Enabled unchecked (counts reflect that site's visit data).",
+      "item": [
+        {
+          "name": "Visits KPI (default month)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"]
+            },
+            "description": "No query params → current calendar month, all geo. Returns one KPI object (zeroed if no matches)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"KPI keys present when ungrouped\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (!body.length) return;",
+                  "  const row = body[0];",
+                  "  [\"planned\",\"completed\",\"missed\",\"rescheduled\",\"in_progress\",\"cancelled\",\"total\",\"farmers_reached\"].forEach(function (k) {",
+                  "    pm.expect(row).to.have.property(k);",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Ungrouped KPI (current month)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI (all filters)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?region={{region}}&zone={{zone}}&woreda={{woreda}}&kebele={{kebele}}&from={{from}}&to={{to}}&da_id={{da_id}}&visit_type={{visit_type}}&status={{status}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "region", "value": "{{region}}", "description": "Empty / all = no filter" },
+                { "key": "zone", "value": "{{zone}}", "description": "Empty / all = no filter" },
+                { "key": "woreda", "value": "{{woreda}}", "description": "Empty / all = no filter" },
+                { "key": "kebele", "value": "{{kebele}}", "description": "Empty / all = no filter" },
+                { "key": "from", "value": "{{from}}", "description": "Inclusive YYYY-MM-DD on scheduled_at" },
+                { "key": "to", "value": "{{to}}", "description": "Inclusive YYYY-MM-DD on scheduled_at" },
+                { "key": "da_id", "value": "{{da_id}}", "description": "Optional DA-ID equality" },
+                { "key": "visit_type", "value": "{{visit_type}}", "description": "Optional visit_type equality" },
+                { "key": "status", "value": "{{status}}", "description": "Maps to physical_status" }
+              ]
+            },
+            "description": "Every supported filter param via env. Clear env values you do not want (empty / all = no filter)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Ungrouped returns exactly one row\", function () {",
+                  "  pm.expect(pm.response.json()).to.have.lengthOf(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Filtered ungrouped KPI",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/charts/visits?region=ET04&woreda=ET04-W01&from=2026-11-01&to=2026-11-30&da_id=DA-000001&visit_type=Crop Survey&status=Physical Visit Complete",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "v1", "da-services", "charts", "visits"],
+                  "query": [
+                    { "key": "region", "value": "ET04" },
+                    { "key": "woreda", "value": "ET04-W01" },
+                    { "key": "from", "value": "2026-11-01" },
+                    { "key": "to", "value": "2026-11-30" },
+                    { "key": "da_id", "value": "DA-000001" },
+                    { "key": "visit_type", "value": "Crop Survey" },
+                    { "key": "status", "value": "Physical Visit Complete" }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1\n  }\n]"
+            },
+            {
+              "name": "No matches (still one zeroed row)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?from=2000-01-01&to=2000-01-31"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 0,\n    \"completed\": 0,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 0,\n    \"farmers_reached\": 0\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI (region + dates)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?region={{region}}&zone={{zone}}&woreda={{woreda}}&kebele={{kebele}}&from={{from}}&to={{to}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "region", "value": "{{region}}" },
+                { "key": "zone", "value": "{{zone}}" },
+                { "key": "woreda", "value": "{{woreda}}" },
+                { "key": "kebele", "value": "{{kebele}}" },
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            },
+            "description": "Geo + date only. Empty env values are sent empty (treated as no filter)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Region + date range",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?region=ET04&from=2026-11-01&to=2026-11-30"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI groupBy=woreda",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?region={{region}}&from={{from}}&to={{to}}&groupBy=woreda",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "region", "value": "{{region}}" },
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "groupBy", "value": "woreda", "description": "Adds woreda key per row" }
+              ]
+            },
+            "description": "Grouped rows include `woreda`. No matches → []."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Grouped rows include woreda when non-empty\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (!body.length) return;",
+                  "  pm.expect(body[0]).to.have.property(\"woreda\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Grouped by woreda",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?region=ET04&groupBy=woreda"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1,\n    \"woreda\": \"ET04-W01\"\n  }\n]"
+            },
+            {
+              "name": "Grouped empty → []",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?from=2000-01-01&to=2000-01-31&groupBy=woreda"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI groupBy=visit_type",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?from={{from}}&to={{to}}&groupBy=visit_type",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "groupBy", "value": "visit_type" }
+              ]
+            },
+            "description": "One KPI row per visit_type in range."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Rows include visit_type when non-empty\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (!body.length) return;",
+                  "  pm.expect(body[0]).to.have.property(\"visit_type\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Grouped by visit_type",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?groupBy=visit_type"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1,\n    \"visit_type\": \"Crop Survey\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI groupBy=da_id",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?from={{from}}&to={{to}}&groupBy=da_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "groupBy", "value": "da_id" }
+              ]
+            },
+            "description": "One KPI row per DA-ID in range."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Rows include da_id when non-empty\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (!body.length) return;",
+                  "  pm.expect(body[0]).to.have.property(\"da_id\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Grouped by da_id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?groupBy=da_id"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1,\n    \"da_id\": \"DA-000001\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI groupBy=month",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?from={{from}}&to={{to}}&groupBy=month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "groupBy", "value": "month", "description": "YYYY-MM from scheduled_at" }
+              ]
+            },
+            "description": "One KPI row per calendar month (YYYY-MM)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Rows include month YYYY-MM when non-empty\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (!body.length) return;",
+                  "  pm.expect(body[0].month).to.match(/^\\d{4}-\\d{2}$/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Grouped by month",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?from=2026-10-01&to=2026-11-30&groupBy=month"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 1,\n    \"completed\": 1,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 1,\n    \"farmers_reached\": 1,\n    \"month\": \"2026-11\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Visits KPI (empty range ungrouped)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/visits?from=2000-01-01&to=2000-01-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "charts", "visits"],
+              "query": [
+                { "key": "from", "value": "2000-01-01" },
+                { "key": "to", "value": "2000-01-31" }
+              ]
+            },
+            "description": "Contract: ungrouped + no matches → one zeroed KPI object (stable BFF tiles)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"One zeroed KPI row\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.lengthOf(1);",
+                  "  pm.expect(body[0].total).to.eql(0);",
+                  "  pm.expect(body[0].farmers_reached).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Zeroed KPI",
+              "originalRequest": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "application/json" }],
+                "url": "{{base_url}}/api/v1/da-services/charts/visits?from=2000-01-01&to=2000-01-31"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "[\n  {\n    \"planned\": 0,\n    \"completed\": 0,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 0,\n    \"farmers_reached\": 0\n  }\n]"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
