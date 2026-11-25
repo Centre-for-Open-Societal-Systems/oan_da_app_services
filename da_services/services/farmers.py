@@ -25,7 +25,6 @@ from da_services.integrations.farmer_registry.mapper import (
 	registration_to_dict,
 )
 from da_services.services import constants as C
-from da_services.services import geo
 from da_services.services.da_lookup import get_da_reference
 from da_services.services.pending_actions import derive_pending_actions_batch
 from da_services.utils.permissions import require_permission
@@ -488,7 +487,6 @@ def _get_or_sync_farmer_reference(farmer_id: str) -> dict | None:
 	# Cache it. No explicit commit: the row lands with the request's transaction, so a
 	# later failure in the same request does not leave a half-written cache behind.
 	ref_dict = farmer_to_reference_dict(farmer)
-	ref_dict.update(_geo_links(farmer_id, ref_dict))
 	ref_dict["last_synced_at"] = frappe.utils.now_datetime()
 	ref_dict["sync_version"] = 1
 
@@ -507,22 +505,6 @@ def _get_or_sync_farmer_reference(farmer_id: str) -> dict | None:
 
 	out["incomplete_sections"] = incomplete
 	return out
-
-
-def _geo_links(farmer_id: str, places: dict) -> dict:
-	"""Region / Zone / Woreda / Kebele of ``places`` as master codes.
-
-	The registry gives the places by name; the cache links them to the geo masters. A
-	name the masters do not have is left empty and logged, so the farmer can still be read.
-	"""
-	levels = ("region", "zone", "woreda", "kebele")
-	codes = geo.codes_for_names(**{level: places.get(level) for level in levels})
-	unknown = {level: places.get(level) for level in levels if places.get(level) and not codes[level]}
-	if unknown:
-		frappe.logger("da_services").warning(
-			"Farmer %s: not in the geo masters: %s (run geo_master_sync)", farmer_id, unknown
-		)
-	return codes
 
 
 def _get_farmer_visit_data(farmer_id: str) -> dict:
@@ -751,14 +733,13 @@ def _upsert_farmer_reference(item, *, kebele_code: str | None = None) -> None:
 	existence check and the insert, the duplicate-key error is caught and the
 	row is refreshed instead, so concurrent syncs never fail or double-insert.
 	"""
-	places = _geo_links(
-		item.farmer_id, {"region": item.region, "woreda": item.woreda, "kebele": kebele_code or item.kebele}
-	)
 	values = {
 		"reg_id": item.reg_id,
 		"farmer_name": item.name,
 		"phone": item.phone,
-		**places,
+		"region": item.region,
+		"woreda": item.woreda,
+		"kebele": kebele_code or item.kebele,
 		"total_land_hectares": item.total_land_area,
 		"registration_state": cache_registration_state(item.state),
 		"registered_at": item.registration_date,
