@@ -198,6 +198,12 @@ class HttpDARegistryClient(DARegistryClient):
 		self._cache_record(internal_id, record)
 		return registry_record_to_da_reference(record, self._labels())
 
+	def get_da_by_record_id(self, record_id: str) -> DAReference:
+		"""Read live by the registry's own record id: one call, no search by DA-ID first."""
+		record = self._da_record(record_id, record_id)
+		self._cache_record(record_id, record)
+		return registry_record_to_da_reference(record, self._labels())
+
 	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
 		"""Active DAs of a Woreda (or Region), by Master Data P-code.
 

@@ -610,7 +610,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/me",
+              "raw": "{{base_url}}/api/v1/da-services/profile/my_profile",
               "host": [
                 "{{base_url}}"
               ],
@@ -619,10 +619,10 @@
                 "v1",
                 "da-services",
                 "profile",
-                "me"
+                "my_profile"
               ]
             },
-            "description": "The signed-in DA's own record from the DA Registry (name parts, Fayda ID, gender, birth month/year EC, contact, education, position, Region/Zone/Woreda/Kebele with names) plus editable fields and open change requests."
+            "description": "The signed-in DA's own record from the DA Registry, found by the id on their User (da_registry_id, the da_id claim of IAM): no da_id is sent. Name parts, Fayda ID, gender, birth month/year EC, contact, position, Region/Zone/Woreda/Kebele with names, education records (each certificate with a short-lived url), family_members, the photo link, validation {record_found, record_status, is_active}, plus editable fields and open change requests. 404 when the account is not linked to a DA record or the registry does not know it."
           },
           "event": [
             {

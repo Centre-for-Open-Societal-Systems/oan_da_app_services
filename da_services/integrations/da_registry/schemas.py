@@ -67,6 +67,15 @@ class DAReference:
 	zone_name: str | None = None
 	woreda_name: str | None = None
 	kebele_name: str | None = None
+	# The registry's own id of the record (a UUID): what IAM puts in the ``da_id`` claim and
+	# User.da_registry_id holds. The DA-ID above is the number shown to people.
+	record_id: str | None = None
+	record_status: str | None = None  # as the registry says it: ACTIVE, INACTIVE, ARCHIVED
+	# When and by whom (IAM user id) the record was last approved, and how it was created
+	# (CSV_IMPORT, ...).
+	last_approved_at: str | None = None
+	last_approved_by: str | None = None
+	source: str | None = None
 	source_version: str | None = None  # registry record version, for optimistic checks
 	fetched_at: datetime | None = None
 

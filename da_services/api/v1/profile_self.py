@@ -1,7 +1,8 @@
 """v1 DA profile and profile change requests (FSD 3.7; docs/api-da-screens.md 2.18).
 
+GET  /api/v1/da-services/profile/my_profile                     the signed-in DA's own profile
 GET  /api/v1/da-services/profile/agents/<da_id>                 Supervisor / Executive / Administrator
-GET  /api/v1/da-services/profile/documents/<document_id>         ?da_id= -> {url}
+GET  /api/v1/da-services/profile/documents/<document_id>         ?da_id= (none: own record) -> {url}
 POST /api/v1/da-services/profile/qualifications                 {action, record_id, values, reason, da_id}
 POST /api/v1/da-services/profile/family-members                 {action, member_id, values, reason, da_id}
 GET  /api/v1/da-services/profile/certificates                   ?da_id=
@@ -72,6 +73,17 @@ def coded_refusals(endpoint):
 			return error_response(str(exc), code, details={field: str(exc)} if field else None)
 
 	return wrapper
+
+
+@route(
+	"/profile/my_profile",
+	methods=("GET",),
+	summary="The signed-in DA's own profile from the DA Registry, with open change requests",
+)
+@frappe.whitelist()
+@handle_api_errors
+def my_profile():
+	return success_response(data=svc.my_profile())
 
 
 @route("/profile/agents/<da_id>", methods=("GET",), summary="A DA's profile and open change requests")

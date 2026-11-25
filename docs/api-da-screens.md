@@ -477,10 +477,10 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 
 | Element | API | Source |
 |---|---|---|
-| Header, stats, learning summary | `GET /profile/me` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
-| Photo, Education & Professional records (certificates), family members | `GET /profile/me` (`photo`, `qualifications[]`, `dependents[]`); a certificate: `GET /profile/documents/{document_id}` | DA Registry (#66) |
+| Header, stats, learning summary | `GET /profile/my_profile` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
+| Photo, Education & Professional records (certificates), family members | `GET /profile/my_profile` (`photo`, `qualifications[]` with a `url` on each certificate, `family_members[]`); a fresh link to a certificate: `GET /profile/documents/{document_id}` | DA Registry (#66) |
 | Change photo, education records, certificates, family members | `POST /profile/photo`, `/profile/photo/remove`, `/profile/qualifications`, `/profile/certificates`, `/profile/certificates/remove`, `/profile/family-members`; pending and verified certificates: `GET /profile/certificates` → same two approvals → DA Registry | ours: DA Profile Change Request, DA Certificate |
-| Edit profile (Contact incl. home address, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`) | ours: DA Profile Change Request (data-model 4.4) |
+| Edit profile (Contact incl. home address, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`). A DA may ask for Contact and Identity only: `GET /profile/my_profile` lists `region`, `zone`, `woreda`, `kebele`, `position`, `specialisation`, `joined_date` and `reports_to` under `locked_fields` (their Supervisor asks for these) and the rest under `editable_fields` | ours: DA Profile Change Request (data-model 4.4) |
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
@@ -570,7 +570,7 @@ two types.
 | 18 | `GET /performance/me`, goals, `GET /performance/agents`, tiers, KPI records + import | performance | Nikky |
 | 19 | `GET /surveys`, `GET /surveys/{id}`, `POST /surveys/{id}/responses`, `GET /surveys/{id}/responses`, `GET /surveys/{id}/results`, `POST/GET/PATCH /surveys/templates` | surveys | Nikky |
 | 20 | `POST /sync/operations`, `/attachments`, `GET /sync/status`, `/operations`, `/conflicts/{id}`, `POST /conflicts/{id}/resolve`, `POST /operations/{id}/retry` | sync | Pushkar |
-| 21 | `GET /profile/me`, change-requests, dependents, certificates, leave, leave-requests | profile | Nikky |
+| 21 | `GET /profile/my_profile`, change-requests, dependents, certificates, leave, leave-requests | profile | Nikky |
 | 22 | `GET /approvals`, `POST /approvals/{id}/decide` | supervisor approvals | Nikky |
 | 23 | `POST /files` | uploads | Frappe built-in |
 

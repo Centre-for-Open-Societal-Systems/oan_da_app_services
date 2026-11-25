@@ -81,6 +81,14 @@ class DARegistryClient(ABC):
 	def get_da(self, da_id: str) -> DAReference:
 		"""Fetch the DA reference. Raises DANotFound / DARegistryUnavailable."""
 
+	@abstractmethod
+	def get_da_by_record_id(self, record_id: str) -> DAReference:
+		"""The DA whose registry record has this id (the registry's own id of the record,
+		which IAM gives a signed-in DA as ``da_id`` and User.da_registry_id holds).
+
+		Raises DANotFound / DARegistryUnavailable.
+		"""
+
 	def validate_da_id(self, da_id: str) -> bool:
 		try:
 			self.get_da(da_id)

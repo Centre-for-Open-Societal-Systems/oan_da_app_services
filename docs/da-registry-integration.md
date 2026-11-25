@@ -49,7 +49,7 @@ Prefix: `/api/v1/da-services`
 | Route | Staff call |
 | --- | --- |
 | `GET /me` | The DA's record: search by DA-ID (exact match on top of the partial search), then the `da_details_tab` records |
-| `GET /profile/me` | Same, plus the read-back of changes sent to the registry |
+| `GET /profile/my_profile` | The signed-in DA's own record, read directly by the registry's record id (`User.da_registry_id`, the `da_id` claim of IAM): one `get_tab_records`, no search. A DA-ID in that field (`DA-…`) is searched as for `GET /me`. Plus the read-back of changes sent to the registry, and one `documents/get_documents` for the links of all certificates. 404 when the User has no id or the registry does not know it |
 | `GET /profile/agents/{da_id}` (Supervisor, Administrator) | The DA's record, plus the read-back |
 | `POST /profile/change-requests` | Reads only: the DA's record, Master Data code lists, the geo chain for a location change. A `DA Profile Change Request` row in DA Services |
 | `GET …`, `GET …/{id}`, `POST …/{id}/cancel` | DA Services only; `GET …/{id}` reads back a change that waits for the registry |
@@ -60,7 +60,7 @@ Prefix: `/api/v1/da-services`
 | `POST /profile/change-requests/{id}/retry` (Administrator) | Reads the DA's record first: if it already holds the requested values (the earlier answer was lost), the request is marked Applied and nothing is created. Otherwise `create_change_request` again, with the Administrator's token |
 | `POST /profile/change-requests/{id}/sync-local` (Administrator) | DA Services only: repeats the move of the DA's DA RBAC grant after an applied location change (`local_sync_state = Failed`) |
 | `POST /profile/change-requests/{id}/close` (Administrator) | DA Services only |
-| `GET /profile/me`, `GET /profile/agents/{da_id}` (Supervisor, Executive, Administrator in scope) | Reads only: the DA's record and the Master Data code lists |
+| `GET /profile/my_profile`, `GET /profile/agents/{da_id}` (Supervisor, Executive, Administrator in scope) | Reads only: the DA's record and the Master Data code lists |
 | `GET /profile/documents/{document_id}?da_id=` (a DA: own, without `da_id`) | Reads only: `documents/get_documents` for a short-lived link. Only a document on that DA's record (the photo, a certificate) opens |
 | `POST /profile/qualifications` `{action: add/update/delete, record_id, values, reason, da_id}` | Reads only, then a `DA Profile Change Request` (section `Education records`). `values`: `education_level` (a `DA_EDUCATION_LEVEL` code or label) and `passout_year` (EC year, 1950 to now), both needed to add; nothing else (position, specialisation and joining date are Position and reporting fields). A Development Agent or Senior DA keeps at least one record |
 | `POST /profile/family-members` `{action, member_id, values, reason, da_id}` | As above (section `Family members`). `values`: `name`, `relationship` (`DA_RELATIONSHIP`), `date_of_birth` |
@@ -77,8 +77,11 @@ What the portal gets with these answers, so it repeats none of the rules:
   about an hour; made from the photo's document when the record carries no link),
   `profile.qualifications[]` (`id`, `education_level` and `_label`, `passout_year`,
   `certificates[] {document_id, name}`, `is_main`; the main record first: the latest passout year,
-  which the registry copies onto the DA record as `profile.education_tier` and `profile.passout_year`) and `profile.dependents[]` (`id`, `name`, `relationship` and
-  `_label`, `date_of_birth`). A certificate opens through `GET /profile/documents/{document_id}`.
+  which the registry copies onto the DA record as `profile.education_tier` and `profile.passout_year`) and `profile.family_members[]` (`id`, `name`, `relationship` and
+  `_label`, `date_of_birth`; also under its earlier name `profile.dependents[]`). A certificate opens through `GET /profile/documents/{document_id}`;
+  `GET /profile/my_profile` also puts a short-lived `url` on every certificate (`null` when the registry cannot give it now).
+  `GET /profile/my_profile` adds `validation {record_found, record_status, is_active}` and the profile carries
+  `record_id`, `record_status`, `last_approved_at`, `last_approved_by` and `source` of the record.
   They change through the list and file requests in the table above, approved like every other
   profile change. `profile.home_address` (the registry's `address_line_1`, where the DA lives) is one
   line of up to 100 characters and changes with the Contact section (`home_address`).
