@@ -3,7 +3,7 @@
 
   "da_registry_backend": "http",
 
-  "_comment_settings": "The registry's host, the DA register id and the tab id are not set here. Fill them in the Desk: DA Services Settings > DA Registry Domain, DA Registry Form Register ID, DA Registry Tab ID (empty tab id means da_details_tab).",
+  "_comment_settings": "The registry's host, the DA register id and the tab id are not set here. Fill them in the Desk: DA Services Settings > DA Registry Domain, DA Registry Form Register ID, DA Registry Tab ID (da_details_tab). All three are required.",
 
   "_comment_auth": "Whose token reaches the registry. user: the signed-in user's own staff IAM access token (Authorization: Bearer) and CSRF value (X-CSRF-Token), forwarded by DA Services after its RBAC check; da_registry_keycloak is not needed. A profile change request is created only in an OAN Administrator's request (the second approval), so only the Administrator's token writes. service: the da-services-backend service account below, kept for a later security phase. The scheduled registry read-back only runs with service.",
   "da_registry_auth": "user",

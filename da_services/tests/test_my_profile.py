@@ -10,6 +10,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.api.v1 import profile_self as api
+from da_services.integrations.da_registry.client import DARegistryNotConfigured
 from da_services.integrations.da_registry.mapper import mock_record_id
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
@@ -138,6 +139,23 @@ class TestMyProfile(IntegrationTestCase):
 				self.assertEqual(api.my_profile()["data"]["profile"]["da_id"], "DA-000001")
 		finally:
 			frappe.local.form_dict.pop("da_id", None)
+
+	def test_missing_registry_settings_are_named(self):
+		"""An empty DA Services Settings field is said so, not "An unexpected error occurred"."""
+		for route, args in ((api.my_profile, ()), (api.document, ("doc-1",))):
+			# the refusal rolls the request back, as the shared handler does: set the id again
+			set_da_registry_id(DA, mock_record_id("DA-000001"))
+			frappe.local.response = frappe._dict({"docs": []})
+			with (
+				patch.object(svc, "get_client", side_effect=DARegistryNotConfigured(["DA Registry Tab ID"])),
+				as_user(DA),
+			):
+				out = route(*args)
+			self.assertEqual(frappe.local.response.get("http_status_code"), 500)
+			self.assertEqual(out["status"], "error")
+			self.assertEqual(out["code"], "DA_REGISTRY_NOT_CONFIGURED")
+			self.assertEqual(out["message"], "DA Registry is not configured.")
+			self.assertEqual(out["details"], {"missing_settings": ["DA Registry Tab ID"]})
 
 	def test_own_document_needs_no_da_id(self):
 		with as_user(DA):

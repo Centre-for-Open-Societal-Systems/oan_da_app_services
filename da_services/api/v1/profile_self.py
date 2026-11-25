@@ -39,11 +39,13 @@ from __future__ import annotations
 import functools
 
 import frappe
+from frappe import _
 from frappe.utils.response import build_response
 from oan_auth_service.api.utils import error_response, handle_api_errors, success_response
 
 from da_services.api.router import route
 from da_services.api.v1.common import request_fields, truthy
+from da_services.integrations.da_registry.client import DARegistryNotConfigured
 from da_services.services import constants as C
 from da_services.services import profile as svc
 from da_services.services import profile_lists
@@ -75,6 +77,34 @@ def coded_refusals(endpoint):
 	return wrapper
 
 
+def registry_settings_required(endpoint):
+	"""Say that DA Services Settings does not name the DA Registry yet, and which settings
+	are empty.
+
+	The shared handler answers every 5xx with "An unexpected error occurred", so a site
+	with an empty "DA Registry Tab ID" could not be told apart from a crash. This answers
+	500 ``DA_REGISTRY_NOT_CONFIGURED`` with ``details.missing_settings`` (the labels of the
+	empty settings, nothing else), and writes the same to the Error Log.
+	"""
+
+	@functools.wraps(endpoint)
+	def wrapper(*args, **kwargs):
+		try:
+			return endpoint(*args, **kwargs)
+		except DARegistryNotConfigured as exc:
+			frappe.db.rollback()
+			frappe.clear_messages()
+			frappe.log_error(title="DA Registry is not configured", message=str(exc))
+			frappe.response["http_status_code"] = 500
+			return error_response(
+				_("DA Registry is not configured."),
+				"DA_REGISTRY_NOT_CONFIGURED",
+				details={"missing_settings": exc.missing},
+			)
+
+	return wrapper
+
+
 @route(
 	"/profile/my_profile",
 	methods=("GET",),
@@ -82,6 +112,7 @@ def coded_refusals(endpoint):
 )
 @frappe.whitelist()
 @handle_api_errors
+@registry_settings_required
 def my_profile():
 	return success_response(data=svc.my_profile())
 
@@ -100,6 +131,7 @@ def agent_profile(da_id: str):
 )
 @frappe.whitelist()
 @handle_api_errors
+@registry_settings_required
 def document(document_id: str, **kwargs):
 	q = request_fields(kwargs, "da_id")
 	return success_response(data=svc.document_link(document_id, da_id=q.get("da_id")))

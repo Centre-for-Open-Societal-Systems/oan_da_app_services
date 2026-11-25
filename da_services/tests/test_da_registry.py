@@ -93,7 +93,7 @@ class TestClientFactory(IntegrationTestCase):
 				"client_secret": "s",
 			}
 			# the registry's host and register id are DA Services Settings
-			with da_registry_settings(None, None), self.assertRaises(DARegistryError):
+			with da_registry_settings(None, None, None), self.assertRaises(DARegistryError):
 				get_client()
 			with da_registry_settings("https://registry.example", "register-1"):
 				self.assertIsInstance(get_client(), HttpDARegistryClient)

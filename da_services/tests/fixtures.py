@@ -314,9 +314,10 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def da_registry_settings(domain: str | None, register_id: str | None, tab_id: str | None = None):
+def da_registry_settings(domain: str | None, register_id: str | None, tab_id: str | None = "da_details_tab"):
 	"""Name the DA Registry in DA Services Settings for the block (the only place the HTTP
-	client reads its host, register id and tab id from); what was there comes back after."""
+	client reads its host, register id and tab id from; all three are required); what was
+	there comes back after."""
 	fields = ("da_registry_domain", "da_registry_form_register_id", "da_registry_tab_id")
 
 	def save(values):

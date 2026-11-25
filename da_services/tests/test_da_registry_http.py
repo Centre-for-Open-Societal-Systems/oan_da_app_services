@@ -942,21 +942,34 @@ class TestUserTokenPassthrough(IntegrationTestCase):
 			with da_registry_settings("http://registry.settings.example", "register-from-settings"):
 				client = HttpDARegistryClient.from_conf()
 				self.assertEqual(client.base_url, "http://registry.settings.example")
-				self.assertEqual(client.tab_id, "da_details_tab")  # an empty setting: the default tab
 
-			with da_registry_settings(None, None), self.assertRaises(DARegistryError) as ctx:
+			# every missing setting is named, and site_config.json is not offered instead
+			with da_registry_settings(None, None, None), self.assertRaises(DARegistryError) as ctx:
 				HttpDARegistryClient.from_conf()
-			self.assertIn("DA Registry Domain", str(ctx.exception))
-			self.assertIn("DA Registry Form Register ID", str(ctx.exception))
-			self.assertNotIn("site_config", str(ctx.exception))
+			self.assertEqual(
+				str(ctx.exception),
+				"DA Services Settings: set DA Registry Domain, DA Registry Form Register ID, DA Registry Tab ID",
+			)
 
 			with (
 				da_registry_settings("registry.settings.example", None),
 				self.assertRaises(DARegistryError) as ctx,
 			):
 				HttpDARegistryClient.from_conf()
-			self.assertNotIn("DA Registry Domain", str(ctx.exception))
-			self.assertIn("DA Registry Form Register ID", str(ctx.exception))
+			self.assertEqual(str(ctx.exception), "DA Services Settings: set DA Registry Form Register ID")
+
+			# the tab id has no default either
+			with (
+				da_registry_settings("registry.settings.example", "register-from-settings", None),
+				self.assertRaises(DARegistryError) as ctx,
+			):
+				HttpDARegistryClient.from_conf()
+			self.assertEqual(str(ctx.exception), "DA Services Settings: set DA Registry Tab ID")
+			with (
+				da_registry_settings("registry.settings.example", "register-from-settings", "  "),
+				self.assertRaises(DARegistryError),
+			):
+				HttpDARegistryClient.from_conf()
 
 
 def _jwt_claims_iss(token):

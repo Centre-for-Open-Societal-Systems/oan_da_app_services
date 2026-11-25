@@ -20,7 +20,7 @@ Select the backend per site in ``site_config.json`` (full example in
 
 The registry's host, the DA register id and the tab id are not in site_config.json: they
 come from DA Services Settings ("DA Registry Domain", "DA Registry Form Register ID", "DA
-Registry Tab ID"). The first two are required; an empty tab id means ``da_details_tab``.
+Registry Tab ID", e.g. ``da_details_tab``). All three are required.
 """
 
 from __future__ import annotations
@@ -50,6 +50,18 @@ class DANotFound(DARegistryError):
 
 class DARegistryUnavailable(DARegistryError):
 	"""Transient: timeout, connection error, 5xx. Callers may retry."""
+
+
+class DARegistryNotConfigured(DARegistryError):
+	"""DA Services Settings does not name the registry yet.
+
+	``missing`` holds the labels of the settings that are empty ("DA Registry Domain",
+	"DA Registry Form Register ID", "DA Registry Tab ID").
+	"""
+
+	def __init__(self, missing: list[str]):
+		super().__init__(f"DA Services Settings: set {', '.join(missing)}")
+		self.missing = list(missing)
 
 
 class DARegistryContractPending(DARegistryError):

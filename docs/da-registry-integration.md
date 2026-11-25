@@ -6,7 +6,7 @@ Code: `da_services/integrations/da_registry/` (`client.py` interface, `mock.py`,
 
 ## Identity
 
-Where the registry is, and which register holds the DAs, is read from **DA Services Settings**: "DA Registry Domain" (a host name or a full URL), "DA Registry Form Register ID", and "DA Registry Tab ID" (the `tab_id` of `register-data/get_tab_records`; empty means `da_details_tab`). The first two are required: without them every DA Registry call answers "DA Services Settings: set …". They are not read from `site_config.json`.
+Where the registry is, and which register holds the DAs, is read from **DA Services Settings**: "DA Registry Domain" (a host name or a full URL), "DA Registry Form Register ID", and "DA Registry Tab ID" (the `tab_id` of `register-data/get_tab_records`: `da_details_tab`). All three are required: while one is empty every DA Registry call fails and names what to set ("DA Services Settings: set DA Registry Tab ID"). They are not read from `site_config.json`.
 
 `da_registry_auth` selects whose token reaches the registry.
 

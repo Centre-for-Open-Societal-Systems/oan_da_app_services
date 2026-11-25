@@ -43,6 +43,7 @@ from .client import (
 	DARegistryClient,
 	DARegistryContractPending,
 	DARegistryError,
+	DARegistryNotConfigured,
 	DARegistryUnavailable,
 )
 from .mapper import (
@@ -182,18 +183,19 @@ class HttpDARegistryClient(DARegistryClient):
 		conf = frappe.conf
 		# Where the registry is, which register holds the DAs and which of its tabs holds a
 		# DA's record: DA Services Settings only ("DA Registry Domain", "DA Registry Form
-		# Register ID", "DA Registry Tab ID"). An empty tab id means DA_TAB.
+		# Register ID", "DA Registry Tab ID"). All three are required.
 		base_url, register_id, tab_id = _registry_settings()
 		missing = [
 			label
 			for label, value in (
 				("DA Registry Domain", base_url),
 				("DA Registry Form Register ID", register_id),
+				("DA Registry Tab ID", tab_id),
 			)
 			if not value
 		]
 		if missing:
-			raise DARegistryError(f"{SETTINGS_DOCTYPE}: set {', '.join(missing)}")
+			raise DARegistryNotConfigured(missing)
 		auth_mode = str(auth_mode or conf.get("da_registry_auth") or "service").lower()
 		if auth_mode not in ("user", "service"):
 			raise DARegistryError(f"Unknown da_registry_auth: {auth_mode!r}")
@@ -212,7 +214,7 @@ class HttpDARegistryClient(DARegistryClient):
 			base_url,
 			keycloak=keycloak,
 			register_id=register_id,
-			tab_id=tab_id or DA_TAB,
+			tab_id=tab_id,
 			intake_form_id=conf.get("da_registry_intake_form_id") or DEFAULT_INTAKE_FORM_ID,
 			import_data_model_id=conf.get("da_registry_import_data_model_id") or DEFAULT_IMPORT_DATA_MODEL_ID,
 			timeout=float(conf.get("da_registry_timeout_seconds") or 10),

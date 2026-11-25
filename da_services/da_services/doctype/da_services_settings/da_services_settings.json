@@ -66,7 +66,7 @@
    "label": "DA Registry Form Register ID"
   },
   {
-   "description": "Tab of the DA register that holds a DA's record with its education records and family members (the tab_id of register-data/get_tab_records). Empty means da_details_tab.",
+   "description": "Tab of the DA register that holds a DA's record with its education records and family members (the tab_id of register-data/get_tab_records), e.g. da_details_tab.",
    "fieldname": "da_registry_tab_id",
    "fieldtype": "Data",
    "label": "DA Registry Tab ID"
