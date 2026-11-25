@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 import frappe
 import requests
 
+from da_services.services.utils import SETTINGS_DOCTYPE, StaffAPIError, base_url_from_domain
+
 from .mapper import (
 	error_text,
 	normalize_case,
@@ -387,13 +389,13 @@ class HttpGrievanceClient(GrievanceClient):
 
 def _base_url_from_settings() -> str:
 	"""Bare host or full URL from DA Services Settings → normalized base URL."""
-	domain = frappe.db.get_single_value("DA Services Settings", "grievance_base_url")
-	domain = (domain or "").strip().rstrip("/")
-	if not domain:
-		raise GrievanceServiceError("Grievance Base URL is not set in DA Services Settings")
-	if not domain.startswith(("http://", "https://")):
-		domain = f"https://{domain}"
-	return domain
+	try:
+		return base_url_from_domain(
+			frappe.db.get_single_value(SETTINGS_DOCTYPE, "grievance_base_url"),
+			"Grievance Base URL",
+		)
+	except StaffAPIError as exc:
+		raise GrievanceServiceError(str(exc)) from exc
 
 
 def get_client() -> GrievanceClient:

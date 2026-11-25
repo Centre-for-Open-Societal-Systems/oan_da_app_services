@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 import frappe
 import requests
 
-from da_services.integrations.staff_api.auth import apply_bearer_and_csrf
 from da_services.integrations.staff_api.transport import http_failure, staff_envelope
 
 from .client import (
@@ -105,21 +104,21 @@ class HTTPLivestockRegistryClient(LivestockRegistryClient):
 	def _auth_and_csrf_headers(self) -> tuple[dict[str, str], dict[str, str]]:
 		"""Headers + cookies for a staff POST.
 
-		A token provider (tests) wins. Otherwise the Authorization and
-		X-CSRF-Token headers of the current request are forwarded; a missing
-		one is a 401 client error.
+		CSRF always comes from the FE request ``X-CSRF-Token``. A test token
+		provider may override the bearer; otherwise Authorization is forwarded
+		from the request. A missing header is a 401 client error.
 		"""
 		headers = dict(self.headers)
-		if self._tokens is not None:
-			return apply_bearer_and_csrf(headers, self._tokens.get_token())
-
-		token = frappe.get_request_header("Authorization")
 		csrf = frappe.get_request_header("X-CSRF-Token")
-		if not token or not csrf:
+		if self._tokens is not None:
+			auth = f"Bearer {self._tokens.get_token()}"
+		else:
+			auth = frappe.get_request_header("Authorization")
+		if not auth or not csrf:
 			raise LivestockRegistryClientError(
 				"Missing Authorization or X-CSRF-Token header", status_code=401
 			)
-		headers["Authorization"] = token
+		headers["Authorization"] = auth
 		headers["X-CSRF-Token"] = csrf
 		return headers, {"X-CSRF-Token": csrf}
 

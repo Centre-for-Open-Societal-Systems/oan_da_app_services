@@ -7,7 +7,8 @@ sync (``da_registry_assignment_sync.py``):
   (username, password, login key) through ``sso_login``, the function behind
   ``POST /sso/login``, and returns its ``access_token`` and ``csrf_token``.
 - ``base_url_from_domain`` turns a settings domain (``host.example.org`` or a full URL)
-  into a base URL.
+  into a base URL (used by Grievance, Crop Sown, DA Registry sync, …).
+- ``required_setting_value`` requires a non-empty Settings string (e.g. a register id).
 - ``post_staff_api`` makes one staff-envelope POST with those tokens: the access token as
   ``Authorization: Bearer`` and the CSRF token as ``X-CSRF-Token``, header and cookie
   (double submit; a server-to-server call has no browser cookie).
@@ -58,6 +59,14 @@ def base_url_from_domain(domain: str | None, label: str) -> str:
 	if not domain.startswith(("http://", "https://")):
 		domain = f"https://{domain}"
 	return domain
+
+
+def required_setting_value(value: str | None, label: str) -> str:
+	"""Non-empty Settings string (e.g. a register UUID). Raises StaffAPIError when blank."""
+	value = (value or "").strip()
+	if not value:
+		raise StaffAPIError(f"{SETTINGS_DOCTYPE}: set {label}", kind="config")
+	return value
 
 
 def sync_account_login(*, also_required: dict[str, str | None] | None = None, login=None) -> SSOLoginResult:

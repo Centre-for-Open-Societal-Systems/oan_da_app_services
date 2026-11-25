@@ -66,11 +66,21 @@ class _Resp:
 		return self._body
 
 
+_TEST_SSO = {"Authorization": "Bearer unused", "X-CSRF-Token": "test-csrf"}
+
+
 def _client(**kwargs):
 	return HTTPLivestockRegistryClient(
 		staff_url=STAFF,
 		tokens=type("Tokens", (), {"get_token": lambda self: "cached-token"})(),
 		**kwargs,
+	)
+
+
+def _patch_sso():
+	return patch(
+		"da_services.integrations.livestock_registry.http.frappe.get_request_header",
+		side_effect=_TEST_SSO.get,
 	)
 
 
@@ -417,13 +427,16 @@ class TestStaffAuth(unittest.TestCase):
 				self.assertEqual(caught.exception.status_code, 401)
 				post.assert_not_called()
 
-	def test_token_provider_takes_precedence(self):
-		get_header = Mock(return_value="Bearer sso-token")
-		with patch("da_services.integrations.livestock_registry.http.frappe.get_request_header", get_header):
+	def test_token_provider_overrides_bearer_but_keeps_fe_csrf(self):
+		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
+		with patch(
+			"da_services.integrations.livestock_registry.http.frappe.get_request_header",
+			side_effect=request_headers.get,
+		):
 			headers, cookies = _client()._auth_and_csrf_headers()
-		get_header.assert_not_called()
 		self.assertEqual(headers["Authorization"], "Bearer cached-token")
-		self.assertEqual(headers["X-CSRF-Token"], cookies["X-CSRF-Token"])
+		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(cookies, {"X-CSRF-Token": "sso-csrf"})
 
 	def test_misconfigured_client_is_rejected(self):
 		with self.assertRaises(LivestockRegistryError):
@@ -459,6 +472,11 @@ _FORMS = [
 
 
 class TestHttpCalls(unittest.TestCase):
+	def setUp(self):
+		self._sso = _patch_sso()
+		self._sso.start()
+		self.addCleanup(self._sso.stop)
+
 	def _run(self, responses, call, **client_kwargs):
 		post, calls = _staff(responses)
 		with patch("da_services.integrations.livestock_registry.http.requests.post", post):

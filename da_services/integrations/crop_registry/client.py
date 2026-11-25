@@ -1,8 +1,11 @@
-"""Crop Sown Registry client interface and factory.
+"""Crop Sown Registry client interface and Settings helpers.
 
-Reads discover the CropSown register and one intake form, then read a
-submission and its tabs. Writes follow the collection: save one intake
-section at a time, then finalize that submission. Crop Sown has no ingest API.
+Staff host and CropSown ``register_id`` come from DA Services Settings
+(``crop_registry_domain``, ``crop_registry_form_register_id``). Catalog host
+is Settings ``master_data_domain`` when set. Auth is the caller's SSO bearer
+and CSRF. There is no ``get_all_registers`` discovery. The HTTP factory is
+``get_crop_registry_client`` in this package. Writes follow the collection:
+save one intake section at a time, then finalize. Crop Sown has no ingest API.
 """
 
 from __future__ import annotations
@@ -10,6 +13,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import frappe
+
+from da_services.services.utils import SETTINGS_DOCTYPE, base_url_from_domain, required_setting_value
 
 from .schemas import CropSubmission
 
@@ -100,33 +105,26 @@ class CropRegistryClient(ABC):
 		"""Validate records against intake metadata, then save each section."""
 
 
-def get_crop_registry_client() -> CropRegistryClient:
-	"""Return the configured client. Defaults to the in-memory mock."""
-	backend = (frappe.conf.get("crop_registry_backend") or "mock").lower()
-	if backend == "mock":
-		from .mock import MockCropRegistryClient
-
-		return MockCropRegistryClient()
-	if backend != "http":
-		raise CropRegistryError(f"Unknown crop_registry_backend: {backend!r}")
-
-	staff_url = frappe.conf.get("crop_registry_staff_url") or ""
-	from da_services.integrations.staff_api.auth import keycloak_from_conf
-
-	from .http import HTTPCropRegistryClient
-
-	return HTTPCropRegistryClient(
-		staff_url=staff_url,
-		keycloak=keycloak_from_conf(
-			frappe.conf.get("crop_registry_keycloak"),
-			frappe.conf.get("farmer_registry_keycloak"),
-		),
-		api_key=frappe.conf.get("crop_registry_api_key"),
-		register_mnemonic=frappe.conf.get("crop_registry_register_mnemonic") or "CropSown",
-		register_id=frappe.conf.get("crop_registry_register_id") or None,
-		form_name_contains=frappe.conf.get("crop_registry_form_name_contains") or "Planning",
-		sender_app=frappe.conf.get("crop_registry_sender_app") or "OAN_REGISTRY_API_TEST",
-		registry_client_id=(frappe.conf.get("crop_registry_client_id") or "cropsown-registry-staff-portal"),
-		timeout=int(frappe.conf.get("crop_registry_timeout") or 30),
-		master_data_url=frappe.conf.get("crop_registry_master_data_url") or None,
+def _staff_url_and_register_id() -> tuple[str, str]:
+	"""Crop Registry Domain + Form Register ID from DA Services Settings."""
+	settings = (
+		frappe.db.get_value(
+			SETTINGS_DOCTYPE,
+			SETTINGS_DOCTYPE,
+			["crop_registry_domain", "crop_registry_form_register_id"],
+			as_dict=True,
+		)
+		or frappe._dict()
 	)
+	return (
+		base_url_from_domain(settings.crop_registry_domain, "Crop Registry Domain"),
+		required_setting_value(settings.crop_registry_form_register_id, "Crop Registry Form Register ID"),
+	)
+
+
+def _master_data_url() -> str | None:
+	"""Optional Master Data Domain from DA Services Settings."""
+	domain = (frappe.db.get_single_value(SETTINGS_DOCTYPE, "master_data_domain") or "").strip()
+	if not domain:
+		return None
+	return base_url_from_domain(domain, "Master Data Domain")

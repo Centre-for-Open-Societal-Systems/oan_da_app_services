@@ -50,7 +50,7 @@ DA routes:
 - `POST /api/v1/da-services/farmers/{farmer_id}/crops`
 - `POST /api/v1/da-services/farmers/{farmer_id}/crops/{submission_id}/finalize`
 
-The HTTP client is `da_services/integrations/crop_registry/http.py`. The staff host is `crop_registry_staff_url`. There is no Crop Sown ingest API.
+The HTTP client is `da_services/integrations/crop_registry/http.py`. The staff host is DA Services Settings `crop_registry_domain` (with required `crop_registry_form_register_id`). There is no Crop Sown ingest API.
 
 The envelope sender is `OAN_REGISTRY_API_TEST`. It has no `instance_id`. An empty filter is `{}`. Page size is 100.
 
@@ -120,7 +120,7 @@ sequenceDiagram
   DA-->>Caller: DA success or error response
 ```
 
-Farmer posts to `farmer_registry_url` with sender `DA_SERVICES`. Crop Sown posts to `crop_registry_staff_url` with sender `OAN_REGISTRY_API_TEST`. The staff path is the one in the tables above. Crop Sown and Livestock reject an IAM token that has no roles for their portal client. Farmer does not do that check.
+Farmer posts to `farmer_registry_url` with sender `DA_SERVICES`. Crop Sown posts to Settings `crop_registry_domain` with sender `OAN_REGISTRY_API_TEST`. The staff path is the one in the tables above. Crop Sown and Livestock reject an IAM token that has no roles for their portal client. Farmer does not do that check.
 
 Livestock has no DA route and no staff POST. Its sequence stops when the headers exist:
 
