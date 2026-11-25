@@ -113,7 +113,7 @@ def package_build(env, work):
 				"oan.org/source-subject": env.get("COMMIT_SUBJECT", "")[:200],
 				"oan.org/release-name": "da-services",
 				"oan.org/release-namespace": "da-app",
-				"oan.org/values-overlay": "helm/environments/%s/oan-da-services.yaml" % deploy_env(env),
+				"oan.org/values-overlay": "helm/environments/%s/%s.yaml" % (deploy_env(env), CHART),
 			},
 		),
 		encoding="utf-8",
@@ -141,7 +141,7 @@ def gateway_package_build(env, work):
 				"oan.org/source-subject": env.get("COMMIT_SUBJECT", "")[:200],
 				"oan.org/release-name": "da-services-gateway",
 				"oan.org/release-namespace": "da-app",
-				"oan.org/values-overlay": "helm/environments/%s/oan-da-services-gateway.yaml" % deploy_env(env),
+				"oan.org/values-overlay": "helm/environments/%s/%s.yaml" % (deploy_env(env), GATEWAY_CHART),
 			},
 		),
 		encoding="utf-8",
@@ -158,7 +158,9 @@ def deploy_env(env):
 
 
 def retag(promote, repository, source_tag, tag):
-	"""Add `tag` to the ECR image that has `source_tag`. The manifest is the same, so the image cannot change."""
+	"""Add `tag` to the ECR image that has `source_tag`.
+
+	The manifest is the same, so the image cannot change."""
 	found = promote.ECR.match(repository)
 	if found is None:
 		raise ValueError("%s is not an ECR repository" % repository)
@@ -191,7 +193,9 @@ def retag(promote, repository, source_tag, tag):
 def promote_build(env, work):
 	"""staging: the develop chart built from this very source tree, its image also tagged with the staging version.
 
-	Nothing is rebuilt: staging only runs what develop built. Needs the aws CLI with ECR access; DRY_RUN=1 tags nothing."""
+	Nothing is rebuilt: staging only runs what develop built.
+	Needs the aws CLI with ECR access; DRY_RUN=1 tags nothing.
+	"""
 	load_generic(work)  # puts oan-helm's scripts/ci on sys.path
 	import package_chart as generic
 	import promote_chart as promote  # oan-helm's, fetched above
