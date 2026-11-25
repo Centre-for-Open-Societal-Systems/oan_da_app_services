@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# deploy-gateway.sh - Install or upgrade the DA services APISIX routes (chart apisix/k8s) on the oan_dev k3s node
+# deploy-gateway.sh - Install or upgrade the DA services APISIX routes (chart apisix/k8s) on the oan_dev k3s node,
+# or on the QA cluster with GATEWAY_VALUES=helm/environments/staging/oan-da-services-gateway.yaml (staging)
 # Same as oan_a2c's ci/deploy-gateway.sh.
 #
 # The routes are generated from the declared endpoints (apisix/generate_apisix_config.py) and committed, so

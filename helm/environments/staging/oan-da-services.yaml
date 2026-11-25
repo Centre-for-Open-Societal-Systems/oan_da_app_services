@@ -1,0 +1,64 @@
+# Values for the oan-da-services chart (helm/oan-da-services).
+# Target: the QA RKE2 node (qa.oanstaging.com), the staging environment, installed by the Jenkins stage
+# "staging → QA cluster (helm)" (ci/deploy-helm-dev.sh with DEPLOY_ENV=staging). Release `da-services`, namespace `da-app`.
+#
+# Set at install, not here:
+# - frappe.image.tag: the Jenkins tag `<__version__>-staging.<build>`: the develop image of the same source tree,
+#   tagged for staging by `ci/package_chart.py promote`. Nothing is rebuilt.
+
+global:
+  baseDomain: qa.oanstaging.com
+
+frappe:
+  image:
+    # Jenkinsfile ECR_REPO. No imagePullSecrets on QA: the node pulls from ECR with its IAM role
+    # (kubelet ecr-credential-provider).
+    repository: 379220350808.dkr.ecr.ap-south-1.amazonaws.com/eoan/oan-da-services/da-services
+
+  # The shared PostgreSQL of the oan-frappe-common release (namespace frappe-common).
+  dbHost: oan-frappe-common-db-postgresql-subchart.frappe-common.svc.cluster.local
+  dbRootUser: postgres
+
+  # QA is one shared node: at most two of each Pod (the chart defaults allow three).
+  nginx:
+    autoscaling:
+      maxReplicas: 2
+    environment:
+      # The desk host (oan-da-services-gateway.yaml desk.host) is not the site name, so nginx names the site itself.
+      frappeSiteNameHeader: da-services.qa.oanstaging.com
+      # APISIX reaches nginx from the RKE2 pod network: trust its X-Forwarded-For for the client address.
+      upstreamRealIPAddress: 10.42.0.0/16
+
+  worker:
+    gunicorn:
+      autoscaling:
+        maxReplicas: 2
+    default:
+      autoscaling:
+        maxReplicas: 2
+    short:
+      autoscaling:
+        maxReplicas: 2
+    long:
+      autoscaling:
+        maxReplicas: 2
+
+  socketio:
+    autoscaling:
+      maxReplicas: 2
+
+  persistence:
+    worker:
+      # ReadWriteMany from the NFS server.
+      storageClass: nfs-csi
+
+  siteConfig:
+    values:
+      host_name: https://da-services.qa.oanstaging.com
+
+  jobs:
+    configure:
+      # nfs-csi creates each volume directory with mode 0777, so the Frappe user can write it.
+      fixVolume: false
+    createSite:
+      siteName: da-services.qa.oanstaging.com
