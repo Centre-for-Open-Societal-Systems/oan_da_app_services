@@ -23,6 +23,7 @@ from da_services.integrations.da_registry.client import (
 from da_services.integrations.da_registry.http import DEFAULT_REGISTER_ID, HttpDARegistryClient
 from da_services.integrations.da_registry.schemas import ProfileUpdate
 from da_services.services import constants as C
+from da_services.tests.fixtures import da_registry_settings
 
 BASE = "https://staff-da.example"
 MASTER_DATA = "https://master-data.example"
@@ -912,58 +913,50 @@ class TestUserTokenPassthrough(IntegrationTestCase):
 		keys = {
 			"da_registry_backend": "http",
 			"da_registry_auth": "user",
-			"da_registry_base_url": BASE,
 			"da_registry_keycloak": {},
 		}
-		with patch.dict(frappe.conf, keys):
+		with patch.dict(frappe.conf, keys), da_registry_settings(BASE, DEFAULT_REGISTER_ID):
 			from da_services.integrations.da_registry.client import get_client
 
 			self.assertEqual(get_client().auth_mode, "user")
 
-	def test_domain_and_register_id_come_from_da_services_settings(self):
-		"""DA Services Settings names the registry; site_config.json is read only while the
-		settings are empty."""
-		settings = frappe.get_single("DA Services Settings")
-		saved = (
-			settings.da_registry_domain,
-			settings.da_registry_form_register_id,
-			settings.da_registry_tab_id,
-		)
-
-		def configure(domain, register_id, tab_id=None):
-			doc = frappe.get_single("DA Services Settings")
-			doc.da_registry_domain = domain
-			doc.da_registry_form_register_id = register_id
-			doc.da_registry_tab_id = tab_id
-			doc.save(ignore_permissions=True)
-
+	def test_the_registry_is_named_in_da_services_settings_only(self):
+		"""Host, register id and tab id come from DA Services Settings. site_config.json is
+		not read for them, so a site that has not filled them in is told to."""
 		keys = {
 			"da_registry_backend": "http",
 			"da_registry_auth": "user",
-			"da_registry_base_url": BASE,
+			"da_registry_base_url": "https://from-site-config.example",
 			"da_registry_register_id": "register-from-site-config",
 			"da_registry_keycloak": {},
 		}
-		try:
-			with patch.dict(frappe.conf, keys):
-				configure("registry.settings.example/", "register-from-settings", "tab-from-settings")
+		with patch.dict(frappe.conf, keys):
+			with da_registry_settings(
+				"registry.settings.example/", "register-from-settings", "tab-from-settings"
+			):
 				client = HttpDARegistryClient.from_conf()
 				self.assertEqual(client.base_url, "https://registry.settings.example")
 				self.assertEqual(client.register_id, "register-from-settings")
 				self.assertEqual(client.tab_id, "tab-from-settings")
 
-				configure("http://registry.settings.example", None)
+			with da_registry_settings("http://registry.settings.example", "register-from-settings"):
 				client = HttpDARegistryClient.from_conf()
 				self.assertEqual(client.base_url, "http://registry.settings.example")
-				self.assertEqual(client.register_id, "register-from-site-config")
-
-				configure(None, None)
-				client = HttpDARegistryClient.from_conf()
-				self.assertEqual(client.base_url, BASE)
-				self.assertEqual(client.register_id, "register-from-site-config")
 				self.assertEqual(client.tab_id, "da_details_tab")  # an empty setting: the default tab
-		finally:
-			configure(*saved)
+
+			with da_registry_settings(None, None), self.assertRaises(DARegistryError) as ctx:
+				HttpDARegistryClient.from_conf()
+			self.assertIn("DA Registry Domain", str(ctx.exception))
+			self.assertIn("DA Registry Form Register ID", str(ctx.exception))
+			self.assertNotIn("site_config", str(ctx.exception))
+
+			with (
+				da_registry_settings("registry.settings.example", None),
+				self.assertRaises(DARegistryError) as ctx,
+			):
+				HttpDARegistryClient.from_conf()
+			self.assertNotIn("DA Registry Domain", str(ctx.exception))
+			self.assertIn("DA Registry Form Register ID", str(ctx.exception))
 
 
 def _jwt_claims_iss(token):

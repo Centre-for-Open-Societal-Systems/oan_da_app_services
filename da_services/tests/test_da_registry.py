@@ -16,6 +16,7 @@ from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.integrations.da_registry.schemas import LifecycleOutcome
 from da_services.services import constants as C
 from da_services.services.da_lookup import get_da_reference
+from da_services.tests.fixtures import da_registry_settings
 
 SUPERVISOR = "test-supervisor2@da.local"
 
@@ -81,21 +82,24 @@ class TestClientFactory(IntegrationTestCase):
 		self.assertIs(get_client(), get_client())  # shared instance
 
 	def test_http_backend_needs_url_and_service_account(self):
-		keys = ("da_registry_backend", "da_registry_auth", "da_registry_base_url", "da_registry_keycloak")
+		keys = ("da_registry_backend", "da_registry_auth", "da_registry_keycloak")
 		saved = {k: frappe.conf.get(k) for k in keys}
 		try:
 			frappe.conf.da_registry_backend = "http"
 			frappe.conf.da_registry_auth = "service"
-			frappe.conf.da_registry_base_url = "https://registry.example"
-			frappe.conf.da_registry_keycloak = {}
-			with self.assertRaises(DARegistryError):
-				get_client()
 			frappe.conf.da_registry_keycloak = {
 				"token_url": "https://kc/t",
 				"client_id": "c",
 				"client_secret": "s",
 			}
-			self.assertIsInstance(get_client(), HttpDARegistryClient)
+			# the registry's host and register id are DA Services Settings
+			with da_registry_settings(None, None), self.assertRaises(DARegistryError):
+				get_client()
+			with da_registry_settings("https://registry.example", "register-1"):
+				self.assertIsInstance(get_client(), HttpDARegistryClient)
+				frappe.conf.da_registry_keycloak = {}
+				with self.assertRaises(DARegistryError):
+					get_client()
 		finally:
 			for k, v in saved.items():
 				frappe.conf[k] = v

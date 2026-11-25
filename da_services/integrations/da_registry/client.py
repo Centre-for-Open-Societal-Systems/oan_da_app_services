@@ -15,14 +15,12 @@ Select the backend per site in ``site_config.json`` (full example in
 
     "da_registry_backend": "mock" | "http",
     "da_registry_auth": "user" | "service",
-    "da_registry_base_url": "https://staff-da-registry...",
     "da_registry_timeout_seconds": 10,
     "da_registry_keycloak": {"token_url": "...", "client_id": "...", "client_secret": "..."}
 
-The registry's host, the DA register id and the tab id come from DA Services Settings ("DA
-Registry Domain", "DA Registry Form Register ID", "DA Registry Tab ID");
-``da_registry_base_url`` and ``da_registry_register_id`` above are read only while the first
-two settings are empty, and an empty tab id means ``da_details_tab``.
+The registry's host, the DA register id and the tab id are not in site_config.json: they
+come from DA Services Settings ("DA Registry Domain", "DA Registry Form Register ID", "DA
+Registry Tab ID"). The first two are required; an empty tab id means ``da_details_tab``.
 """
 
 from __future__ import annotations

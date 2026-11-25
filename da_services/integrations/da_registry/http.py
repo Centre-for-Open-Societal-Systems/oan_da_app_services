@@ -181,15 +181,19 @@ class HttpDARegistryClient(DARegistryClient):
 		scheduled job or a bench command has no signed-in user and needs the service identity."""
 		conf = frappe.conf
 		# Where the registry is, which register holds the DAs and which of its tabs holds a
-		# DA's record: DA Services Settings ("DA Registry Domain", "DA Registry Form Register
-		# ID", "DA Registry Tab ID"). site_config.json is read only while a site has not
-		# filled the first two in yet; an empty tab id means DA_TAB.
-		domain, settings_register_id, settings_tab_id = _registry_settings()
-		base_url = domain or str(conf.get("da_registry_base_url") or "")
-		if not base_url.startswith(("http://", "https://")):
-			raise DARegistryError(
-				f"{SETTINGS_DOCTYPE}: set DA Registry Domain (or da_registry_base_url in site_config.json)"
+		# DA's record: DA Services Settings only ("DA Registry Domain", "DA Registry Form
+		# Register ID", "DA Registry Tab ID"). An empty tab id means DA_TAB.
+		base_url, register_id, tab_id = _registry_settings()
+		missing = [
+			label
+			for label, value in (
+				("DA Registry Domain", base_url),
+				("DA Registry Form Register ID", register_id),
 			)
+			if not value
+		]
+		if missing:
+			raise DARegistryError(f"{SETTINGS_DOCTYPE}: set {', '.join(missing)}")
 		auth_mode = str(auth_mode or conf.get("da_registry_auth") or "service").lower()
 		if auth_mode not in ("user", "service"):
 			raise DARegistryError(f"Unknown da_registry_auth: {auth_mode!r}")
@@ -207,8 +211,8 @@ class HttpDARegistryClient(DARegistryClient):
 		return cls(
 			base_url,
 			keycloak=keycloak,
-			register_id=settings_register_id or conf.get("da_registry_register_id") or DEFAULT_REGISTER_ID,
-			tab_id=settings_tab_id or DA_TAB,
+			register_id=register_id,
+			tab_id=tab_id or DA_TAB,
 			intake_form_id=conf.get("da_registry_intake_form_id") or DEFAULT_INTAKE_FORM_ID,
 			import_data_model_id=conf.get("da_registry_import_data_model_id") or DEFAULT_IMPORT_DATA_MODEL_ID,
 			timeout=float(conf.get("da_registry_timeout_seconds") or 10),
@@ -230,7 +234,7 @@ class HttpDARegistryClient(DARegistryClient):
 
 	def get_da_by_record_id(self, record_id: str) -> DAReference:
 		"""Read live by the registry's own record id: one call, no search by DA-ID first."""
-		record = self._da_record(record_id, record_id)
+		record = self._da_record(record_id)
 		self._cache_record(record_id, record)
 		return registry_record_to_da_reference(record, self._labels())
 
@@ -414,7 +418,10 @@ class HttpDARegistryClient(DARegistryClient):
 				return
 			page += 1
 
-	def _da_record(self, internal_id: str, da_id: str | None) -> dict:
+	def _da_record(self, internal_id: str, da_id: str | None = None) -> dict:
+		"""The DA's record with its education records and family members, by the registry's
+		record id. ``da_id`` is the DA-ID the caller looked the record up by, when there was
+		one: it is what a "not found" names."""
 		body = self._post(
 			"/register-data/get_tab_records",
 			{
@@ -423,7 +430,7 @@ class HttpDARegistryClient(DARegistryClient):
 				"tab_id": self.tab_id,
 			},
 			action="read DA record",
-			not_found=da_id,
+			not_found=da_id or internal_id,
 		)
 		# The tab answers the DA register's section with the DA's own row, and the list
 		# sections (DA Registry #66) with rows of their own registers linked to the DA.
