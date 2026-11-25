@@ -1,6 +1,8 @@
 """v1: Farmer profile and listing APIs (DA-40, DA-39).
 
 GET /api/v1/da-services/farmers                (Farmer Registry search_in_a_register)
+GET /api/v1/da-services/farmers/{internal_id}/details        (Farmer Registry get_subject_record)
+GET /api/v1/da-services/farmers/{internal_id}/land_details   (Farmer Registry get_tab_records, Lands tab)
 GET /api/v1/da-services/farmers/{id}/profile
 GET /api/v1/da-services/farmers/{id}/visits
 GET /api/v1/da-services/farmers/{id}/advisory       (questions and answers of Advisory visits)
@@ -91,13 +93,80 @@ def list_farmers(**kwargs):
 			current_page=current_page, page_size=page_size, filter_by=filter_by, search_text=search_text
 		)
 	except da_farmer_registry.FarmerRegistryError as exc:
-		status, code = _SEARCH_ERRORS.get(exc.kind, _SEARCH_ERRORS["rejected"])
-		# The message can name internal hosts; log it, return a stable one.
-		frappe.log_error(title="Farmer Registry search failed", message=f"{exc.kind}: {exc}")
-		frappe.response["http_status_code"] = status
-		return error_response(str(_(_SEARCH_MESSAGES.get(exc.kind, _SEARCH_MESSAGES["rejected"]))), code)
+		return _registry_failure(exc, "Farmer Registry search failed")
 
 	return success_response(data=payload, meta=pagination)
+
+
+@route(
+	"/farmers/<internal_id>/details",
+	methods=("GET",),
+	summary="Get a farmer's record from the Farmer Registry",
+)
+@frappe.whitelist()
+@handle_api_errors
+def get_farmer_details(internal_id: str):
+	"""A farmer's record, straight from the Farmer Registry (``get_subject_record``).
+
+	``internal_id`` is the farmer's ``internal_record_id`` (the id GET /farmers returns with
+	each row). The registry, the register and the forwarded tokens are those of GET /farmers.
+
+	Returns the registry's ``response_payload`` as ``data``, with the registry's own keys.
+	404 when the registry has no such record.
+	"""
+	internal_id = _internal_id(internal_id)
+	token, csrf = _forwarded_credentials()
+	try:
+		payload = da_farmer_registry.client_from_settings(token, csrf).get_subject_record(internal_id)
+	except da_farmer_registry.FarmerRegistryError as exc:
+		return _registry_failure(exc, "Farmer Registry get_subject_record failed")
+	if not payload:
+		frappe.throw(_("Farmer {0} not found.").format(internal_id), frappe.DoesNotExistError)
+	return success_response(data=payload)
+
+
+@route(
+	"/farmers/<internal_id>/land_details",
+	methods=("GET",),
+	summary="Get a farmer's land records from the Farmer Registry",
+)
+@frappe.whitelist()
+@handle_api_errors
+def get_farmer_land_details(internal_id: str):
+	"""A farmer's land records, straight from the Farmer Registry (``get_tab_records`` of
+	the Lands tab).
+
+	``internal_id`` is the farmer's ``internal_record_id``. The registry, the register and
+	the forwarded tokens are those of GET /farmers.
+
+	Returns the registry's ``response_payload`` as ``data`` and its ``pagination_response``
+	as ``meta``, both with the registry's own keys. A farmer with no land has no records.
+	"""
+	internal_id = _internal_id(internal_id)
+	token, csrf = _forwarded_credentials()
+	try:
+		payload, pagination = da_farmer_registry.client_from_settings(token, csrf).get_tab_records(
+			internal_id, da_farmer_registry.LAND_TAB_ID
+		)
+	except da_farmer_registry.FarmerRegistryError as exc:
+		return _registry_failure(exc, "Farmer Registry get_tab_records failed")
+	return success_response(data=payload or [], meta=pagination)
+
+
+def _internal_id(internal_id: str) -> str:
+	internal_id = (internal_id or "").strip()
+	if not internal_id:
+		frappe.throw(_("internal_id is required."), frappe.ValidationError)
+	return internal_id
+
+
+def _registry_failure(exc: da_farmer_registry.FarmerRegistryError, title: str):
+	"""The error answer for a failed registry call: a stable message and status per kind."""
+	status, code = _SEARCH_ERRORS.get(exc.kind, _SEARCH_ERRORS["rejected"])
+	# The message can name internal hosts; log it, return a stable one.
+	frappe.log_error(title=title, message=f"{exc.kind}: {exc}")
+	frappe.response["http_status_code"] = status
+	return error_response(str(_(_SEARCH_MESSAGES.get(exc.kind, _SEARCH_MESSAGES["rejected"]))), code)
 
 
 # kind -> (HTTP status, error code)

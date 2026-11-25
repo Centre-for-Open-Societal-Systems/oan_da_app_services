@@ -1,4 +1,6 @@
-"""GET /farmers: the Farmer Registry ``search_in_a_register``, with the caller's own tokens."""
+"""GET /farmers, /farmers/{internal_id}/details and /farmers/{internal_id}/land_details: the
+Farmer Registry ``search_in_a_register``, ``get_subject_record`` and ``get_tab_records``,
+with the caller's own tokens."""
 
 from unittest.mock import MagicMock, patch
 
@@ -6,7 +8,7 @@ import frappe
 import requests
 from frappe.tests import IntegrationTestCase
 
-from da_services.api.v1.farmers import list_farmers
+from da_services.api.v1.farmers import get_farmer_details, get_farmer_land_details, list_farmers
 from da_services.integrations.da_farmer_registry import FarmerRegistryClient, FarmerRegistryError
 from da_services.integrations.da_farmer_registry.client import base_url_from_domain
 
@@ -14,6 +16,20 @@ POST = "da_services.integrations.da_farmer_registry.client.requests.post"
 HEADERS = {"Authorization": "Bearer tok-1", "X-CSRF-Token": "csrf-1"}
 PAYLOAD = [{"farmer_id": "F-1", "first_name": "test"}]
 PAGINATION = {"current_page": 1, "page_size": 100, "number_of_items": 1, "number_of_pages": 1}
+INTERNAL_ID = "9a2ddcb2-1d06-451c-9c09-5151f8107b14"
+BY_ID = {"current_page": 1, "page_size": 100, "search_text": "", "sort_by": "", "filter_by": ""}
+RECORD = {"internal_record_id": INTERNAL_ID, "region_name": "Tigray", "kebele_name": "Lekatit"}
+LAND = [{"land_id": "L-1", "area_in_hectare": "2.00", "current_land_use": "AGRICULTURAL"}]
+
+
+def _success(payload, pagination=None):
+	return _answer(
+		200,
+		{
+			"response_header": {"response_status": "SUCCESS"},
+			"response_body": {"response_payload": payload, "pagination_response": pagination},
+		},
+	)
 
 
 def _answer(status=200, body=None):
@@ -88,6 +104,41 @@ class TestDAFarmerRegistryClient(IntegrationTestCase):
 			},
 		)
 		self.assertEqual(kw["json"]["request_header"]["sender_app_mnemonic"], "OAN_REGISTRY_API_TEST")
+
+	def test_get_subject_record(self):
+		with patch(POST, return_value=_success(RECORD)) as post:
+			record = self._client().get_subject_record(INTERNAL_ID)
+		self.assertEqual(record, RECORD)
+		self.assertEqual(
+			post.call_args.args[0], "https://farmer.example.org/register-data/get_subject_record"
+		)
+		kw = post.call_args.kwargs
+		self.assertEqual(kw["headers"]["Authorization"], "Bearer tok-1")
+		self.assertEqual(kw["cookies"], {"X-CSRF-Token": "csrf-1"})
+		body = kw["json"]["request_body"]
+		self.assertEqual(
+			body["request_payload"], {"subject_register_id": "REG-1", "subject_record_id": INTERNAL_ID}
+		)
+		self.assertEqual(body["pagination_request"], BY_ID)
+
+	def test_get_subject_record_display_fields_become_keys(self):
+		record = {"internal_record_id": INTERNAL_ID, "display_fields": [{"field_name": "a", "value": 1}]}
+		with patch(POST, return_value=_success(record)):
+			self.assertEqual(
+				self._client().get_subject_record(INTERNAL_ID), {"internal_record_id": INTERNAL_ID, "a": 1}
+			)
+
+	def test_get_tab_records(self):
+		with patch(POST, return_value=_success(LAND, PAGINATION)) as post:
+			payload, pagination = self._client().get_tab_records(INTERNAL_ID, "farmer_land_tab")
+		self.assertEqual((payload, pagination), (LAND, PAGINATION))
+		self.assertEqual(post.call_args.args[0], "https://farmer.example.org/register-data/get_tab_records")
+		body = post.call_args.kwargs["json"]["request_body"]
+		self.assertEqual(
+			body["request_payload"],
+			{"subject_register_id": "REG-1", "subject_record_id": INTERNAL_ID, "tab_id": "farmer_land_tab"},
+		)
+		self.assertEqual(body["pagination_request"], BY_ID)
 
 	def test_failures_have_a_kind(self):
 		cases = [
@@ -210,3 +261,84 @@ class TestListFarmersEndpoint(IntegrationTestCase):
 			with patch(POST, return_value=response):
 				result = list_farmers()
 			self.assertEqual((frappe.response.get("http_status_code"), result["code"]), (status, code))
+
+
+class TestFarmerDetailsEndpoints(IntegrationTestCase):
+	"""GET /farmers/{internal_id}/details and /farmers/{internal_id}/land_details."""
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		self.settings = frappe.get_single("DA Services Settings")
+		self.saved = (self.settings.farmer_registry_domain, self.settings.farmer_registry_form_register_id)
+		frappe.db.set_single_value("DA Services Settings", "farmer_registry_domain", "farmer.example.org")
+		frappe.db.set_single_value("DA Services Settings", "farmer_registry_form_register_id", "REG-1")
+		self.headers = patch("frappe.get_request_header", side_effect=lambda k, d=None: HEADERS.get(k, d))
+		self.headers.start()
+		frappe.response.pop("http_status_code", None)
+
+	def tearDown(self):
+		self.headers.stop()
+		frappe.db.set_single_value("DA Services Settings", "farmer_registry_domain", self.saved[0])
+		frappe.db.set_single_value("DA Services Settings", "farmer_registry_form_register_id", self.saved[1])
+		frappe.response.pop("http_status_code", None)
+
+	def test_details_returns_the_registry_record(self):
+		with patch(POST, return_value=_success(RECORD)) as post:
+			result = get_farmer_details(INTERNAL_ID)
+		self.assertEqual(result["status"], "success", result)
+		self.assertEqual(result["data"], RECORD)
+		self.assertEqual(
+			post.call_args.args[0], "https://farmer.example.org/register-data/get_subject_record"
+		)
+		self.assertEqual(
+			post.call_args.kwargs["json"]["request_body"]["request_payload"],
+			{"subject_register_id": "REG-1", "subject_record_id": INTERNAL_ID},
+		)
+		self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer tok-1")
+
+	def test_details_does_not_cache_the_farmer(self):
+		with patch(POST, return_value=_success(RECORD)):
+			get_farmer_details(INTERNAL_ID)
+		self.assertFalse(frappe.db.exists("DA Farmer Reference", INTERNAL_ID))
+
+	def test_details_of_an_unknown_farmer_is_an_error(self):
+		with patch(POST, return_value=_success(None)):
+			result = get_farmer_details(INTERNAL_ID)
+		self.assertEqual(result["status"], "error")
+		self.assertIn(INTERNAL_ID, result["message"])
+
+	def test_land_details_returns_the_lands_tab(self):
+		with patch(POST, return_value=_success(LAND, PAGINATION)) as post:
+			result = get_farmer_land_details(INTERNAL_ID)
+		self.assertEqual(result["status"], "success", result)
+		self.assertEqual(result["data"], LAND)
+		self.assertEqual({k: result["meta"][k] for k in PAGINATION}, PAGINATION)
+		self.assertEqual(post.call_args.args[0], "https://farmer.example.org/register-data/get_tab_records")
+		self.assertEqual(
+			post.call_args.kwargs["json"]["request_body"]["request_payload"],
+			{"subject_register_id": "REG-1", "subject_record_id": INTERNAL_ID, "tab_id": "farmer_land_tab"},
+		)
+
+	def test_land_details_of_a_farmer_without_land_is_empty(self):
+		with patch(POST, return_value=_success(None)):
+			result = get_farmer_land_details(INTERNAL_ID)
+		self.assertEqual((result["status"], result["data"]), ("success", []))
+
+	def test_not_configured(self):
+		frappe.db.set_single_value("DA Services Settings", "farmer_registry_form_register_id", "")
+		for endpoint in (get_farmer_details, get_farmer_land_details):
+			with patch(POST) as post:
+				result = endpoint(INTERNAL_ID)
+			self.assertEqual(result["code"], "FARMER_REGISTRY_NOT_CONFIGURED")
+			post.assert_not_called()
+
+	def test_registry_errors_map_to_status(self):
+		for endpoint in (get_farmer_details, get_farmer_land_details):
+			for response, status, code in (
+				(_answer(401), 401, "AUTHENTICATION_ERROR"),
+				(_answer(500), 503, "SERVICE_UNAVAILABLE"),
+				(_answer(200, {"response_header": {"response_status": "FAILURE"}}), 502, "BAD_GATEWAY"),
+			):
+				with patch(POST, return_value=response):
+					result = endpoint(INTERNAL_ID)
+				self.assertEqual((frappe.response.get("http_status_code"), result["code"]), (status, code))

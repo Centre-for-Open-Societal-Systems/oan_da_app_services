@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-farmers",
     "name": "OAN DA Farmers",
-    "description": "DA Services farmer routes for the My Farmers list, search, profile, holdings, photo, registration and update. Data comes live from the Farmer Registry; the frontend calls only DA Services. Run SSO login first (see 0. Sign in). List farmers stores farmer_id. Saved responses are shortened live responses from the dev registry, 31 Oct - 1 Nov 2026. Guide: docs/farmer-frontend-integration.md.",
+    "description": "DA Services farmer routes for the My Farmers list, search, profile, holdings, photo, registration and update. Data comes live from the Farmer Registry; the frontend calls only DA Services. Run SSO login first (see 0. Sign in). List farmers stores farmer_id and internal_id. List farmers, Farmer details (registry) and Farmer land details (registry) read the Farmer Registry directly with the caller's token; their saved responses are shortened live responses from the dev registry, 25 Nov 2026. The other saved responses are from 31 Oct - 1 Nov 2026. Guide: docs/farmer-frontend-integration.md.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -59,6 +59,10 @@
     {
       "key": "farmer_id",
       "value": "FR-675618129549"
+    },
+    {
+      "key": "internal_id",
+      "value": "38ef1bcb-a359-45b4-b813-dd0d2b05c864"
     },
     {
       "key": "region_id",
@@ -428,7 +432,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/farmers?search_text=FR-&page=1&page_size=50",
+              "raw": "{{base_url}}/api/v1/da-services/farmers?search_text=&current_page=1&page_size=10",
               "host": [
                 "{{base_url}}"
               ],
@@ -441,22 +445,22 @@
               "query": [
                 {
                   "key": "search_text",
-                  "value": "FR-",
-                  "description": "FR- = every farmer; or a name, Farmer-ID or phone"
+                  "value": "",
+                  "description": "empty = every farmer; or a name, Farmer-ID or phone"
                 },
                 {
-                  "key": "page",
+                  "key": "current_page",
                   "value": "1",
                   "description": "1-based"
                 },
                 {
                   "key": "page_size",
-                  "value": "50",
-                  "description": "default 50, max 500"
+                  "value": "10",
+                  "description": "default 100, max 1000"
                 }
               ]
             },
-            "description": "One endpoint for the table and the search box. search_text=FR- returns every approved farmer in the caller's scope (Admin: all; DA: assigned kebeles; Supervisor: woreda). Each row carries phone, land in hectares, plot count and photo. The first call after a while takes about 20 s, later calls under 1 s for 10 minutes. Stores farmer_id from the first row."
+            "description": "One page of the Farmer Registry register (search_in_a_register), with the caller's own token. filter_by is optional; its region / zone / woreda / kebele keys are filled from the caller's User Permissions, so a DA gets the farmers of their Kebele and a Supervisor those of their Woreda. data is the registry's rows with their own keys and meta its paging. Stores farmer_id (Farmer-ID) and internal_id (internal_record_id) from the first row."
           },
           "event": [
             {
@@ -465,13 +469,16 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"List farmers (My Farmers) returns 200\", function () { pm.response.to.have.status(200); });",
-                  "const rows = (((pm.response.json() || {}).data || {}).farmers) || [];",
+                  "const rows = (pm.response.json() || {}).data || [];",
                   "function save(key, value) {",
                   "    if (!value) return;",
                   "    pm.collectionVariables.set(key, value);",
                   "    if (pm.environment.name) pm.environment.set(key, value);",
                   "}",
-                  "if (rows.length) save(\"farmer_id\", rows[0].reg_id || rows[0].farmer_id);"
+                  "if (rows.length) {",
+                  "    save(\"farmer_id\", rows[0].functional_record_id || rows[0].internal_record_id);",
+                  "    save(\"internal_id\", rows[0].internal_record_id);",
+                  "}"
                 ]
               }
             }
@@ -488,7 +495,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{base_url}}/api/v1/da-services/farmers?search_text=FR-&page=1&page_size=50",
+                  "raw": "{{base_url}}/api/v1/da-services/farmers?search_text=&current_page=1&page_size=10",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -501,18 +508,18 @@
                   "query": [
                     {
                       "key": "search_text",
-                      "value": "FR-",
-                      "description": "FR- = every farmer; or a name, Farmer-ID or phone"
+                      "value": "",
+                      "description": "empty = every farmer; or a name, Farmer-ID or phone"
                     },
                     {
-                      "key": "page",
+                      "key": "current_page",
                       "value": "1",
                       "description": "1-based"
                     },
                     {
                       "key": "page_size",
-                      "value": "50",
-                      "description": "default 50, max 500"
+                      "value": "10",
+                      "description": "default 100, max 1000"
                     }
                   ]
                 }
@@ -526,7 +533,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmers\": [\n      {\n        \"farmer_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n        \"reg_id\": \"FR-675618129549\",\n        \"farmer_name\": \"Aster Mulugeta Assefa\",\n        \"phone\": \"+251964815374\",\n        \"kebele\": \"Lekatit\",\n        \"woreda\": \"Shire Endaslasie town\",\n        \"region\": \"Tigray\",\n        \"total_land_hectares\": 4.25,\n        \"total_plots\": 2,\n        \"photo_url\": \"https://minio-farmer.development.oanstaging.com/documents/...signed-link...\",\n        \"registration_state\": \"APPROVED\",\n        \"registered_at\": \"2026-10-30 14:16:40.292811\"\n      }\n    ],\n    \"total\": 25,\n    \"page\": {\n      \"page\": 1,\n      \"page_size\": 50,\n      \"number_of_pages\": 1,\n      \"filtered_client_side\": false\n    },\n    \"source\": \"registry\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": [\n    {\n      \"internal_record_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n      \"functional_record_id\": \"FR-675618129549\",\n      \"record_name\": \"Aster Mulugeta Assefa\",\n      \"first_name\": \"Aster\",\n      \"middle_name\": \"Mulugeta\",\n      \"last_name\": \"Assefa\",\n      \"gender\": \"FEMALE\",\n      \"birth_date\": \"1969-03-20\",\n      \"marital_status\": \"MARRIED\",\n      \"education_level\": \"PRIMARY\",\n      \"primary_phone_number\": \"+251964815374\",\n      \"region_name\": \"Tigray\",\n      \"zone_name\": \"North Western\",\n      \"woreda_name\": \"Shire Endaslasie town\",\n      \"kebele_name\": \"Lekatit\",\n      \"total_land_area\": \"4.25\",\n      \"total_plots\": \"2\",\n      \"record_image_url\": \"https://garage.development.oanstaging.com/documents/...signed-link...\",\n      \"created_at\": \"2026-10-28T14:20:45.896750\",\n      \"created_by\": \"Alex Carter\",\n      \"last_approved_at\": \"2026-11-12T15:48:07.346262\",\n      \"last_approved_by\": \"Nina Patel\"\n    }\n  ],\n  \"meta\": {\n    \"api_version\": \"v1\",\n    \"current_page\": 1,\n    \"page_size\": 10,\n    \"number_of_items\": 37,\n    \"number_of_pages\": 4\n  }\n}"
             }
           ]
         },
@@ -541,7 +548,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/farmers?search_text={{farmer_id}}&page=1&page_size=1",
+              "raw": "{{base_url}}/api/v1/da-services/farmers?search_text={{farmer_id}}&current_page=1&page_size=1",
               "host": [
                 "{{base_url}}"
               ],
@@ -558,7 +565,7 @@
                   "description": ""
                 },
                 {
-                  "key": "page",
+                  "key": "current_page",
                   "value": "1",
                   "description": ""
                 },
@@ -594,7 +601,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{base_url}}/api/v1/da-services/farmers?search_text={{farmer_id}}&page=1&page_size=1",
+                  "raw": "{{base_url}}/api/v1/da-services/farmers?search_text={{farmer_id}}&current_page=1&page_size=1",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -611,7 +618,7 @@
                       "description": ""
                     },
                     {
-                      "key": "page",
+                      "key": "current_page",
                       "value": "1",
                       "description": ""
                     },
@@ -632,7 +639,159 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmers\": [\n      {\n        \"farmer_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n        \"reg_id\": \"FR-675618129549\",\n        \"farmer_name\": \"Aster Mulugeta Assefa\",\n        \"phone\": \"+251964815374\",\n        \"kebele\": \"Lekatit\",\n        \"woreda\": \"Shire Endaslasie town\",\n        \"region\": \"Tigray\",\n        \"total_land_hectares\": 4.25,\n        \"total_plots\": 2,\n        \"photo_url\": \"https://minio-farmer.development.oanstaging.com/documents/...signed-link...\",\n        \"registration_state\": \"APPROVED\",\n        \"registered_at\": \"2026-10-30 14:16:40.292811\"\n      }\n    ],\n    \"total\": 1,\n    \"page\": {\n      \"page\": 1,\n      \"page_size\": 1,\n      \"number_of_pages\": 1,\n      \"filtered_client_side\": false\n    },\n    \"source\": \"registry\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": [\n    {\n      \"internal_record_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n      \"functional_record_id\": \"FR-675618129549\",\n      \"record_name\": \"Aster Mulugeta Assefa\",\n      \"first_name\": \"Aster\",\n      \"middle_name\": \"Mulugeta\",\n      \"last_name\": \"Assefa\",\n      \"gender\": \"FEMALE\",\n      \"birth_date\": \"1969-03-20\",\n      \"marital_status\": \"MARRIED\",\n      \"education_level\": \"PRIMARY\",\n      \"primary_phone_number\": \"+251964815374\",\n      \"region_name\": \"Tigray\",\n      \"zone_name\": \"North Western\",\n      \"woreda_name\": \"Shire Endaslasie town\",\n      \"kebele_name\": \"Lekatit\",\n      \"total_land_area\": \"4.25\",\n      \"total_plots\": \"2\",\n      \"record_image_url\": \"https://garage.development.oanstaging.com/documents/...signed-link...\",\n      \"created_at\": \"2026-10-28T14:20:45.896750\",\n      \"created_by\": \"Alex Carter\",\n      \"last_approved_at\": \"2026-11-12T15:48:07.346262\",\n      \"last_approved_by\": \"Nina Patel\"\n    }\n  ],\n  \"meta\": {\n    \"api_version\": \"v1\",\n    \"current_page\": 1,\n    \"page_size\": 1,\n    \"number_of_items\": 1,\n    \"number_of_pages\": 1\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Farmer details (registry)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{internal_id}}/details",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{internal_id}}",
+                "details"
+              ]
+            },
+            "description": "The farmer's record straight from the Farmer Registry (get_subject_record), with the caller's own token. {internal_id} is the internal_record_id of a list row, not the Farmer-ID. data is the registry's record with its own keys (about 100; the saved response is shortened). Places come as names. Nothing is cached in DA Services. 404 when the registry has no such record."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer details (registry) returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Farmer details (registry) success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers/{{internal_id}}/details",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers",
+                    "{{internal_id}}",
+                    "details"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"internal_record_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n    \"functional_record_id\": \"FR-675618129549\",\n    \"record_name\": \"Aster Mulugeta Assefa\",\n    \"record_status\": \"ACTIVE\",\n    \"first_name\": \"Aster\",\n    \"middle_name\": \"Mulugeta\",\n    \"last_name\": \"Assefa\",\n    \"gender\": \"FEMALE\",\n    \"birth_date\": \"1969-03-20\",\n    \"marital_status\": \"MARRIED\",\n    \"education_level\": \"PRIMARY\",\n    \"primary_phone_number\": \"+251964815374\",\n    \"email\": null,\n    \"is_household_head\": true,\n    \"is_psnp_user\": true,\n    \"region_name\": \"Tigray\",\n    \"zone_name\": \"North Western\",\n    \"woreda_name\": \"Shire Endaslasie town\",\n    \"kebele_name\": \"Lekatit\",\n    \"total_land_area\": \"4.25\",\n    \"total_land_owned_area\": \"1.75\",\n    \"total_land_rent_area\": \"2.50\",\n    \"total_land_crop_sharing_area\": \"0.00\",\n    \"land_ownership\": \"HYBRID\",\n    \"total_plots\": 2,\n    \"record_image_url\": \"https://garage.development.oanstaging.com/documents/...signed-link...\",\n    \"registration_date\": \"2026-10-28\",\n    \"created_at\": \"2026-10-28T14:20:45.896750\",\n    \"created_by\": \"Alex Carter\",\n    \"last_approved_at\": \"2026-11-12T15:48:07.346262\",\n    \"last_approved_by\": \"Nina Patel\"\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Farmer land details (registry)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/farmers/{{internal_id}}/land_details",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "farmers",
+                "{{internal_id}}",
+                "land_details"
+              ]
+            },
+            "description": "The farmer's land records straight from the Farmer Registry (get_tab_records of the Lands tab), with the caller's own token. {internal_id} is the internal_record_id of a list row. data is the registry's tab data: the section with is_list false is the farmer's own row, the section with is_list true holds one record per plot (the saved response is shortened). OWNER, SF_HIGH and GRAZING are registry codes; show readable labels. A farmer without land has no plot records."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Farmer land details (registry) returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Farmer land details (registry) success",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/farmers/{{internal_id}}/land_details",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "farmers",
+                    "{{internal_id}}",
+                    "land_details"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": [\n    {\n      \"section_register_id\": \"a1a4d25a-1cd4-4356-abac-985a0b3c6bcd\",\n      \"is_list\": false,\n      \"records\": [\n        {\n          \"internal_record_id\": \"38ef1bcb-a359-45b4-b813-dd0d2b05c864\",\n          \"functional_record_id\": \"FR-675618129549\",\n          \"record_name\": \"Aster Mulugeta Assefa\",\n          \"total_land_area\": \"4.25\",\n          \"total_plots\": 2,\n          \"land_ownership\": \"HYBRID\"\n        }\n      ]\n    },\n    {\n      \"section_register_id\": \"493153d5-07ef-4743-8efd-07f4099772b9\",\n      \"is_list\": true,\n      \"records\": [\n        {\n          \"internal_record_id\": \"0065cd98-b2e3-4a48-9aab-7d547ef6707d\",\n          \"record_status\": \"ACTIVE\",\n          \"area_in_hectare\": \"1.750000\",\n          \"land_size\": \"1.75\",\n          \"unit\": \"HECTARE\",\n          \"land_ownership_type\": \"OWNER\",\n          \"soil_fertility\": \"SF_HIGH\",\n          \"current_land_use\": \"AGRICULTURAL\",\n          \"farming_type\": \"CROP\",\n          \"land_kebele\": null,\n          \"land_id\": null,\n          \"certificate_provided\": false,\n          \"year_of_acquisition\": 2021,\n          \"means_of_acquisition\": \"MOA_INHERITANCE\"\n        },\n        {\n          \"internal_record_id\": \"5069b1b1-24f1-45e2-aff9-7779da28ae57\",\n          \"record_status\": \"ACTIVE\",\n          \"area_in_hectare\": \"2.500000\",\n          \"land_size\": \"2.5\",\n          \"unit\": \"HECTARE\",\n          \"land_ownership_type\": \"TENANT\",\n          \"soil_fertility\": \"SF_MEDIUM\",\n          \"current_land_use\": \"GRAZING\",\n          \"farming_type\": \"LIVESTOCK\",\n          \"land_kebele\": null,\n          \"land_id\": null,\n          \"certificate_provided\": false,\n          \"year_of_acquisition\": 2022,\n          \"means_of_acquisition\": \"MOA_REALLOCATION\"\n        }\n      ]\n    }\n  ],\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
             }
           ]
         },
