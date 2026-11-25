@@ -1,8 +1,9 @@
-"""DA Attendance Punch: create + today-latest with next_action."""
+"""DA Attendance Punch: create + today-latest with next_action + daily list."""
 
 from __future__ import annotations
 
 import frappe
+from frappe.permissions import add_user_permission
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now_datetime, today
 
@@ -11,19 +12,37 @@ from da_services.services import constants as C
 from da_services.tests.fixtures import live_geo, set_da_registry_id
 
 DA_USER = "atp-da@da.local"
+DA2_USER = "atp-da2@da.local"
 SUP_USER = "atp-sup@da.local"
 DA_ID = "DA-ATP-0001"
+DA2_ID = "DA-ATP-0002"
 SUP_DA_ID = "DA-ATP-SUP1"
-ALL_USERS = (DA_USER, SUP_USER)
+ALL_USERS = (DA_USER, DA2_USER, SUP_USER)
 
 
-def _user(email: str, roles: list[str]) -> str:
+def _user(
+	email: str, roles: list[str], *, first_name: str | None = None, last_name: str | None = None
+) -> str:
+	first = first_name or email.split("@")[0]
+	last = last_name or ""
 	if not frappe.db.exists("User", email):
 		u = frappe.new_doc("User")
 		u.email = email
-		u.first_name = email.split("@")[0]
+		u.first_name = first
+		u.last_name = last
 		u.send_welcome_email = 0
 		u.insert(ignore_permissions=True, ignore_links=True)
+	else:
+		frappe.db.set_value(
+			"User",
+			email,
+			{
+				"first_name": first,
+				"last_name": last,
+				"full_name": f"{first} {last}".strip(),
+			},
+			update_modified=False,
+		)
 	u = frappe.get_doc("User", email)
 	for role in roles:
 		if role not in frappe.get_roles(email):
@@ -50,9 +69,11 @@ class TestAttendancePunches(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		self._clean()
-		_user(DA_USER, [C.ROLE_DA])
+		_user(DA_USER, [C.ROLE_DA], first_name="Tadesse", last_name="Alemu")
+		_user(DA2_USER, [C.ROLE_DA], first_name="Oluma", last_name="Fikadu")
 		_user(SUP_USER, [C.ROLE_SUPERVISOR])
 		set_da_registry_id(DA_USER, DA_ID)
+		set_da_registry_id(DA2_USER, DA2_ID)
 		set_da_registry_id(SUP_USER, SUP_DA_ID)
 
 	def tearDown(self):
@@ -61,9 +82,11 @@ class TestAttendancePunches(IntegrationTestCase):
 
 	def _clean(self):
 		frappe.db.delete("DA Attendance Punch", {"user": ("in", ALL_USERS)})
+		frappe.db.delete("User Permission", {"user": ("in", ALL_USERS)})
 		for email in ALL_USERS:
 			if frappe.db.exists("User", email):
 				frappe.db.set_value("User", email, "da_registry_id", None, update_modified=False)
+				frappe.cache.hdel("user_permissions", email)
 
 	def _punch(self, *, action: str = "Punch In", woreda=True, kebele=True, when=None, **over):
 		punched_date, punched_time = _split_now(when)
@@ -187,3 +210,147 @@ class TestAttendancePunches(IntegrationTestCase):
 				punched_date=None,
 				punched_time="09:00:00",
 			)
+
+	def test_list_in_and_out_hours_and_names(self):
+		frappe.set_user(DA_USER)
+		day = today()
+		svc.create_punch(
+			action="Punch In",
+			punched_date=day,
+			punched_time="09:00:00",
+			region=self.geo["region"],
+			zone=self.geo["zone"],
+			woreda=self.geo["woreda"],
+			kebele=self.geo["kebele"],
+		)
+		svc.create_punch(
+			action="Punch Out",
+			punched_date=day,
+			punched_time="13:27:00",
+			region=self.geo["region"],
+			zone=self.geo["zone"],
+			woreda=self.geo["woreda"],
+			kebele=self.geo["kebele"],
+		)
+		rows, total = svc.list_attendance(date=day, user=DA_USER)
+		self.assertEqual(total, 1)
+		self.assertEqual(len(rows), 1)
+		row = rows[0]
+		self.assertEqual(row["user"], DA_USER)
+		self.assertEqual(row["user_name"], "Tadesse Alemu")
+		self.assertEqual(row["da_id"], DA_ID)
+		self.assertEqual(row["kebele"], self.geo["kebele"])
+		kebele_name = frappe.db.get_value("DA Kebele", self.geo["kebele"], "kebele_name")
+		self.assertEqual(row["kebele_name"], kebele_name)
+		self.assertEqual(row["punched_date"], str(day))
+		self.assertEqual(row["status"], "Checked In")
+		self.assertEqual(row["check_in"], "09:00:00")
+		self.assertEqual(row["check_out"], "13:27:00")
+		self.assertEqual(row["hours_logged"], "4h 27m")
+
+	def test_list_in_only_null_hours(self):
+		frappe.set_user(DA_USER)
+		day = today()
+		svc.create_punch(
+			action="Punch In",
+			punched_date=day,
+			punched_time="08:51:00",
+			kebele=self.geo["kebele"],
+		)
+		rows, total = svc.list_attendance(date=day, user=DA_USER)
+		self.assertEqual(total, 1)
+		row = rows[0]
+		self.assertEqual(row["status"], "Checked In")
+		self.assertEqual(row["check_in"], "08:51:00")
+		self.assertIsNone(row["check_out"])
+		self.assertIsNone(row["hours_logged"])
+
+	def test_list_date_filter_excludes_other_days(self):
+		frappe.set_user(DA_USER)
+		yesterday = add_days(today(), -1)
+		svc.create_punch(
+			action="Punch In",
+			punched_date=yesterday,
+			punched_time="10:00:00",
+			kebele=self.geo["kebele"],
+		)
+		svc.create_punch(
+			action="Punch In",
+			punched_date=today(),
+			punched_time="11:00:00",
+			kebele=self.geo["kebele"],
+		)
+		rows, total = svc.list_attendance(date=today(), user=DA_USER)
+		self.assertEqual(total, 1)
+		self.assertEqual(rows[0]["punched_date"], str(today()))
+		self.assertEqual(rows[0]["check_in"], "11:00:00")
+
+	def test_list_out_of_grant_kebele_filter_empty(self):
+		# User Permission on primary kebele; filter to foreign kebele → empty page (not 403).
+		if not self.geo.get("foreign_kebele"):
+			self.skipTest("no foreign_kebele on this site")
+		frappe.set_user("Administrator")
+		add_user_permission("DA Kebele", self.geo["kebele"], DA_USER, ignore_permissions=True)
+		frappe.cache.hdel("user_permissions", DA_USER)
+
+		frappe.set_user(DA_USER)
+		svc.create_punch(
+			action="Punch In",
+			punched_date=today(),
+			punched_time="09:00:00",
+			region=self.geo["region"],
+			zone=self.geo["zone"],
+			woreda=self.geo["woreda"],
+			kebele=self.geo["kebele"],
+		)
+		rows, total = svc.list_attendance(user=DA_USER, date=today(), kebele=self.geo["foreign_kebele"])
+		self.assertEqual(total, 0)
+		self.assertEqual(rows, [])
+
+	def test_list_user_required(self):
+		frappe.set_user(DA_USER)
+		with self.assertRaises(frappe.ValidationError):
+			svc.list_attendance(user="")
+		with self.assertRaises(frappe.ValidationError):
+			svc.list_attendance(user="   ")
+
+	def test_list_filters_kebele_woreda_and_date_range(self):
+		frappe.set_user(DA_USER)
+		day = today()
+		yesterday = add_days(day, -1)
+		geo = dict(
+			region=self.geo["region"],
+			zone=self.geo["zone"],
+			woreda=self.geo["woreda"],
+			kebele=self.geo["kebele"],
+		)
+		svc.create_punch(action="Punch In", punched_date=yesterday, punched_time="09:00:00", **geo)
+		svc.create_punch(action="Punch In", punched_date=day, punched_time="10:00:00", **geo)
+
+		by_kebele, n = svc.list_attendance(user=DA_USER, date=day, kebele=self.geo["kebele"])
+		self.assertEqual(n, 1)
+		self.assertEqual(by_kebele[0]["kebele"], self.geo["kebele"])
+		self.assertEqual(by_kebele[0]["check_in"], "10:00:00")
+
+		by_range, n = svc.list_attendance(user=DA_USER, from_date=yesterday, to_date=day)
+		self.assertEqual(n, 2)
+		self.assertEqual({r["punched_date"] for r in by_range}, {str(yesterday), str(day)})
+
+		by_woreda, n = svc.list_attendance(user=DA_USER, date=day, woreda=self.geo["woreda"])
+		self.assertEqual(n, 1)
+		self.assertEqual(by_woreda[0]["da_id"], DA_ID)
+
+		# Other user's punches are not mixed in when user is required.
+		frappe.set_user(DA2_USER)
+		svc.create_punch(action="Punch In", punched_date=day, punched_time="11:00:00", **geo)
+		frappe.set_user("Administrator")
+		only_da, n = svc.list_attendance(user=DA_USER, date=day)
+		self.assertEqual(n, 1)
+		self.assertEqual(only_da[0]["user"], DA_USER)
+
+	def test_list_incomplete_date_range_rejected(self):
+		frappe.set_user(DA_USER)
+		with self.assertRaises(frappe.ValidationError):
+			svc.list_attendance(user=DA_USER, from_date=today())
+		with self.assertRaises(frappe.ValidationError):
+			svc.list_attendance(user=DA_USER, to_date=today())
