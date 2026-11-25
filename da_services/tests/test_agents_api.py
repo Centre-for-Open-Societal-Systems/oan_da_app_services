@@ -425,3 +425,281 @@ class TestAgentsAPI(IntegrationTestCase):
 
 		# Should be sorted
 		self.assertEqual(da_ids, sorted(da_ids))
+
+
+def _post(user, da_id, kebele, state="Effective"):
+	"""Create a DA Kebele Assignment posting `user` (DA `da_id`) to `kebele`."""
+	doc = frappe.get_doc(
+		{
+			"doctype": "DA Kebele Assignment",
+			"user": user,
+			"da_id": da_id,
+			"kebele": kebele,
+			"state": state,
+			"mode": "Manual",
+			"effective_date": today(),
+		}
+	)
+	doc.flags.ignore_validate = True
+	doc.insert(ignore_permissions=True, ignore_links=True)
+	# da_id is fetched from the User's DA Registry ID on save; pin it for the test.
+	frappe.db.set_value("DA Kebele Assignment", doc.name, "da_id", da_id, update_modified=False)
+	return doc
+
+
+class TestMyTeamAPI(IntegrationTestCase):
+	"""The signed-in user's team (GET /agents/my-team): scope by role, plus filters and facets."""
+
+	METHOD = "da_services.api.v1.agents.list_my_team"
+	USERS = (DA1, DA2, SUP_W01, SUP_W02, EXEC_ET04, ADMIN)
+	# The fixture Kebeles; other suites' postings to them are cleared so the lists are exact.
+	KEBELES = ("ET04-W01-K03", "ET04-W01-K07", "ET03-W02-K01")
+	NOBODY = "agents-api-nobody@da.local"  # signed in, no DA role
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		frappe.db.delete("DA RBAC Assignment")
+		frappe.db.delete("DA Kebele Assignment", {"user": ("in", self.USERS)})
+		frappe.db.delete("DA Kebele Assignment", {"kebele": ("in", self.KEBELES)})
+
+		_user(DA1, [C.ROLE_DA])
+		_user(DA2, [C.ROLE_DA])
+		_user(SUP_W01, [C.ROLE_SUPERVISOR])
+		_user(SUP_W02, [C.ROLE_SUPERVISOR])
+		_user(EXEC_ET04, [C.ROLE_EXECUTIVE])
+		_user(ADMIN, [C.ROLE_ADMIN])
+		_user(self.NOBODY, [])
+
+		# Registry fixtures: DA-000001 in ET04-W01-K03, DA-000002 in ET04-W01-K07,
+		# DA-000003 in ET03-W02 (no Kebele), DA-000004 in ET03-W02-K01.
+		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		_grant(SUP_W02, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
+		_grant(EXEC_ET04, C.ROLE_EXECUTIVE, region_scope="ET04")
+
+		MockDARegistryClient.reset()
+		frappe.db.commit()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.delete("DA RBAC Assignment")
+		frappe.db.delete("DA Kebele Assignment", {"user": ("in", self.USERS)})
+		frappe.db.delete("DA Kebele Assignment", {"kebele": ("in", self.KEBELES)})
+		frappe.db.commit()
+		MockDARegistryClient.reset()
+
+	def _team(self, user, **kw):
+		frappe.set_user(user)
+		response = frappe.call(self.METHOD, **kw)
+		self.assertEqual(response["status"], "success", response.get("message"))
+		data = response["data"]
+		data["ids"] = {a["da_id"] for a in data["agents"]}
+		return data
+
+	# ========== Scope by role ==========
+
+	def test_admin_sees_every_da(self):
+		data = self._team(ADMIN)
+		self.assertEqual((data["scope"], data["areas"]), ("all", []))
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000003", "DA-000004"})
+
+	def test_administrator_user_sees_every_da(self):
+		self.assertEqual(self._team("Administrator")["scope"], "all")
+
+	def test_executive_sees_own_region(self):
+		data = self._team(EXEC_ET04)
+		self.assertEqual((data["scope"], data["areas"]), ("region", ["ET04"]))
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
+
+	def test_supervisor_sees_own_woreda(self):
+		data = self._team(SUP_W01)
+		self.assertEqual((data["scope"], data["areas"]), ("woreda", ["ET04-W01"]))
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
+
+	def test_other_woreda_supervisor(self):
+		data = self._team(SUP_W02)
+		self.assertEqual(data["areas"], ["ET03-W02"])
+		self.assertEqual(data["ids"], {"DA-000003", "DA-000004"})
+
+	def test_da_sees_own_kebele_from_registry(self):
+		"""No Kebele Assignment: the Kebele comes from the DA's registry record."""
+		data = self._team(DA1)
+		self.assertEqual((data["scope"], data["areas"]), ("kebele", ["ET04-W01-K03"]))
+		self.assertEqual(data["ids"], {"DA-000001"})
+
+	def test_da_kebele_from_effective_assignment(self):
+		"""An Effective Kebele Assignment wins over the registry posting, and its DA joins the team."""
+		_post(DA2, "DA-000002", "ET04-W01-K03")
+		frappe.db.commit()
+
+		data = self._team(DA2)
+		self.assertEqual(data["areas"], ["ET04-W01-K03"])
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
+		self.assertEqual(self._team(DA1)["ids"], {"DA-000001", "DA-000002"})
+
+	def test_superseded_assignment_is_ignored(self):
+		_post(DA2, "DA-000002", "ET04-W01-K03", state="Superseded")
+		frappe.db.commit()
+		self.assertEqual(self._team(DA1)["ids"], {"DA-000001"})
+
+	def test_assigned_da_joins_woreda(self):
+		"""A DA with an Effective Kebele Assignment in the Woreda is listed even if the registry posts them elsewhere."""
+		doc = _post(SUP_W02, "DA-000003", "ET04-W01-K03")
+		frappe.db.set_value("DA Kebele Assignment", doc.name, "woreda", "ET04-W01", update_modified=False)
+		frappe.db.commit()
+		self.assertEqual(self._team(SUP_W01)["ids"], {"DA-000001", "DA-000002", "DA-000003"})
+
+	def test_widest_role_wins(self):
+		"""A Supervisor who is also a DA gets the Woreda, not the Kebele."""
+		_user(SUP_W01, [C.ROLE_DA])
+		data = self._team(SUP_W01)
+		self.assertEqual(data["scope"], "woreda")
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
+
+	def test_woreda_from_rbac_grant(self):
+		"""No DA Woreda User Permission: the Woreda comes from the active RBAC grant."""
+		frappe.db.delete("User Permission", {"user": SUP_W01, "allow": "DA Woreda"})
+		frappe.db.commit()
+		frappe.clear_cache(user=SUP_W01)
+		self.assertEqual(self._team(SUP_W01)["areas"], ["ET04-W01"])
+
+	def test_no_role_gets_empty_team(self):
+		data = self._team(self.NOBODY)
+		self.assertEqual((data["scope"], data["areas"], data["total"]), ("none", [], 0))
+		self.assertEqual(data["agents"], [])
+
+	# ========== Filters / facets / search / paging on the team ==========
+
+	def test_filters_narrow_the_team(self):
+		self.assertEqual(self._team(SUP_W01, kebele="ET04-W01-K07")["ids"], {"DA-000002"})
+		self.assertEqual(self._team(SUP_W02, active_status="Active")["ids"], {"DA-000004"})
+		self.assertEqual(
+			self._team(SUP_W01, active_status="Active,On-leave")["ids"], {"DA-000001", "DA-000002"}
+		)
+
+	def test_filters_cannot_widen_the_team(self):
+		"""A filter for an area outside the team returns nothing, never other DAs."""
+		self.assertEqual(self._team(SUP_W01, woreda="ET03-W02")["ids"], set())
+		self.assertEqual(self._team(DA1, kebele="ET03-W02-K01")["ids"], set())
+
+	def test_facets_cover_only_the_team(self):
+		facets = self._team(SUP_W01, limit=1)["facets"]
+		self.assertEqual({f["value"] for f in facets["woreda"]}, {"ET04-W01"})
+		self.assertEqual(
+			{f["value"]: f["count"] for f in facets["kebele"]}, {"ET04-W01-K03": 1, "ET04-W01-K07": 1}
+		)
+
+	def test_search(self):
+		self.assertEqual(self._team(SUP_W01, search="000002")["ids"], {"DA-000002"})
+		self.assertEqual(self._team(DA1, search="marta")["ids"], set())
+
+	def test_pagination(self):
+		data = self._team(SUP_W01, limit=1, start=1)
+		self.assertEqual(data["total"], 2)
+		self.assertEqual([a["da_id"] for a in data["agents"]], ["DA-000002"])
+		self.assertEqual(data["page"], {"limit": 1, "start": 1})
+
+	def test_invalid_filter_value(self):
+		frappe.set_user(SUP_W01)
+		response = frappe.call(self.METHOD, education_tier="Bogus")
+		self.assertEqual(response["status"], "error")
+		self.assertIn("education_tier", response["message"].lower())
+
+
+class TestAgentFiltersAPI(IntegrationTestCase):
+	"""Admin's agent list: multi-value filters and the filter facets (GET /agents)."""
+
+	METHOD = "da_services.api.v1.agents.list_agents"
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		frappe.db.delete("DA RBAC Assignment")
+		_user(ADMIN, [C.ROLE_ADMIN])
+		_user(SUP_W01, [C.ROLE_SUPERVISOR])
+		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
+		MockDARegistryClient.reset()
+		frappe.db.commit()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.delete("DA RBAC Assignment")
+		frappe.db.commit()
+		MockDARegistryClient.reset()
+
+	def _ids(self, **kw):
+		response = frappe.call(self.METHOD, **kw)
+		self.assertEqual(response["status"], "success", response.get("message"))
+		return {a["da_id"] for a in response["data"]["agents"]}
+
+	# ========== Admin sees all ==========
+
+	def test_admin_sees_every_da(self):
+		"""Admin: every DA the registry returns, across Regions."""
+		frappe.set_user(ADMIN)
+		self.assertEqual(self._ids(), {"DA-000001", "DA-000002", "DA-000003", "DA-000004"})
+
+	# ========== Multi-value filters ==========
+
+	def test_several_woredas(self):
+		"""Comma-separated values: a DA matches any of them."""
+		frappe.set_user(ADMIN)
+		self.assertEqual(
+			self._ids(woreda="ET04-W01,ET03-W02"), {"DA-000001", "DA-000002", "DA-000003", "DA-000004"}
+		)
+		self.assertEqual(self._ids(kebele="ET04-W01-K03,ET03-W02-K01"), {"DA-000001", "DA-000004"})
+
+	def test_several_statuses(self):
+		frappe.set_user(ADMIN)
+		self.assertEqual(self._ids(active_status="On-leave,Separated"), {"DA-000002", "DA-000003"})
+
+	def test_unassigned_kebele(self):
+		"""'unassigned' matches a DA with no Kebele posting."""
+		frappe.set_user(ADMIN)
+		self.assertEqual(self._ids(kebele="unassigned"), {"DA-000003"})
+
+	def test_filters_combine(self):
+		"""Different filters narrow together (AND)."""
+		frappe.set_user(ADMIN)
+		self.assertEqual(self._ids(region="ET03", active_status="Active"), {"DA-000004"})
+
+	def test_approval_status_filter(self):
+		frappe.set_user(ADMIN)
+		# DA-000004 is "Awaiting review" in the fixtures, the others "Published"
+		self.assertEqual(self._ids(approval_status="Awaiting review"), {"DA-000004"})
+		self.assertEqual(self._ids(approval_status="Published"), {"DA-000001", "DA-000002", "DA-000003"})
+		self.assertEqual(self._ids(approval_status="Draft"), set())
+
+	def test_invalid_value_in_list(self):
+		"""One bad value in a list is refused."""
+		frappe.set_user(ADMIN)
+		response = frappe.call(self.METHOD, active_status="Active,Retired")
+		self.assertEqual(response["status"], "error")
+		self.assertIn("retired", response["message"].lower())
+
+	# ========== Facets ==========
+
+	def test_facets_count_every_da(self):
+		"""Facets count the whole list, not just the page."""
+		frappe.set_user(ADMIN)
+		response = frappe.call(self.METHOD, limit=1)
+		facets = response["data"]["facets"]
+
+		self.assertEqual(len(response["data"]["agents"]), 1)
+		self.assertEqual({f["value"]: f["count"] for f in facets["region"]}, {"ET03": 2, "ET04": 2})
+		self.assertEqual(sum(f["count"] for f in facets["active_status"]), 4)
+		self.assertIn({"value": "unassigned", "label": "Unassigned", "count": 1}, facets["kebele"])
+
+	def test_geo_facets_cascade(self):
+		"""Woreda facet follows the chosen Region; Kebele facet the chosen Woreda."""
+		frappe.set_user(ADMIN)
+		facets = frappe.call(self.METHOD, region="ET04")["data"]["facets"]
+
+		self.assertEqual({f["value"] for f in facets["region"]}, {"ET03", "ET04"})
+		self.assertEqual({f["value"] for f in facets["woreda"]}, {"ET04-W01"})
+		self.assertEqual({f["value"] for f in facets["kebele"]}, {"ET04-W01-K03", "ET04-W01-K07"})
+
+	def test_facets_follow_search(self):
+		frappe.set_user(ADMIN)
+		facets = frappe.call(self.METHOD, search="hana")["data"]["facets"]
+		self.assertEqual([f["value"] for f in facets["region"]], ["ET03"])
