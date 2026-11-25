@@ -6,6 +6,8 @@ Code: `da_services/integrations/da_registry/` (`client.py` interface, `mock.py`,
 
 ## Identity
 
+Where the registry is, and which register holds the DAs, is read from **DA Services Settings**: "DA Registry Domain" (a host name or a full URL), "DA Registry Form Register ID", and "DA Registry Tab ID" (the `tab_id` of `register-data/get_tab_records`; empty means `da_details_tab`). `da_registry_base_url` and `da_registry_register_id` in `site_config.json` are read only while a site has not filled the first two settings in.
+
 `da_registry_auth` selects whose token reaches the registry.
 
 - `"user"` (the agreed mode): `Authorization: Bearer …` and `X-CSRF-Token` (header or cookie) are read once per request and sent on as header plus cookie with the same value (the IAM's double-submit pair). A DA Services-issued JWT (`iss` = `jwt_issuer`) or a missing token is refused with 401 before any registry call. A registry 401 or 403 is answered with that status and the registry's message; `GET /me` still returns roles, scope and menu with `agent_error`. DA Services does not refresh the IAM token (5 minutes on dev); the frontend signs the user in again.
@@ -49,7 +51,7 @@ Prefix: `/api/v1/da-services`
 | Route | Staff call |
 | --- | --- |
 | `GET /me` | The DA's record: search by DA-ID (exact match on top of the partial search), then the `da_details_tab` records |
-| `GET /profile/my_profile` | The signed-in DA's own record, read directly by the registry's record id (`User.da_registry_id`, the `da_id` claim of IAM): one `get_tab_records`, no search. A DA-ID in that field (`DA-…`) is searched as for `GET /me`. Plus the read-back of changes sent to the registry, and one `documents/get_documents` for the links of all certificates. 404 when the User has no id or the registry does not know it |
+| `GET /profile/my_profile` | The signed-in DA's own record, read directly by the registry's record id (`User.da_registry_id`, the `da_id` claim of IAM): one `get_tab_records`, no search. That is the only registry call of this route: the record comes with its education records and family members, the photo's link is on the record, the person the DA reports to is their DA-ID only, and no document link is asked for (`GET /profile/documents/{document_id}` gives one when the DA opens a certificate). A DA-ID in that field (`DA-…`) is searched first, as for `GET /me`. 404 when the User has no id or the registry does not know it. The answer is `profile`, `pending_requests` and `validation`; what a DA may ask to change is not part of it |
 | `GET /profile/agents/{da_id}` (Supervisor, Administrator) | The DA's record, plus the read-back |
 | `POST /profile/change-requests` | Reads only: the DA's record, Master Data code lists, the geo chain for a location change. A `DA Profile Change Request` row in DA Services |
 | `GET …`, `GET …/{id}`, `POST …/{id}/cancel` | DA Services only; `GET …/{id}` reads back a change that waits for the registry |
@@ -60,7 +62,7 @@ Prefix: `/api/v1/da-services`
 | `POST /profile/change-requests/{id}/retry` (Administrator) | Reads the DA's record first: if it already holds the requested values (the earlier answer was lost), the request is marked Applied and nothing is created. Otherwise `create_change_request` again, with the Administrator's token |
 | `POST /profile/change-requests/{id}/sync-local` (Administrator) | DA Services only: repeats the move of the DA's DA RBAC grant after an applied location change (`local_sync_state = Failed`) |
 | `POST /profile/change-requests/{id}/close` (Administrator) | DA Services only |
-| `GET /profile/my_profile`, `GET /profile/agents/{da_id}` (Supervisor, Executive, Administrator in scope) | Reads only: the DA's record and the Master Data code lists |
+| `GET /profile/agents/{da_id}` (Supervisor, Executive, Administrator in scope) | Reads only: the DA's record and the Master Data code lists |
 | `GET /profile/documents/{document_id}?da_id=` (a DA: own, without `da_id`) | Reads only: `documents/get_documents` for a short-lived link. Only a document on that DA's record (the photo, a certificate) opens |
 | `POST /profile/qualifications` `{action: add/update/delete, record_id, values, reason, da_id}` | Reads only, then a `DA Profile Change Request` (section `Education records`). `values`: `education_level` (a `DA_EDUCATION_LEVEL` code or label) and `passout_year` (EC year, 1950 to now), both needed to add; nothing else (position, specialisation and joining date are Position and reporting fields). A Development Agent or Senior DA keeps at least one record |
 | `POST /profile/family-members` `{action, member_id, values, reason, da_id}` | As above (section `Family members`). `values`: `name`, `relationship` (`DA_RELATIONSHIP`), `date_of_birth` |
@@ -79,9 +81,8 @@ What the portal gets with these answers, so it repeats none of the rules:
   `certificates[] {document_id, name}`, `is_main`; the main record first: the latest passout year,
   which the registry copies onto the DA record as `profile.education_tier` and `profile.passout_year`) and `profile.family_members[]` (`id`, `name`, `relationship` and
   `_label`, `date_of_birth`; also under its earlier name `profile.dependents[]`). A certificate opens through `GET /profile/documents/{document_id}`;
-  `GET /profile/my_profile` also puts a short-lived `url` on every certificate (`null` when the registry cannot give it now).
   `GET /profile/my_profile` adds `validation {record_found, record_status, is_active}` and the profile carries
-  `record_id`, `record_status`, `last_approved_at`, `last_approved_by` and `source` of the record.
+  `internal_record_id`, `record_status`, `last_approved_at`, `last_approved_by` and `source` of the record.
   They change through the list and file requests in the table above, approved like every other
   profile change. `profile.home_address` (the registry's `address_line_1`, where the DA lives) is one
   line of up to 100 characters and changes with the Contact section (`home_address`).

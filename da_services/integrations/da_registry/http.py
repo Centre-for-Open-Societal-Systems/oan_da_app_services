@@ -91,6 +91,26 @@ _LOGIN_FORM_RE = re.compile(r'<form\b[^>]*\bid=["\']kc-form-login["\'][^>]*>', r
 _FORM_ACTION_RE = re.compile(r'\baction=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
+SETTINGS_DOCTYPE = "DA Services Settings"
+
+
+def _registry_settings() -> tuple[str, str, str]:
+	"""(base URL, DA register id, tab id) from DA Services Settings; an empty string for one
+	not set.
+
+	``host.example.org`` and ``https://host.example.org/`` both give ``https://host.example.org``.
+	"""
+	settings = frappe.get_cached_doc(SETTINGS_DOCTYPE)
+	domain = (settings.get("da_registry_domain") or "").strip().rstrip("/")
+	if domain and not domain.startswith(("http://", "https://")):
+		domain = f"https://{domain}"
+	return (
+		domain,
+		(settings.get("da_registry_form_register_id") or "").strip(),
+		(settings.get("da_registry_tab_id") or "").strip(),
+	)
+
+
 def _log_error(title: str, message: str) -> None:
 	"""frappe.log_error, skipped on the list worker threads (they have no site context)."""
 	if getattr(frappe.local, "site", None):
@@ -133,6 +153,7 @@ class HttpDARegistryClient(DARegistryClient):
 		*,
 		keycloak: dict,
 		register_id: str = DEFAULT_REGISTER_ID,
+		tab_id: str = DA_TAB,
 		intake_form_id: str = DEFAULT_INTAKE_FORM_ID,
 		import_data_model_id: str = DEFAULT_IMPORT_DATA_MODEL_ID,
 		timeout: float = 10,
@@ -146,6 +167,7 @@ class HttpDARegistryClient(DARegistryClient):
 		self.master_data_url = (master_data_url or "").rstrip("/") or None
 		self.keycloak = keycloak
 		self.register_id = register_id
+		self.tab_id = tab_id
 		self.intake_form_id = intake_form_id
 		self.import_data_model_id = import_data_model_id
 		self.timeout = timeout
@@ -158,9 +180,16 @@ class HttpDARegistryClient(DARegistryClient):
 		"""The client for this site. ``auth_mode`` overrides ``da_registry_auth``: a
 		scheduled job or a bench command has no signed-in user and needs the service identity."""
 		conf = frappe.conf
-		base_url = str(conf.get("da_registry_base_url") or "")
+		# Where the registry is, which register holds the DAs and which of its tabs holds a
+		# DA's record: DA Services Settings ("DA Registry Domain", "DA Registry Form Register
+		# ID", "DA Registry Tab ID"). site_config.json is read only while a site has not
+		# filled the first two in yet; an empty tab id means DA_TAB.
+		domain, settings_register_id, settings_tab_id = _registry_settings()
+		base_url = domain or str(conf.get("da_registry_base_url") or "")
 		if not base_url.startswith(("http://", "https://")):
-			raise DARegistryError("da_registry_base_url must be an http(s) URL in site_config.json")
+			raise DARegistryError(
+				f"{SETTINGS_DOCTYPE}: set DA Registry Domain (or da_registry_base_url in site_config.json)"
+			)
 		auth_mode = str(auth_mode or conf.get("da_registry_auth") or "service").lower()
 		if auth_mode not in ("user", "service"):
 			raise DARegistryError(f"Unknown da_registry_auth: {auth_mode!r}")
@@ -178,7 +207,8 @@ class HttpDARegistryClient(DARegistryClient):
 		return cls(
 			base_url,
 			keycloak=keycloak,
-			register_id=conf.get("da_registry_register_id") or DEFAULT_REGISTER_ID,
+			register_id=settings_register_id or conf.get("da_registry_register_id") or DEFAULT_REGISTER_ID,
+			tab_id=settings_tab_id or DA_TAB,
 			intake_form_id=conf.get("da_registry_intake_form_id") or DEFAULT_INTAKE_FORM_ID,
 			import_data_model_id=conf.get("da_registry_import_data_model_id") or DEFAULT_IMPORT_DATA_MODEL_ID,
 			timeout=float(conf.get("da_registry_timeout_seconds") or 10),
@@ -387,7 +417,11 @@ class HttpDARegistryClient(DARegistryClient):
 	def _da_record(self, internal_id: str, da_id: str | None) -> dict:
 		body = self._post(
 			"/register-data/get_tab_records",
-			{"subject_register_id": self.register_id, "subject_record_id": internal_id, "tab_id": DA_TAB},
+			{
+				"subject_register_id": self.register_id,
+				"subject_record_id": internal_id,
+				"tab_id": self.tab_id,
+			},
 			action="read DA record",
 			not_found=da_id,
 		)
@@ -436,7 +470,7 @@ class HttpDARegistryClient(DARegistryClient):
 				"/change-requests/create_change_request",
 				{
 					"register_id": self.register_id,
-					"tab_id": DA_TAB,
+					"tab_id": self.tab_id,
 					"section_id": section_id,
 					"section_register_id": self.register_id,
 					"internal_record_id": internal_id,
@@ -485,7 +519,7 @@ class HttpDARegistryClient(DARegistryClient):
 				"/change-requests/create_change_request",
 				{
 					"register_id": self.register_id,
-					"tab_id": DA_TAB,
+					"tab_id": self.tab_id,
 					"section_id": change.section_id,
 					"section_register_id": change.section_register_id or self.register_id,
 					"internal_record_id": internal_id,

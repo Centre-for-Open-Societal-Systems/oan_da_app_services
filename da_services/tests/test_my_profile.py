@@ -10,12 +10,10 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from da_services.api.v1 import profile_self as api
-from da_services.integrations.da_registry.client import DARegistryUnavailable
 from da_services.integrations.da_registry.mapper import mock_record_id
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import profile as svc
-from da_services.services import profile_fields
 from da_services.tests.fixtures import as_user, ensure_doctype_schema, set_da_registry_id
 
 DA = "myprofile-da@da.local"  # DA-000001, found by the registry's record id
@@ -59,13 +57,12 @@ class TestMyProfile(IntegrationTestCase):
 			d = api.my_profile()["data"]
 		p = d["profile"]
 		self.assertEqual(p["da_id"], "DA-000001")
-		self.assertEqual(p["record_id"], mock_record_id("DA-000001"))
+		self.assertEqual(p["internal_record_id"], mock_record_id("DA-000001"))
 		self.assertEqual(
 			d["validation"], {"record_found": True, "record_status": "ACTIVE", "is_active": True}
 		)
-		# the same answer a Supervisor's view of the DA carries, so one screen reads both
-		for key in ("fields", "editable_fields", "list_options", "pending_requests"):
-			self.assertIn(key, d)
+		# the record, the open requests and the validation: what a DA may edit is not here
+		self.assertEqual(set(d), {"profile", "pending_requests", "validation"})
 
 	def test_own_profile_by_da_id(self):
 		"""A User whose id was set by hand to the DA-ID is found by it."""
@@ -81,31 +78,39 @@ class TestMyProfile(IntegrationTestCase):
 		)
 		self.assertEqual(p["dependents"], p["family_members"])
 
-	def test_every_certificate_carries_a_link(self):
+	def test_certificates_carry_a_name_and_a_document_id_but_no_link(self):
+		"""The link is asked for when the DA opens one (GET /profile/documents/<id>)."""
 		with as_user(DA):
 			p = api.my_profile()["data"]["profile"]
 		certificates = [f for q in p["qualifications"] for f in q["certificates"]]
 		self.assertTrue(certificates)
 		for f in certificates:
-			self.assertIn(f["document_id"], f["url"])
+			self.assertTrue(f["document_id"])
+			self.assertTrue(f["name"])
+			self.assertNotIn("url", f)
 
-	def test_links_are_asked_for_in_one_call(self):
+	def test_the_registry_is_asked_once(self):
+		"""One read of the record by its id: no search, no document links, no second record
+		(the person the DA reports to is their DA-ID only)."""
 		with (
-			patch.object(MockDARegistryClient, "document_links", return_value={}) as links,
-			as_user(DA),
-		):
-			api.my_profile()
-		self.assertEqual(links.call_count, 1)
-
-	def test_profile_still_shows_when_links_cannot_be_read(self):
-		with (
-			patch.object(MockDARegistryClient, "document_links", side_effect=DARegistryUnavailable("down")),
+			patch.object(
+				MockDARegistryClient,
+				"get_da_by_record_id",
+				autospec=True,
+				side_effect=MockDARegistryClient.get_da_by_record_id,
+			) as by_id,
+			patch.object(MockDARegistryClient, "get_da") as by_da_id,
+			patch.object(MockDARegistryClient, "document_links") as links,
+			patch.object(MockDARegistryClient, "change_request_status") as status,
 			as_user(DA),
 		):
 			p = api.my_profile()["data"]["profile"]
-		certificates = [f for q in p["qualifications"] for f in q["certificates"]]
-		self.assertTrue(certificates)
-		self.assertTrue(all(f["url"] is None and f["document_id"] for f in certificates))
+		self.assertEqual(by_id.call_count, 1)
+		by_da_id.assert_not_called()
+		links.assert_not_called()
+		status.assert_not_called()
+		self.assertNotIn("reports_to_name", p)
+		self.assertIn("reports_to", p)
 
 	def test_a_user_who_is_not_a_da_gets_404(self):
 		with as_user(NOT_A_DA), self.assertRaises(frappe.DoesNotExistError) as ctx:
@@ -133,38 +138,6 @@ class TestMyProfile(IntegrationTestCase):
 				self.assertEqual(api.my_profile()["data"]["profile"]["da_id"], "DA-000001")
 		finally:
 			frappe.local.form_dict.pop("da_id", None)
-
-	def test_a_da_may_not_edit_what_the_organisation_decides(self):
-		"""Posting, position, specialisation, joining date and reporting line are read only
-		for the DA; contact and identity stay editable."""
-		with as_user(DA):
-			d = api.my_profile()["data"]
-		self.assertEqual(
-			set(d["locked_fields"]),
-			{"region", "zone", "woreda", "kebele", "position", "specialisation", "joined_date", "reports_to"},
-		)
-		self.assertFalse(set(d["editable_fields"]) & set(d["locked_fields"]))
-		for field in ("mobile", "email", "home_address", "first_name", "fayda_id", "marital_status"):
-			self.assertIn(field, d["editable_fields"])
-		# every field is still described, so the screen can show the locked ones
-		self.assertEqual(set(d["fields"]), set(d["editable_fields"]) | set(d["locked_fields"]))
-
-	def test_a_supervisor_view_keeps_every_field_editable(self):
-		ref = MockDARegistryClient.shared().get_da("DA-000001")
-		d = svc._profile_view(ref)
-		self.assertEqual(d["locked_fields"], [])
-		self.assertEqual(d["editable_fields"], sorted(profile_fields.FIELDS))
-
-	def test_a_request_by_the_da_for_a_locked_field_is_refused(self):
-		client = MockDARegistryClient.shared()
-		ref = client.get_da("DA-000001")
-		for changes in ({"kebele": "ET01010101"}, {"position": "SENIOR_DA"}, {"joined_date": "2020-01-01"}):
-			with self.assertRaises(profile_fields.InvalidProfileChange) as ctx:
-				profile_fields.validate_changes(
-					changes, ref=ref, reason="x", client=client, as_supervisor=False
-				)
-			self.assertIn("Only the DA's Supervisor", str(ctx.exception))
-			self.assertEqual(ctx.exception.field, next(iter(changes)))
 
 	def test_own_document_needs_no_da_id(self):
 		with as_user(DA):

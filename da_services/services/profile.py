@@ -272,7 +272,7 @@ def _profile(ref: DAReference) -> dict:
 		"woreda_name": ref.woreda_name,
 		"kebele_name": ref.kebele_name,
 		# The record itself: the registry's id and status, its last approval and its origin
-		"record_id": ref.record_id,
+		"internal_record_id": ref.record_id,
 		"record_status": ref.record_status,
 		"last_approved_at": ref.last_approved_at,
 		"last_approved_by": ref.last_approved_by,
@@ -294,62 +294,33 @@ def _reports_to_person(da_id: str | None) -> tuple[str | None, str | None]:
 	return boss.full_name or None, boss.position
 
 
-def _document_urls(document_ids: list[str]) -> dict[str, str]:
-	"""Short-lived links for several documents in one registry call, {document_id: url}.
-
-	Empty while the registry cannot give them: the profile still shows, and
-	GET /profile/documents/<id> gives one link later.
-	"""
-	if not document_ids:
-		return {}
-	try:
-		return get_client().document_links(document_ids)
-	except DARegistryError:
-		return {}
-
-
-def _profile_view(ref: DAReference, *, certificate_links: bool = False, own: bool = False) -> dict:
-	"""``certificate_links`` puts a short-lived ``url`` on every certificate (None when the
-	registry cannot give it now). ``own``: the DA reads their own record, so the fields only
-	their Supervisor may ask to change are ``locked_fields``, not ``editable_fields``."""
-	open_rows = frappe.get_all(
+def _open_requests(da_id: str) -> list[dict]:
+	"""The DA's change requests that are still open, newest first."""
+	rows = frappe.get_all(
 		DOCTYPE,
-		filters={"da_id": ref.da_id, "status": ("in", list(OPEN_STATES))},
+		filters={"da_id": da_id, "status": ("in", list(OPEN_STATES))},
 		fields=FIELDS,
 		order_by="creation desc",
 	)
+	return serialize_many(rows)
+
+
+def _profile_view(ref: DAReference) -> dict:
 	profile = _profile(ref)
-	# The record answers the photo's link itself; only without one is it asked for, in
-	# the same call as the certificates.
-	wanted = [ref.photo_document_id] if not profile["photo"] and ref.photo_document_id else []
-	if certificate_links:
-		wanted += [f["document_id"] for q in ref.qualifications for f in q.get("certificates") or []]
-	links = _document_urls(wanted)
 	if not profile["photo"] and ref.photo_document_id:
-		profile["photo"] = links.get(ref.photo_document_id)
-	if certificate_links:
-		profile["qualifications"] = [
-			{
-				**q,
-				"certificates": [
-					{**f, "url": links.get(f["document_id"])} for f in q.get("certificates") or []
-				],
-			}
-			for q in ref.qualifications
-		]
+		profile["photo"] = _document_url(ref.photo_document_id)
 	profile["reports_to_name"], profile["reports_to_position"] = _reports_to_person(ref.reports_to)
 	fields = profile_fields.catalog(ref, get_client())
 	if "reports_to" in fields:
 		fields["reports_to"]["current_label"] = profile["reports_to_name"]
-	editable, locked = profile_fields.editable_fields(own=own)
 	return {
 		"profile": profile,
-		"editable_fields": editable,
+		"editable_fields": sorted(profile_fields.FIELDS),
 		"fields": fields,
 		"note_min_length": profile_fields.NOTE_MIN_LENGTH,
 		"list_options": profile_lists.form_options(get_client()),
-		"locked_fields": locked,
-		"pending_requests": serialize_many(open_rows),
+		"locked_fields": [],
+		"pending_requests": _open_requests(ref.da_id),
 	}
 
 
@@ -380,20 +351,26 @@ def _own_da() -> DAReference:
 def my_profile() -> dict:
 	"""The signed-in DA's own profile, as the DA Registry holds it now, with open requests.
 
+	One registry call (``get_tab_records`` by the record id on the User): the DA's record
+	with its education records and family members. Nothing else is asked of the registry
+	here, so the person the DA reports to is their DA-ID only, and a certificate carries its
+	name and ``document_id``; GET /profile/documents/<document_id> gives the link when the
+	DA opens one. The photo's link comes with the record.
+
 	``validation`` says what the registry answered for the caller's record: it was found
-	(or this call is a 404), its status, and whether it is in service. Every certificate
-	carries a short-lived ``url``.
+	(or this call is a 404), its status, and whether it is in service. What a DA may ask
+	to change is not answered here.
 	"""
 	ref = _own_da()
-	if _refresh_registry_results(ref.da_id):
-		ref = _own_da()
-	out = _profile_view(ref, certificate_links=True, own=True)
-	out["validation"] = {
-		"record_found": True,
-		"record_status": ref.record_status,
-		"is_active": ref.record_status == "ACTIVE",
+	return {
+		"profile": _profile(ref),
+		"pending_requests": _open_requests(ref.da_id),
+		"validation": {
+			"record_found": True,
+			"record_status": ref.record_status,
+			"is_active": ref.record_status == "ACTIVE",
+		},
 	}
-	return out
 
 
 def agent_profile(da_id: str) -> dict:
@@ -419,6 +396,14 @@ def _documents_of(ref: DAReference) -> dict[str, str | None]:
 		for f in record.get("certificates") or []:
 			docs[f["document_id"]] = f.get("name")
 	return docs
+
+
+def _document_url(document_id: str) -> str | None:
+	"""A short-lived link, or None while the registry cannot give one (the profile still shows)."""
+	try:
+		return get_client().document_links([document_id]).get(document_id)
+	except DARegistryError:
+		return None
 
 
 def document_link(document_id: str, *, da_id: str | None = None) -> dict:

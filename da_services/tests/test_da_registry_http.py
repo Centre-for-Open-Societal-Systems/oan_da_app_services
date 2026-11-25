@@ -272,6 +272,12 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 		)
 		self.assertEqual([c[0] for c in self.registry.calls], ["/register-data/get_tab_records"])
 
+	def test_the_tab_id_of_the_client_is_what_the_registry_is_asked_for(self):
+		self.client.tab_id = "another_tab"
+		self.client.get_da_by_record_id("rec-1")
+		payloads = [c[1] for c in self.registry.calls if c[0] == "/register-data/get_tab_records"]
+		self.assertEqual(payloads[-1]["tab_id"], "another_tab")
+
 	def test_unknown_record_id_raises_not_found(self):
 		with self.assertRaises(DANotFound):
 			self.client.get_da_by_record_id("no-such-record")
@@ -913,6 +919,51 @@ class TestUserTokenPassthrough(IntegrationTestCase):
 			from da_services.integrations.da_registry.client import get_client
 
 			self.assertEqual(get_client().auth_mode, "user")
+
+	def test_domain_and_register_id_come_from_da_services_settings(self):
+		"""DA Services Settings names the registry; site_config.json is read only while the
+		settings are empty."""
+		settings = frappe.get_single("DA Services Settings")
+		saved = (
+			settings.da_registry_domain,
+			settings.da_registry_form_register_id,
+			settings.da_registry_tab_id,
+		)
+
+		def configure(domain, register_id, tab_id=None):
+			doc = frappe.get_single("DA Services Settings")
+			doc.da_registry_domain = domain
+			doc.da_registry_form_register_id = register_id
+			doc.da_registry_tab_id = tab_id
+			doc.save(ignore_permissions=True)
+
+		keys = {
+			"da_registry_backend": "http",
+			"da_registry_auth": "user",
+			"da_registry_base_url": BASE,
+			"da_registry_register_id": "register-from-site-config",
+			"da_registry_keycloak": {},
+		}
+		try:
+			with patch.dict(frappe.conf, keys):
+				configure("registry.settings.example/", "register-from-settings", "tab-from-settings")
+				client = HttpDARegistryClient.from_conf()
+				self.assertEqual(client.base_url, "https://registry.settings.example")
+				self.assertEqual(client.register_id, "register-from-settings")
+				self.assertEqual(client.tab_id, "tab-from-settings")
+
+				configure("http://registry.settings.example", None)
+				client = HttpDARegistryClient.from_conf()
+				self.assertEqual(client.base_url, "http://registry.settings.example")
+				self.assertEqual(client.register_id, "register-from-site-config")
+
+				configure(None, None)
+				client = HttpDARegistryClient.from_conf()
+				self.assertEqual(client.base_url, BASE)
+				self.assertEqual(client.register_id, "register-from-site-config")
+				self.assertEqual(client.tab_id, "da_details_tab")  # an empty setting: the default tab
+		finally:
+			configure(*saved)
 
 
 def _jwt_claims_iss(token):

@@ -108,27 +108,6 @@ FIELDS: dict[str, ProfileField] = {
 }
 
 
-# What the organisation decides, not the DA: where the DA is posted, their position and
-# specialisation, when they joined and whom they report to. A DA cannot ask to change these
-# for themselves; their Supervisor asks. The posting also decides who supervises the DA and
-# what they may see, so a DA asking for it would be choosing their own approver.
-# Fixed here for now: field rights per role are to be planned with the RBAC screens.
-SUPERVISOR_ONLY_FIELDS = frozenset(
-	{"region", "zone", "woreda", "kebele", "position", "specialisation", "joined_date", "reports_to"}
-)
-
-
-def editable_fields(*, own: bool) -> tuple[list[str], list[str]]:
-	"""(the fields this caller may ask to change, the fields they may only read).
-
-	``own``: a DA reads their own record, so ``SUPERVISOR_ONLY_FIELDS`` are read only.
-	Otherwise a Supervisor or an Administrator reads a DA's record and every field may be
-	asked for.
-	"""
-	locked = set(SUPERVISOR_ONLY_FIELDS) if own else set()
-	return sorted(set(FIELDS) - locked), sorted(locked)
-
-
 # Where the profile view (services/profile.py) shows a field under another name
 PROFILE_KEYS = {
 	"telegram": "telegram_number",
@@ -347,18 +326,13 @@ def validate_changes(
 
 	``diff`` is {field: {"from", "to"[, "from_label", "to_label"]}} with only the fields
 	that change; the labels are the display names of coded and location values.
-	``as_supervisor``: the DA's Supervisor asks. A DA asking for themselves may not change
-	the fields of ``SUPERVISOR_ONLY_FIELDS``.
+	``as_supervisor``: the DA's Supervisor asks (a DA may not change whom they report to).
 	"""
 	if not isinstance(changes, dict) or not changes:
 		_fail(_("changes must be a non-empty object."))
 	unknown = sorted(set(changes) - set(FIELDS))
 	if unknown:
 		_fail(_("These fields cannot be changed through a profile request: {0}").format(", ".join(unknown)))
-	allowed, _locked = editable_fields(own=not as_supervisor)
-	refused = sorted(set(changes) - set(allowed))
-	if refused:
-		_fail(_("Only the DA's Supervisor can ask to change: {0}.").format(", ".join(refused)), refused[0])
 	sections = {FIELDS[f].section for f in changes}
 	if len(sections) > 1:
 		_fail(_("Send one section per request: {0}.").format(", ".join(sorted(sections))))
