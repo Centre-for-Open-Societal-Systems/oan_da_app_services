@@ -66,10 +66,32 @@ def _farmer_reg_id(farmer_id: str) -> str:
 	return str(reg_id)
 
 
+def _draft_farmer_ids(submission: LivestockSubmission) -> set[str]:
+	"""Farmer-IDs saved in the draft's records (the lookup row's ``farmer_id``)."""
+	return {
+		str(row["farmer_id"]).strip()
+		for section in submission.sections
+		for row in section.records
+		if isinstance(row, dict) and str(row.get("farmer_id") or "").strip()
+	}
+
+
 def _check_owner(submission: LivestockSubmission | None, submission_id: str, reg_id: str) -> None:
+	"""Refuse a draft saved for another farmer.
+
+	The owner is the ``farmer_id`` saved in the draft's lookup row: DA Services
+	fills it from the route on every save. ``record_name`` is the registry's
+	display name for the record (often the farmer's name), so it is only used
+	when the draft has no ``farmer_id`` at all.
+	"""
 	if submission is None:
 		frappe.throw(_("Livestock submission {0} not found.").format(submission_id), frappe.DoesNotExistError)
-	if submission.record_name and submission.record_name != reg_id:
+	farmer_ids = _draft_farmer_ids(submission)
+	if farmer_ids:
+		owned = farmer_ids == {reg_id}
+	else:
+		owned = not submission.record_name or submission.record_name == reg_id
+	if not owned:
 		frappe.throw(
 			_("Livestock submission {0} is not for this farmer.").format(submission_id),
 			frappe.PermissionError,
@@ -171,7 +193,10 @@ def save_farmer_livestock(farmer_id: str):
 	    }
 
 	Field names, required flags, rules and allowed values come from the live
-	form; the error names the section, row and field that failed.
+	form; the error names the section, row and field that failed. When a
+	section fails after earlier ones were saved, the error body carries
+	``data: {submission_id, subject_record_id, saved_sections}`` so a retry
+	continues that draft and sends only the other sections.
 	"""
 	body = _request_body()
 	submission_id = body.get("submission_id") or None
@@ -189,9 +214,14 @@ def save_farmer_livestock(farmer_id: str):
 			farmer_id=reg_id,
 		)
 	except (LivestockRegistryClientError, FarmerRegistryClientError) as exc:
-		frappe.throw(str(exc), frappe.ValidationError)
-	except LivestockRegistryServerError, FarmerRegistryServerError:
-		return _unavailable()
+		partial = getattr(exc, "partial", None)
+		if not partial:
+			frappe.throw(str(exc), frappe.ValidationError)
+		frappe.response["http_status_code"] = 400
+		return {**error_response(str(exc), "VALIDATION_ERROR"), "data": {"farmer_id": reg_id, **partial}}
+	except (LivestockRegistryServerError, FarmerRegistryServerError) as exc:
+		partial = getattr(exc, "partial", None)
+		return {**_unavailable(), "data": {"farmer_id": reg_id, **partial}} if partial else _unavailable()
 	return success_response(data={"farmer_id": reg_id, **saved})
 
 

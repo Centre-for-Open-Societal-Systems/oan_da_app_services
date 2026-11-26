@@ -230,6 +230,49 @@ class TestIntakeSubmit(unittest.TestCase):
 		self.assertEqual(saves[1]["section_payload"][0]["link_internal_record_id"], "subject-1")
 		self.assertEqual(result["subject_record_id"], "subject-1")
 
+	def test_a_failed_section_hands_back_the_draft_saved_so_far(self):
+		saves = []
+
+		def save(**kwargs):
+			if kwargs["section_id"] == ANIMALS:
+				raise LivestockRegistryClientError(
+					"Livestock Registry rejected save livestock section: breed"
+				)
+			saves.append(kwargs)
+			return {
+				"submission_id": "sub-1",
+				"section_payloads": [
+					{
+						"section_register_id": kwargs["section_register_id"],
+						"records": [{"internal_record_id": "subject-1"}],
+					}
+				],
+			}
+
+		with self.assertRaises(LivestockRegistryClientError) as caught:
+			submit_with_metadata(
+				form=MOCK_FORM,
+				fields_for=lambda register_id: MOCK_FIELDS[register_id],
+				catalogs=MOCK_CATALOGS,
+				requests=[
+					{"section_id": LOOKUP, "records": [{"fayda_id": "123456789012"}]},
+					{"section_id": ANIMALS, "records": [dict(ANIMAL)]},
+				],
+				submission_id=None,
+				subject_record_id=None,
+				save=save,
+				farmer_id=FIXTURE_FARMER_ID,
+			)
+		self.assertEqual(
+			caught.exception.partial,
+			{"submission_id": "sub-1", "subject_record_id": "subject-1", "saved_sections": [LOOKUP]},
+		)
+
+	def test_a_failure_before_any_save_hands_back_nothing(self):
+		with self.assertRaises(IntakeContractError) as caught:
+			_submit([{"section_id": ANIMALS, "records": [ANIMAL]}])
+		self.assertFalse(hasattr(caught.exception, "partial"))
+
 	def test_another_farmer_in_the_lookup_is_rejected(self):
 		with self.assertRaisesRegex(IntakeContractError, "does not match"):
 			_submit(
@@ -777,6 +820,51 @@ class TestRoutes(unittest.TestCase):
 		)
 		client.finalize_submission.assert_not_called()
 		client.submit_sections.assert_not_called()
+
+	def test_owner_is_the_farmer_id_saved_in_the_draft_not_record_name(self):
+		from da_services.api.v1.livestock import finalize_farmer_livestock
+
+		def draft(farmer_id):
+			return LivestockSubmission(
+				submission_id="sub-1",
+				record_name="Bekele",  # the registry names the record after the farmer
+				sections=[{"section_id": LOOKUP, "records": [{"farmer_id": farmer_id, "fayda_id": "1"}]}],
+			)
+
+		client = Mock()
+		client.get_submission.return_value = draft(FIXTURE_FARMER_ID)
+		client.finalize_submission.return_value = {"submission_id": "sub-1", "approval_status": "PENDING"}
+		result = self._call(finalize_farmer_livestock, FIXTURE_FARMER_ID, "sub-1", client=client)
+		self.assertEqual(result["data"]["approval_status"], "PENDING")
+
+		client = Mock()
+		client.get_submission.return_value = draft("FR-000000000001")
+		self._assert_refused(
+			self._call(finalize_farmer_livestock, FIXTURE_FARMER_ID, "sub-1", client=client), 403
+		)
+		client.finalize_submission.assert_not_called()
+
+	def test_a_partly_saved_draft_comes_back_with_the_error(self):
+		from da_services.api.v1.livestock import save_farmer_livestock
+
+		failure = LivestockRegistryClientError("Livestock Registry rejected save livestock section: breed")
+		failure.partial = {"submission_id": "sub-1", "subject_record_id": "s-1", "saved_sections": [LOOKUP]}
+		client = Mock()
+		client.submit_sections.side_effect = failure
+		body = {"sections": [{"section_id": LOOKUP, "records": [{"fayda_id": "123456789012"}]}]}
+		result = self._call(save_farmer_livestock, FIXTURE_FARMER_ID, body=body, client=client)
+		self._assert_refused(result, 400)
+		self.assertEqual(result["code"], "VALIDATION_ERROR")
+		self.assertIn("breed", result["message"])
+		self.assertEqual(
+			result["data"],
+			{
+				"farmer_id": FIXTURE_FARMER_ID,
+				"submission_id": "sub-1",
+				"subject_record_id": "s-1",
+				"saved_sections": [LOOKUP],
+			},
+		)
 
 	def test_finalize_own_draft(self):
 		from da_services.api.v1.livestock import finalize_farmer_livestock
