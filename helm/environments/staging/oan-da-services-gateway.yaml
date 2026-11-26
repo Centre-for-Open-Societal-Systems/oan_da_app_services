@@ -1,0 +1,36 @@
+# Values for the oan-da-services-gateway chart (apisix/k8s) on the QA RKE2 node (qa.oanstaging.com), the staging environment, namespace `da-app`.
+# Installed by ci/deploy-gateway.sh (GATEWAY_VALUES=this file) after the app deploy, stage "staging → QA cluster (apisix)". APISIX and its Ingress Controller run in
+# namespace api6-gateway on the same node; this chart only holds ApisixRoute/ApisixUpstream objects.
+#
+# Set at install, not here:
+# - redis.host: the Redis Service of the APISIX release (ci/deploy-gateway.sh looks it up)
+
+ingressClassName: apisix
+
+# The public host. *.qa.oanstaging.com is served by APISIX with the QA wildcard certificate
+# (oan-helm environments/qa/values/oan-apisix-gateway.yaml), so this chart has no ApisixTls.
+hosts:
+  - da-services.qa.oanstaging.com
+
+# Frappe site name, sent as Host because Frappe selects the site from it. Must equal
+# frappe.jobs.createSite.siteName in oan-da-services.yaml.
+siteName: da-services.qa.oanstaging.com
+
+# The Frappe gunicorn Service of release `da-services` in this namespace.
+web:
+  serviceName: da-services-frappe-gunicorn
+  port: 8000
+
+# The DA UI calls the API from its server and from the browser.
+corsOriginRegexes:
+  - https://da-app\.qa\.oanstaging\.com
+  - https?://localhost(:[0-9]+)?
+
+# The Frappe desk (/app) on its own host, sent to the frappe nginx Service (templates/desk.yaml). Public on
+# this QA instance; `allowlist` (CIDRs) restricts it, `enabled: false` removes it.
+desk:
+  enabled: true
+  host: da-services-desk.qa.oanstaging.com
+  serviceName: da-services-frappe
+  port: 8080
+  allowlist: []
