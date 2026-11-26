@@ -196,14 +196,16 @@ def list_my_team(
 	limit=None,
 	start=None,
 ):
-	"""List the Development Agents of the signed-in user's team; the scope follows their role.
+	"""List the Development Agents of the signed-in user's team, from the DA Hierarchy.
 
-	Scope selector (a user with several roles gets the widest):
-	- Admin (OAN Administrator / System Manager / Administrator): every DA
-	- Executive: the DAs of their Region(s)
-	- Supervisor: the DAs of their Woreda(s)
-	- Development Agent: the DAs of their Kebele, the caller included
-	- Anyone else: an empty list
+	Team selector (the DA Hierarchy: who reports to whom):
+	- Admin (OAN Administrator / System Manager / Administrator): every DA ("all")
+	- someone with people under them: their reports, at every level ("reports")
+	- someone with nobody under them (a DA): their boss's reports, them included ("peers")
+	- a DA with no boss (straight under the root): just them ("self")
+	- no DA Hierarchy node: an empty list ("none")
+
+	Each team member bound to a DA record (User.da_registry_id) is listed with that record.
 
 	Query parameters (each filter: one value or several, comma-separated; a DA matches any of them):
 	- region / woreda / kebele: Narrow within the team (codes; "unassigned" = no area at that level)
@@ -219,8 +221,10 @@ def list_my_team(
 	    {
 	        "success": true,
 	        "data": {
-	            "scope": "woreda",
-	            "areas": ["ET04-W01"],
+	            "team": "reports",
+	            "root": {"name": "sup@x", "user": "sup@x", "full_name": "...", "designation": "...",
+	                     "region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01", "kebele": null,
+	                     "is_group": true},
 	            "agents": [
 	                {
 	                    "da_id": "DA-000001",
@@ -241,8 +245,8 @@ def list_my_team(
 	        }
 	    }
 
-	scope is one of "all", "region", "woreda", "kebele", "none"; areas are the codes it covers
-	([] for "all" and "none").
+	root is the DA Hierarchy node the team hangs from (the caller, their boss, or the root);
+	null for "none".
 
 	Errors:
 	- 401: Not signed in
@@ -269,11 +273,49 @@ def list_my_team(
 
 	return success_response(
 		data={
-			"scope": result["scope"],
-			"areas": result["areas"],
+			"team": result["team"],
+			"root": result["root"],
 			"agents": result["agents"],
 			"total": result["total"],
 			"page": {"limit": limit, "start": start},
 			"facets": result["facets"],
 		}
 	)
+
+
+@route(
+	"/agents/my-team/tree",
+	methods=("GET",),
+	summary="The signed-in user's team as a tree, from the DA Hierarchy",
+)
+@frappe.whitelist()
+@handle_api_errors
+def my_team_tree():
+	"""The signed-in user's team as a tree (who reports to whom), from the DA Hierarchy.
+
+	The tree hangs from the same node as GET /agents/my-team: the root for an Admin, the caller
+	for someone with people under them, the caller's boss for a DA.
+
+	Returns:
+	    {
+	        "success": true,
+	        "data": {
+	            "team": "reports",
+	            "tree": {
+	                "name": "sup@x", "user": "sup@x", "full_name": "...", "designation": "...",
+	                "region": "ET04", "zone": "ET04-Z01", "woreda": "ET04-W01", "kebele": null,
+	                "is_group": true, "da_id": null,
+	                "reports": [
+	                    {"name": "da1@x", "user": "da1@x", "full_name": "...", "da_id": "DA-000001",
+	                     "is_group": false, "reports": [], ...}
+	                ]
+	            }
+	        }
+	    }
+
+	tree is null when the caller has no DA Hierarchy node ("none").
+
+	Errors:
+	- 401: Not signed in
+	"""
+	return success_response(data=da_service.my_team_tree())

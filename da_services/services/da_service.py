@@ -2,19 +2,18 @@
 
 DA listing with filters, search, paging and filter facets:
 - list_agents / search_agents: every DA the registry returns
-- list_my_team: the signed-in user's team by role (Admin: all, Executive: Region,
-  Supervisor: Woreda, Development Agent: Kebele)
+- list_my_team / my_team_tree: the signed-in user's team from the DA Hierarchy (Admin: the
+  whole tree; a manager: their reports; a DA: their boss's reports)
 """
 
 from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import today
 
-from da_services.integrations.da_registry.client import DANotFound, get_client
+from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ROOT
+from da_services.integrations.da_registry.client import get_client
 from da_services.services import constants as C
-from da_services.utils.permissions import granted_areas
 
 # Filters the agent lists accept. Each takes one value or several (comma-separated).
 FILTER_FIELDS = (
@@ -164,29 +163,79 @@ def _facets(das, wanted: dict[str, list[str]]) -> dict[str, list[dict]]:
 	return facets
 
 
-# The team scope of each role, widest first: a user holding several roles gets the widest one.
-SCOPE_ALL = "all"
-SCOPE_REGION = "region"
-SCOPE_WOREDA = "woreda"
-SCOPE_KEBELE = "kebele"
-SCOPE_NONE = "none"
+# -- My team: the DA Hierarchy (who reports to whom) ---------------------------------------
+
+HIERARCHY = "DA Hierarchy"
 ADMIN_ROLES = frozenset({C.ROLE_ADMIN, "System Manager"})
+# How the team was chosen: the whole tree, the caller's reports, the caller's boss's reports, or nobody.
+TEAM_ALL = "all"
+TEAM_REPORTS = "reports"
+TEAM_PEERS = "peers"
+TEAM_SELF = "self"
+TEAM_NONE = "none"
+_NODE_FIELDS = [
+	"name",
+	"user",
+	"full_name",
+	"designation",
+	"region",
+	"zone",
+	"woreda",
+	"kebele",
+	"is_group",
+	"lft",
+	"rgt",
+]
 
 
-def team_scope(user: str) -> str:
-	"""The widest team scope the user's roles give: all > region > woreda > kebele > none."""
+def team_root(user: str) -> tuple[str, dict | None]:
+	"""The DA Hierarchy node whose subtree is the user's team, and how it was chosen.
+
+	- Admin (OAN Administrator / System Manager / Administrator): the root, the whole tree
+	- someone with people under them: their own node (their reports, at every level)
+	- someone with nobody under them (a DA): their boss's node (the boss's reports, them included)
+	- a DA with no boss (placed straight under the root): their own node, so just them, never the
+	  whole tree
+	- no node: none
+	"""
 	if not user or user == "Guest":
-		return SCOPE_NONE
-	roles = set(frappe.get_roles(user))
-	if user == "Administrator" or roles & ADMIN_ROLES:
-		return SCOPE_ALL
-	if C.ROLE_EXECUTIVE in roles:
-		return SCOPE_REGION
-	if C.ROLE_SUPERVISOR in roles:
-		return SCOPE_WOREDA
-	if C.ROLE_DA in roles:
-		return SCOPE_KEBELE
-	return SCOPE_NONE
+		return TEAM_NONE, None
+	if user == "Administrator" or set(frappe.get_roles(user)) & ADMIN_ROLES:
+		return TEAM_ALL, frappe.db.get_value(HIERARCHY, ROOT, _NODE_FIELDS, as_dict=True)
+
+	node = frappe.db.get_value(
+		HIERARCHY, {"user": user}, [*_NODE_FIELDS, "parent_da_hierarchy"], as_dict=True
+	)
+	if not node:
+		return TEAM_NONE, None
+	if node.rgt - node.lft > 1:  # nested set: someone sits under this node
+		return TEAM_REPORTS, node
+	if not node.parent_da_hierarchy or node.parent_da_hierarchy == ROOT:
+		return TEAM_SELF, node
+	boss = frappe.db.get_value(HIERARCHY, node.parent_da_hierarchy, _NODE_FIELDS, as_dict=True)
+	return TEAM_PEERS, boss
+
+
+def _team_nodes(root: dict) -> list[dict]:
+	"""Every user node under ``root`` (not ``root`` itself), top of the tree first."""
+	return frappe.get_all(
+		HIERARCHY,
+		filters={"lft": (">", root.lft), "rgt": ("<", root.rgt), "user": ("is", "set")},
+		fields=[*_NODE_FIELDS, "parent_da_hierarchy"],
+		order_by="lft asc",
+	)
+
+
+def _da_ids_of(users: list[str]) -> dict[str, str]:
+	"""user -> DA-ID (User.da_registry_id) for the users bound to a DA record."""
+	if not users:
+		return {}
+	rows = frappe.get_all(
+		"User",
+		filters={"name": ("in", users), "da_registry_id": ("is", "set")},
+		fields=["name", "da_registry_id"],
+	)
+	return {r.name: r.da_registry_id for r in rows}
 
 
 def list_my_team(
@@ -197,18 +246,13 @@ def list_my_team(
 	user: str | None = None,
 	**filters,
 ) -> dict:
-	"""List the Development Agents of the signed-in user's team, by their role.
+	"""List the Development Agents of the signed-in user's team, from the DA Hierarchy.
 
-	- Admin (OAN Administrator / System Manager / Administrator): every DA
-	- Executive: the DAs of their Region(s)
-	- Supervisor: the DAs of their Woreda(s)
-	- Development Agent: the DAs of their Kebele, the caller included
-	- Anyone else: an empty list
-
-	The areas come from the user's DA Region / DA Woreda User Permissions, else their active RBAC
-	grants; a DA's Kebele from their Effective DA Kebele Assignment, else their registry record. A DA
-	is in a Woreda / Kebele when the registry posts them there or they hold an Effective DA Kebele
-	Assignment there.
+	The team is the DA Hierarchy subtree under team_root(): the whole tree for an Admin, the
+	caller's reports (every level) for someone with people under them, and the caller's boss's
+	reports (the caller included) for a DA. Each team member with a DA record
+	(User.da_registry_id) is listed with that record from the DA Registry; an Admin gets every
+	DA the registry returns.
 
 	Args:
 	    search: Search by DA-ID or full name (case-insensitive partial match)
@@ -218,116 +262,83 @@ def list_my_team(
 	    **filters: Any of FILTER_FIELDS; one value or several (comma-separated)
 
 	Returns:
-	    {"scope": str, "areas": [codes], "agents": [...], "total": int, "facets": {...}}
+	    {"team": "all" | "reports" | "peers" | "self" | "none", "root": {node} | None,
+	     "agents": [...], "total": int, "facets": {...}}
 
 	Example:
 	    >>> team = list_my_team(limit=20)
-	    >>> print(f"{team['total']} agents in {team['scope']} {team['areas']}")
+	    >>> print(f"{team['total']} agents under {team['root']['name']}")
 	"""
 	user = user or frappe.session.user
 	registry_client = get_client()
 
-	# Step 1: The caller's scope and its areas
-	scope = team_scope(user)
-	areas = _scope_areas(scope, user, registry_client)
+	# Step 1: The node whose subtree is the team
+	team, root = team_root(user)
 
-	# Step 2: The DAs in that scope
-	scoped_das = _scope_das(scope, areas, registry_client)
+	# Step 2: The team's DAs: every registry DA for an Admin, else the DA records of the subtree's users
+	if team == TEAM_ALL:
+		team_das = registry_client.list_das()
+	elif root:
+		members = [root.user] if team == TEAM_SELF else [n.user for n in _team_nodes(root)]
+		da_ids = set(_da_ids_of(members).values())
+		team_das = [da for da in registry_client.list_das() if da.da_id in da_ids]
+	else:
+		team_das = []
 
 	# Steps 3-9: filter, search, sort, page, facets
 	return {
-		"scope": scope,
-		"areas": areas,
-		**_query(scoped_das, filters, search=search, limit=limit, start=start),
+		"team": team,
+		"root": _node_summary(root),
+		**_query(team_das, filters, search=search, limit=limit, start=start),
 	}
 
 
-def _scope_areas(scope: str, user: str, registry_client) -> list[str]:
-	"""The area codes the scope covers; [] for "all" and "none"."""
-	if scope == SCOPE_REGION:
-		return _own_areas(user, "regions", "region_scope")
-	if scope == SCOPE_WOREDA:
-		return _own_areas(user, "woredas", "woreda_scope")
-	if scope == SCOPE_KEBELE:
-		return _own_kebeles(user, registry_client)
-	return []
+def my_team_tree(user: str | None = None) -> dict:
+	"""The signed-in user's team as a tree: team_root() and everyone under it, by reporting line.
+
+	Each node: {name, user, full_name, designation, region, zone, woreda, kebele, is_group,
+	da_id, reports: [...]}; da_id is the user's DA-ID when they have one.
+
+	Returns:
+	    {"team": "all" | "reports" | "peers" | "self" | "none", "tree": {node} | None}
+	"""
+	user = user or frappe.session.user
+
+	# Step 1: The node whose subtree is the team
+	team, root = team_root(user)
+	if not root:
+		return {"team": team, "tree": None}
+
+	# Step 2: Its subtree, top first, and the DA-IDs of its users
+	nodes = _team_nodes(root)
+	da_ids = _da_ids_of([n.user for n in nodes] + ([root.user] if root.user else []))
+
+	# Step 3: Hang every node under its parent
+	tree = {**_node_summary(root), "da_id": da_ids.get(root.user), "reports": []}
+	by_name = {root.name: tree}
+	for n in nodes:  # lft order: a parent always comes before its children
+		item = {**_node_summary(n), "da_id": da_ids.get(n.user), "reports": []}
+		by_name[n.name] = item
+		parent = by_name.get(n.parent_da_hierarchy)
+		if parent is not None:
+			parent["reports"].append(item)
+	return {"team": team, "tree": tree}
 
 
-def _scope_das(scope: str, areas: list[str], registry_client) -> list:
-	"""The registry DAs in the scope's areas (plus the DAs locally assigned there)."""
-	if scope == SCOPE_ALL:
-		return registry_client.list_das()
-	if not areas:
-		return []
-	field = {SCOPE_REGION: "region", SCOPE_WOREDA: "woreda", SCOPE_KEBELE: "kebele"}[scope]
-	# DAs with an Effective Kebele Assignment in these areas (local assignments may be ahead of the registry)
-	assigned_da_ids = set(
-		frappe.get_all(
-			"DA Kebele Assignment",
-			filters={field: ("in", areas), "state": "Effective"},
-			pluck="da_id",
-		)
-	)
-	return [
-		da for da in registry_client.list_das() if getattr(da, field) in areas or da.da_id in assigned_da_ids
-	]
-
-
-def _own_areas(user: str, granted_key: str, grant_field: str) -> list[str]:
-	"""The user's Regions or Woredas: their DA Region / DA Woreda User Permissions first, else active RBAC grants."""
-	codes = sorted(granted_areas(user)[granted_key])
-	if codes:
-		return codes
-
-	grants = frappe.get_all(
-		"DA RBAC Assignment",
-		filters={"user": user, "active": 1, "effective_from": ("<=", today())},
-		or_filters=[["effective_to", "is", "not set"], ["effective_to", ">=", today()]],
-		pluck=grant_field,
-	)
-	return sorted({g for g in grants if g})
-
-
-def _own_kebeles(user: str, registry_client) -> list[str]:
-	"""The Kebeles the user is posted to: Effective assignments first, else their registry record."""
-	if not user or user == "Guest":
-		return []
-
-	assigned = frappe.get_all(
-		"DA Kebele Assignment",
-		filters={"state": "Effective", "user": user},
-		pluck="kebele",
-	)
-	kebeles = sorted({k for k in assigned if k})
-	if kebeles:
-		return kebeles
-
-	kebeles = set()
-	for da_id in _own_da_ids(user):
-		try:
-			da = registry_client.get_da(da_id)
-		except DANotFound:
-			continue
-		if da.kebele:
-			kebeles.add(da.kebele)
-	return sorted(kebeles)
-
-
-def _own_da_ids(user: str) -> list[str]:
-	"""The DA-IDs bound to the user: User.da_registry_id and active DA RBAC grants."""
-	da_ids = set()
-	bound = frappe.db.get_value("User", user, "da_registry_id")
-	if bound:
-		da_ids.add(bound)
-
-	grants = frappe.get_all(
-		"DA RBAC Assignment",
-		filters={"user": user, "role": C.ROLE_DA, "active": 1, "effective_from": ("<=", today())},
-		or_filters=[["effective_to", "is", "not set"], ["effective_to", ">=", today()]],
-		pluck="da_id",
-	)
-	da_ids.update(d for d in grants if d)
-	return sorted(da_ids)
+def _node_summary(node: dict | None) -> dict | None:
+	if not node:
+		return None
+	return {
+		"name": node.name,
+		"user": node.user,
+		"full_name": node.full_name,
+		"designation": node.designation,
+		"region": node.region,
+		"zone": node.zone,
+		"woreda": node.woreda,
+		"kebele": node.kebele,
+		"is_group": bool(node.is_group),
+	}
 
 
 def _da_reference_to_list_dict(da_ref) -> dict:

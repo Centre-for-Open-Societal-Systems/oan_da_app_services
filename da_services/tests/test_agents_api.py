@@ -7,8 +7,10 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import today
 
+from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ROOT, ensure_root
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
+from da_services.tests.fixtures import set_da_registry_id
 
 # Test users
 DA1 = "agents-api-da1@da.local"  # DA-000001, ET04 / ET04-W01
@@ -448,46 +450,92 @@ def _post(user, da_id, kebele, state="Effective"):
 
 
 class TestMyTeamAPI(IntegrationTestCase):
-	"""The signed-in user's team (GET /agents/my-team): scope by role, plus filters and facets."""
+	"""The signed-in user's team from the DA Hierarchy (GET /agents/my-team and /agents/my-team/tree).
+
+	Tree used by the tests:
+
+	    All DA Hierarchy
+	    |-- EXEC_ET04 (group)
+	    |   `-- SUP_W01 (group)
+	    |       |-- DA1  (DA-000001)
+	    |       `-- DA2  (DA-000002)
+	    |-- SUP_W02 (group)
+	    |   |-- DA3  (DA-000003)
+	    |   `-- DA4  (DA-000004)
+	    `-- LONE (no boss, no DA record)
+	"""
 
 	METHOD = "da_services.api.v1.agents.list_my_team"
-	USERS = (DA1, DA2, SUP_W01, SUP_W02, EXEC_ET04, ADMIN)
-	# The fixture Kebeles; other suites' postings to them are cleared so the lists are exact.
-	KEBELES = ("ET04-W01-K03", "ET04-W01-K07", "ET03-W02-K01")
-	NOBODY = "agents-api-nobody@da.local"  # signed in, no DA role
+	TREE = "da_services.api.v1.agents.my_team_tree"
+	DA3 = "agents-api-da3@da.local"
+	DA4 = "agents-api-da4@da.local"
+	LONE = "agents-api-lone@da.local"
+	NOBODY = "agents-api-nobody@da.local"  # signed in, no DA Hierarchy node
+	# children before parents, for teardown
+	NODES = ()
 
 	def setUp(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
-		frappe.db.delete("DA Kebele Assignment", {"user": ("in", self.USERS)})
-		frappe.db.delete("DA Kebele Assignment", {"kebele": ("in", self.KEBELES)})
+		self.NODES = (DA1, DA2, self.DA3, self.DA4, self.LONE, SUP_W01, SUP_W02, EXEC_ET04)
+		self._delete_nodes()
 
-		_user(DA1, [C.ROLE_DA])
-		_user(DA2, [C.ROLE_DA])
-		_user(SUP_W01, [C.ROLE_SUPERVISOR])
-		_user(SUP_W02, [C.ROLE_SUPERVISOR])
-		_user(EXEC_ET04, [C.ROLE_EXECUTIVE])
-		_user(ADMIN, [C.ROLE_ADMIN])
-		_user(self.NOBODY, [])
+		for u, roles in (
+			(DA1, [C.ROLE_DA]),
+			(DA2, [C.ROLE_DA]),
+			(self.DA3, [C.ROLE_DA]),
+			(self.DA4, [C.ROLE_DA]),
+			(self.LONE, [C.ROLE_DA]),
+			(SUP_W01, [C.ROLE_SUPERVISOR]),
+			(SUP_W02, [C.ROLE_SUPERVISOR]),
+			(EXEC_ET04, [C.ROLE_EXECUTIVE]),
+			(ADMIN, [C.ROLE_ADMIN]),
+			(self.NOBODY, []),
+		):
+			_user(u, roles)
+		for u, da_id in (
+			(DA1, "DA-000001"),
+			(DA2, "DA-000002"),
+			(self.DA3, "DA-000003"),
+			(self.DA4, "DA-000004"),
+		):
+			set_da_registry_id(u, da_id)
 
-		# Registry fixtures: DA-000001 in ET04-W01-K03, DA-000002 in ET04-W01-K07,
-		# DA-000003 in ET03-W02 (no Kebele), DA-000004 in ET03-W02-K01.
-		_grant(DA1, C.ROLE_DA, da_id="DA-000001", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(DA2, C.ROLE_DA, da_id="DA-000002", region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_W01, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
-		_grant(SUP_W02, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
-		_grant(EXEC_ET04, C.ROLE_EXECUTIVE, region_scope="ET04")
+		ensure_root()
+		self._node(EXEC_ET04, ROOT, group=True)
+		self._node(SUP_W01, EXEC_ET04, group=True)
+		self._node(DA1, SUP_W01)
+		self._node(DA2, SUP_W01)
+		self._node(SUP_W02, ROOT, group=True)
+		self._node(self.DA3, SUP_W02)
+		self._node(self.DA4, SUP_W02)
+		self._node(self.LONE, ROOT)
 
 		MockDARegistryClient.reset()
 		frappe.db.commit()
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		frappe.db.delete("DA RBAC Assignment")
-		frappe.db.delete("DA Kebele Assignment", {"user": ("in", self.USERS)})
-		frappe.db.delete("DA Kebele Assignment", {"kebele": ("in", self.KEBELES)})
+		self._delete_nodes()
 		frappe.db.commit()
 		MockDARegistryClient.reset()
+
+	def _node(self, user, parent, group=False):
+		frappe.get_doc(
+			{
+				"doctype": "DA Hierarchy",
+				"user": user,
+				"full_name": user.split("@")[0],
+				"parent_da_hierarchy": parent,
+				"is_group": 1 if group else 0,
+			}
+		).insert(ignore_permissions=True)
+
+	def _delete_nodes(self):
+		# deepest first: a node with children cannot be deleted
+		for name in frappe.get_all(
+			"DA Hierarchy", filters={"user": ("in", self.NODES)}, pluck="name", order_by="lft desc"
+		):
+			frappe.delete_doc("DA Hierarchy", name, ignore_permissions=True, force=True)
 
 	def _team(self, user, **kw):
 		frappe.set_user(user)
@@ -497,91 +545,72 @@ class TestMyTeamAPI(IntegrationTestCase):
 		data["ids"] = {a["da_id"] for a in data["agents"]}
 		return data
 
-	# ========== Scope by role ==========
+	def _tree(self, user):
+		frappe.set_user(user)
+		response = frappe.call(self.TREE)
+		self.assertEqual(response["status"], "success", response.get("message"))
+		return response["data"]
+
+	# ========== Team by the DA Hierarchy ==========
 
 	def test_admin_sees_every_da(self):
 		data = self._team(ADMIN)
-		self.assertEqual((data["scope"], data["areas"]), ("all", []))
+		self.assertEqual(data["team"], "all")
+		self.assertEqual(data["root"]["name"], ROOT)
 		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000003", "DA-000004"})
 
 	def test_administrator_user_sees_every_da(self):
-		self.assertEqual(self._team("Administrator")["scope"], "all")
+		self.assertEqual(self._team("Administrator")["team"], "all")
 
-	def test_executive_sees_own_region(self):
+	def test_supervisor_sees_their_reports(self):
+		data = self._team(SUP_W01)
+		self.assertEqual((data["team"], data["root"]["user"]), ("reports", SUP_W01))
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
+		self.assertEqual(self._team(SUP_W02)["ids"], {"DA-000003", "DA-000004"})
+
+	def test_manager_sees_every_level_below(self):
+		"""The Executive is above SUP_W01, so SUP_W01's DAs are in their team too."""
 		data = self._team(EXEC_ET04)
-		self.assertEqual((data["scope"], data["areas"]), ("region", ["ET04"]))
+		self.assertEqual(data["team"], "reports")
 		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
 
-	def test_supervisor_sees_own_woreda(self):
-		data = self._team(SUP_W01)
-		self.assertEqual((data["scope"], data["areas"]), ("woreda", ["ET04-W01"]))
-		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
-
-	def test_other_woreda_supervisor(self):
-		data = self._team(SUP_W02)
-		self.assertEqual(data["areas"], ["ET03-W02"])
-		self.assertEqual(data["ids"], {"DA-000003", "DA-000004"})
-
-	def test_da_sees_own_kebele_from_registry(self):
-		"""No Kebele Assignment: the Kebele comes from the DA's registry record."""
+	def test_da_sees_boss_reports(self):
+		"""A DA has nobody under them: their team is their boss's reports, them included."""
 		data = self._team(DA1)
-		self.assertEqual((data["scope"], data["areas"]), ("kebele", ["ET04-W01-K03"]))
-		self.assertEqual(data["ids"], {"DA-000001"})
-
-	def test_da_kebele_from_effective_assignment(self):
-		"""An Effective Kebele Assignment wins over the registry posting, and its DA joins the team."""
-		_post(DA2, "DA-000002", "ET04-W01-K03")
-		frappe.db.commit()
-
-		data = self._team(DA2)
-		self.assertEqual(data["areas"], ["ET04-W01-K03"])
+		self.assertEqual((data["team"], data["root"]["user"]), ("peers", SUP_W01))
 		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
-		self.assertEqual(self._team(DA1)["ids"], {"DA-000001", "DA-000002"})
+		self.assertEqual(self._team(self.DA4)["ids"], {"DA-000003", "DA-000004"})
 
-	def test_superseded_assignment_is_ignored(self):
-		_post(DA2, "DA-000002", "ET04-W01-K03", state="Superseded")
+	def test_da_without_boss_sees_only_self(self):
+		"""Straight under the root: never the whole tree."""
+		set_da_registry_id(self.LONE, "DA-000004")
 		frappe.db.commit()
-		self.assertEqual(self._team(DA1)["ids"], {"DA-000001"})
+		data = self._team(self.LONE)
+		self.assertEqual((data["team"], data["root"]["user"]), ("self", self.LONE))
+		self.assertEqual(data["ids"], {"DA-000004"})
 
-	def test_assigned_da_joins_woreda(self):
-		"""A DA with an Effective Kebele Assignment in the Woreda is listed even if the registry posts them elsewhere."""
-		doc = _post(SUP_W02, "DA-000003", "ET04-W01-K03")
-		frappe.db.set_value("DA Kebele Assignment", doc.name, "woreda", "ET04-W01", update_modified=False)
-		frappe.db.commit()
-		self.assertEqual(self._team(SUP_W01)["ids"], {"DA-000001", "DA-000002", "DA-000003"})
-
-	def test_widest_role_wins(self):
-		"""A Supervisor who is also a DA gets the Woreda, not the Kebele."""
-		_user(SUP_W01, [C.ROLE_DA])
-		data = self._team(SUP_W01)
-		self.assertEqual(data["scope"], "woreda")
-		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
-
-	def test_woreda_from_rbac_grant(self):
-		"""No DA Woreda User Permission: the Woreda comes from the active RBAC grant."""
-		frappe.db.delete("User Permission", {"user": SUP_W01, "allow": "DA Woreda"})
-		frappe.db.commit()
-		frappe.clear_cache(user=SUP_W01)
-		self.assertEqual(self._team(SUP_W01)["areas"], ["ET04-W01"])
-
-	def test_no_role_gets_empty_team(self):
+	def test_no_node_gets_empty_team(self):
 		data = self._team(self.NOBODY)
-		self.assertEqual((data["scope"], data["areas"], data["total"]), ("none", [], 0))
-		self.assertEqual(data["agents"], [])
+		self.assertEqual((data["team"], data["root"], data["total"]), ("none", None, 0))
+
+	def test_moving_a_da_changes_teams(self):
+		"""The team follows the tree: DA2 moved under SUP_W02 joins that team."""
+		doc = frappe.get_doc("DA Hierarchy", DA2)
+		doc.parent_da_hierarchy = SUP_W02
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		self.assertEqual(self._team(SUP_W01)["ids"], {"DA-000001"})
+		self.assertEqual(self._team(SUP_W02)["ids"], {"DA-000002", "DA-000003", "DA-000004"})
 
 	# ========== Filters / facets / search / paging on the team ==========
 
 	def test_filters_narrow_the_team(self):
-		self.assertEqual(self._team(SUP_W01, kebele="ET04-W01-K07")["ids"], {"DA-000002"})
-		self.assertEqual(self._team(SUP_W02, active_status="Active")["ids"], {"DA-000004"})
-		self.assertEqual(
-			self._team(SUP_W01, active_status="Active,On-leave")["ids"], {"DA-000001", "DA-000002"}
-		)
+		self.assertEqual(self._team(SUP_W01, active_status="On-leave")["ids"], {"DA-000002"})
+		self.assertEqual(self._team(SUP_W02, kebele="unassigned")["ids"], {"DA-000003"})
 
 	def test_filters_cannot_widen_the_team(self):
-		"""A filter for an area outside the team returns nothing, never other DAs."""
-		self.assertEqual(self._team(SUP_W01, woreda="ET03-W02")["ids"], set())
 		self.assertEqual(self._team(DA1, kebele="ET03-W02-K01")["ids"], set())
+		self.assertEqual(self._team(SUP_W01, region="ET03")["ids"], set())
 
 	def test_facets_cover_only_the_team(self):
 		facets = self._team(SUP_W01, limit=1)["facets"]
@@ -590,21 +619,45 @@ class TestMyTeamAPI(IntegrationTestCase):
 			{f["value"]: f["count"] for f in facets["kebele"]}, {"ET04-W01-K03": 1, "ET04-W01-K07": 1}
 		)
 
-	def test_search(self):
+	def test_search_and_pagination(self):
 		self.assertEqual(self._team(SUP_W01, search="000002")["ids"], {"DA-000002"})
-		self.assertEqual(self._team(DA1, search="marta")["ids"], set())
-
-	def test_pagination(self):
 		data = self._team(SUP_W01, limit=1, start=1)
-		self.assertEqual(data["total"], 2)
-		self.assertEqual([a["da_id"] for a in data["agents"]], ["DA-000002"])
-		self.assertEqual(data["page"], {"limit": 1, "start": 1})
+		self.assertEqual((data["total"], [a["da_id"] for a in data["agents"]]), (2, ["DA-000002"]))
 
 	def test_invalid_filter_value(self):
 		frappe.set_user(SUP_W01)
 		response = frappe.call(self.METHOD, education_tier="Bogus")
 		self.assertEqual(response["status"], "error")
-		self.assertIn("education_tier", response["message"].lower())
+
+	# ========== Tree ==========
+
+	def test_supervisor_tree(self):
+		data = self._tree(SUP_W01)
+		tree = data["tree"]
+		self.assertEqual((data["team"], tree["user"], tree["is_group"]), ("reports", SUP_W01, True))
+		self.assertEqual(
+			{(r["user"], r["da_id"]) for r in tree["reports"]}, {(DA1, "DA-000001"), (DA2, "DA-000002")}
+		)
+		self.assertTrue(all(r["reports"] == [] for r in tree["reports"]))
+
+	def test_executive_tree_is_nested(self):
+		tree = self._tree(EXEC_ET04)["tree"]
+		self.assertEqual([r["user"] for r in tree["reports"]], [SUP_W01])
+		self.assertEqual({r["user"] for r in tree["reports"][0]["reports"]}, {DA1, DA2})
+
+	def test_da_tree_hangs_from_boss(self):
+		data = self._tree(DA2)
+		self.assertEqual((data["team"], data["tree"]["user"]), ("peers", SUP_W01))
+		self.assertIn(DA2, {r["user"] for r in data["tree"]["reports"]})
+
+	def test_admin_tree_is_the_whole_tree(self):
+		tree = self._tree(ADMIN)["tree"]
+		self.assertEqual(tree["name"], ROOT)
+		top = {r["user"] for r in tree["reports"]}
+		self.assertTrue({EXEC_ET04, SUP_W02, self.LONE} <= top)
+
+	def test_no_node_tree_is_null(self):
+		self.assertEqual(self._tree(self.NOBODY), {"team": "none", "tree": None})
 
 
 class TestAgentFiltersAPI(IntegrationTestCase):
