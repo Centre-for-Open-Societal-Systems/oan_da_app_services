@@ -484,7 +484,7 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
-| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only; `GET /attendance-punches?date=` → daily rows with `user_name`, `kebele_name`, `check_in`/`check_out`, `hours_logged` | ours: DA Attendance Punch |
+| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only; `GET /attendance-punches?user=&from=&to=` → daily rows with `user_name`, `kebele`, `check_in`/`check_out`, `hours_logged` | ours: DA Attendance Punch |
 
 Supervisor-side approvals for all of the above are the `ApprovalRequest` queue (`/approvals`): `kind
 (Onboarding | Profile change | Assignment | Specialization)`, `data[] {label, value, verified}`, `trail[]`,
@@ -496,7 +496,7 @@ workflow pattern (data-model 6.1).
 
 DA / Supervisor / Executive punch-in and punch-out. One `DA Attendance Punch` row per action.
 GET today returns `next_action` for the button; POST does not enforce alternation (message-only response).
-GET list returns one daily row per user with punches (names + hours); no zero-punch roster.
+GET list returns one daily row per user with punches (`user_name` + hours; kebele id only); no zero-punch roster.
 Contract: [attendance-punches-integration.md](attendance-punches-integration.md),
 [attendance-punches-frontend.md](attendance-punches-frontend.md).
 Postman: `postman/AttendancePunches/`.
@@ -505,7 +505,7 @@ Postman: `postman/AttendancePunches/`.
 |---|---|---|
 | Today status / button | `GET /attendance-punches/today` → `next_action` | ours |
 | Punch In / Punch Out | `POST /attendance-punches {action, punched_date, punched_time, geo?, lat?, lng?}` | ours |
-| Team / self attendance list | `GET /attendance-punches?user=` (required) + `date` or `from`+`to` + optional geo/`da_id` → `{user_name, kebele_name, status, check_in, check_out, hours_logged}` | ours |
+| Team / self attendance list | `GET /attendance-punches?user=` (required) + `from`+`to` (omit both → today) + optional geo/`da_id` → `{user_name, kebele, status, check_in, check_out, hours_logged}` | ours |
 
 ### 2.19 Notifications
 

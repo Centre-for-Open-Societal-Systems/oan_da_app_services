@@ -69,11 +69,10 @@ def create(**kwargs):
 @frappe.whitelist()
 @handle_api_errors
 def list_attendance(**kwargs):
-	"""Daily attendance for one user (required). Optional date/geo filters via get_list."""
+	"""Daily attendance for one user (required). Optional from/to + geo filters via get_list."""
 	q = {
 		n: (frappe.form_dict or {}).get(n, kwargs.get(n))
 		for n in (
-			"date",
 			"from",
 			"to",
 			"da_id",
@@ -90,7 +89,6 @@ def list_attendance(**kwargs):
 	start = int(q.get("start") or 0)
 	rows, total = svc.list_attendance(
 		user=(q.get("user") or "").strip(),
-		date=q.get("date"),
 		from_date=q.get("from"),
 		to_date=q.get("to"),
 		da_id=q.get("da_id"),

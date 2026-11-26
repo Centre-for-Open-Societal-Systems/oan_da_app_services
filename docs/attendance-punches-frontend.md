@@ -16,8 +16,8 @@ After midnight (site date), GET returns `next_action: "Punch In"` with null id/d
 ## Sequence (attendance list / Team attendance)
 
 1. SSO login → Bearer.
-2. Load table: `GET /api/v1/da-services/attendance-punches?user=<User>&date=` (or `from`+`to` for Week / Month / Custom — both required). **`user` is required** (DA self or the DA the Supervisor is viewing).
-3. Render one row per item: `user_name`, `kebele_name`, `status`, `check_in`, `check_out`, `hours_logged`.
+2. Load table: `GET /api/v1/da-services/attendance-punches?user=<User>&from=&to=` (both `from`/`to` for a day or range; omit both → site today). **`user` is required** (DA self or the DA the Supervisor is viewing).
+3. Render one row per item: `user_name`, `kebele` (resolve display name in the FE), `status`, `check_in`, `check_out`, `hours_logged`.
 4. Optional filters (get_list only): `da_id`, `region`, `zone`, `woreda`, `kebele`. Out-of-scope filters return an empty list.
 5. Only days with at least one punch appear — do not expect “Not checked in” rows from this API.
 
@@ -40,7 +40,7 @@ After midnight (site date), GET returns `next_action: "Punch In"` with null id/d
 | UI (Figma) | API field | Notes |
 | --- | --- | --- |
 | Agent | `user_name` | From `User.full_name` (not the IAM user id) |
-| Kebele | `kebele_name` | From `DA Kebele.kebele_name` |
+| Kebele | `kebele` | Link id; FE maps to display name |
 | Status | `status` | `"Checked In"` when a Punch In exists that day |
 | Check-in | `check_in` | Earliest Punch In `HH:MM:SS` |
 | Check-out | `check_out` | Latest Punch Out; `null` if still open |
@@ -67,7 +67,6 @@ When none today: `next_action` is `"Punch In"` and `id` / `punched_date` / `punc
   "user_name": "Tadesse Alemu",
   "da_id": "DA-5167618350",
   "kebele": "ET01010101",
-  "kebele_name": "Dambi Dira",
   "punched_date": "2026-11-17",
   "status": "Checked In",
   "check_in": "08:51:00",

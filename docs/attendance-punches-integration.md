@@ -62,8 +62,7 @@ Query (map to `frappe.get_list` filters only):
 | Param | Notes |
 | --- | --- |
 | `user` | **Required.** Frappe User Link whose attendance to list. Missing/blank → 400 `user is required.` |
-| `date` | Single `punched_date`. If neither `date` nor `from`+`to`, defaults to **site today**. |
-| `from`, `to` | Inclusive date range on `punched_date`. **Both required** together; one alone → 400. |
+| `from`, `to` | Inclusive range on `punched_date`. **Both required** together (use the same day for a single day); one alone → 400. Omit both → **site today**. |
 | `da_id` | Optional narrower on `da_id` |
 | `region`, `zone`, `woreda`, `kebele` | Geo Link filters; out-of-grant → empty page |
 | `limit`, `start` | Page of **daily rows** (default 50 / 0; limit clamped 1..500) |
@@ -74,7 +73,7 @@ Pairing:
 - `check_out` = latest `Punch Out` that day
 - `hours_logged` = check-out − check-in as `Nh Mm` when both exist; otherwise `null`
 - `status` = `"Checked In"` when `check_in` is set
-- `user_name` from `User.full_name`; `kebele_name` from `DA Kebele.kebele_name`
+- `user_name` from `User.full_name`; `kebele` is the Link id (FE resolves the display name)
 
 Example `data[]` item:
 
@@ -84,7 +83,6 @@ Example `data[]` item:
   "user_name": "Tadesse Alemu",
   "da_id": "DA-5167618350",
   "kebele": "ET01010101",
-  "kebele_name": "Dambi Dira",
   "punched_date": "2026-11-17",
   "status": "Checked In",
   "check_in": "08:51:00",

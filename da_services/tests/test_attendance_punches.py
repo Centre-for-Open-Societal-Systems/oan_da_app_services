@@ -232,7 +232,7 @@ class TestAttendancePunches(IntegrationTestCase):
 			woreda=self.geo["woreda"],
 			kebele=self.geo["kebele"],
 		)
-		rows, total = svc.list_attendance(date=day, user=DA_USER)
+		rows, total = svc.list_attendance(from_date=day, to_date=day, user=DA_USER)
 		self.assertEqual(total, 1)
 		self.assertEqual(len(rows), 1)
 		row = rows[0]
@@ -240,8 +240,7 @@ class TestAttendancePunches(IntegrationTestCase):
 		self.assertEqual(row["user_name"], "Tadesse Alemu")
 		self.assertEqual(row["da_id"], DA_ID)
 		self.assertEqual(row["kebele"], self.geo["kebele"])
-		kebele_name = frappe.db.get_value("DA Kebele", self.geo["kebele"], "kebele_name")
-		self.assertEqual(row["kebele_name"], kebele_name)
+		self.assertNotIn("kebele_name", row)
 		self.assertEqual(row["punched_date"], str(day))
 		self.assertEqual(row["status"], "Checked In")
 		self.assertEqual(row["check_in"], "09:00:00")
@@ -257,7 +256,7 @@ class TestAttendancePunches(IntegrationTestCase):
 			punched_time="08:51:00",
 			kebele=self.geo["kebele"],
 		)
-		rows, total = svc.list_attendance(date=day, user=DA_USER)
+		rows, total = svc.list_attendance(from_date=day, to_date=day, user=DA_USER)
 		self.assertEqual(total, 1)
 		row = rows[0]
 		self.assertEqual(row["status"], "Checked In")
@@ -268,6 +267,7 @@ class TestAttendancePunches(IntegrationTestCase):
 	def test_list_date_filter_excludes_other_days(self):
 		frappe.set_user(DA_USER)
 		yesterday = add_days(today(), -1)
+		day = today()
 		svc.create_punch(
 			action="Punch In",
 			punched_date=yesterday,
@@ -276,13 +276,13 @@ class TestAttendancePunches(IntegrationTestCase):
 		)
 		svc.create_punch(
 			action="Punch In",
-			punched_date=today(),
+			punched_date=day,
 			punched_time="11:00:00",
 			kebele=self.geo["kebele"],
 		)
-		rows, total = svc.list_attendance(date=today(), user=DA_USER)
+		rows, total = svc.list_attendance(from_date=day, to_date=day, user=DA_USER)
 		self.assertEqual(total, 1)
-		self.assertEqual(rows[0]["punched_date"], str(today()))
+		self.assertEqual(rows[0]["punched_date"], str(day))
 		self.assertEqual(rows[0]["check_in"], "11:00:00")
 
 	def test_list_out_of_grant_kebele_filter_empty(self):
@@ -294,16 +294,19 @@ class TestAttendancePunches(IntegrationTestCase):
 		frappe.cache.hdel("user_permissions", DA_USER)
 
 		frappe.set_user(DA_USER)
+		day = today()
 		svc.create_punch(
 			action="Punch In",
-			punched_date=today(),
+			punched_date=day,
 			punched_time="09:00:00",
 			region=self.geo["region"],
 			zone=self.geo["zone"],
 			woreda=self.geo["woreda"],
 			kebele=self.geo["kebele"],
 		)
-		rows, total = svc.list_attendance(user=DA_USER, date=today(), kebele=self.geo["foreign_kebele"])
+		rows, total = svc.list_attendance(
+			user=DA_USER, from_date=day, to_date=day, kebele=self.geo["foreign_kebele"]
+		)
 		self.assertEqual(total, 0)
 		self.assertEqual(rows, [])
 
@@ -327,7 +330,9 @@ class TestAttendancePunches(IntegrationTestCase):
 		svc.create_punch(action="Punch In", punched_date=yesterday, punched_time="09:00:00", **geo)
 		svc.create_punch(action="Punch In", punched_date=day, punched_time="10:00:00", **geo)
 
-		by_kebele, n = svc.list_attendance(user=DA_USER, date=day, kebele=self.geo["kebele"])
+		by_kebele, n = svc.list_attendance(
+			user=DA_USER, from_date=day, to_date=day, kebele=self.geo["kebele"]
+		)
 		self.assertEqual(n, 1)
 		self.assertEqual(by_kebele[0]["kebele"], self.geo["kebele"])
 		self.assertEqual(by_kebele[0]["check_in"], "10:00:00")
@@ -336,7 +341,9 @@ class TestAttendancePunches(IntegrationTestCase):
 		self.assertEqual(n, 2)
 		self.assertEqual({r["punched_date"] for r in by_range}, {str(yesterday), str(day)})
 
-		by_woreda, n = svc.list_attendance(user=DA_USER, date=day, woreda=self.geo["woreda"])
+		by_woreda, n = svc.list_attendance(
+			user=DA_USER, from_date=day, to_date=day, woreda=self.geo["woreda"]
+		)
 		self.assertEqual(n, 1)
 		self.assertEqual(by_woreda[0]["da_id"], DA_ID)
 
@@ -344,7 +351,7 @@ class TestAttendancePunches(IntegrationTestCase):
 		frappe.set_user(DA2_USER)
 		svc.create_punch(action="Punch In", punched_date=day, punched_time="11:00:00", **geo)
 		frappe.set_user("Administrator")
-		only_da, n = svc.list_attendance(user=DA_USER, date=day)
+		only_da, n = svc.list_attendance(user=DA_USER, from_date=day, to_date=day)
 		self.assertEqual(n, 1)
 		self.assertEqual(only_da[0]["user"], DA_USER)
 

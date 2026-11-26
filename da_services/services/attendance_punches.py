@@ -13,8 +13,6 @@ import frappe
 from frappe import _
 from frappe.utils import get_time, getdate
 
-from da_services.services import geo
-
 DOCTYPE = "DA Attendance Punch"
 LIST_FIELDS = [
 	"name",
@@ -58,7 +56,6 @@ def get_today_latest() -> dict:
 def list_attendance(
 	*,
 	user: str,
-	date=None,
 	from_date=None,
 	to_date=None,
 	da_id: str | None = None,
@@ -71,16 +68,15 @@ def list_attendance(
 ) -> tuple[list[dict], int]:
 	"""Daily attendance for one user, scoped by Role DocPerm + User Permissions.
 
-	``user`` is required from the FE. Other query args only narrow get_list filters.
+	``user`` is required from the FE. Date range uses ``from`` + ``to`` only
+	(defaults to site today when both omitted). Other query args only narrow get_list.
 	"""
 	user = user.strip()
 	if not user:
 		frappe.throw(_("user is required."), frappe.ValidationError)
 
 	filters: dict = {"user": user}
-	if date:
-		filters["punched_date"] = getdate(date)
-	elif from_date and to_date:
+	if from_date and to_date:
 		filters["punched_date"] = ("between", [getdate(from_date), getdate(to_date)])
 	elif from_date or to_date:
 		frappe.throw(_("from and to are both required for a date range."), frappe.ValidationError)
@@ -137,7 +133,6 @@ def list_attendance(
 			row["check_out"] = punch.get("punched_time")
 
 	user_name = frappe.db.get_value("User", user, "full_name")
-	kebele_names = geo.display_names("DA Kebele", {r["kebele"] for r in by_day.values() if r["kebele"]})
 
 	rows = []
 	for r in by_day.values():
@@ -161,7 +156,6 @@ def list_attendance(
 				"user_name": user_name,
 				"da_id": r["da_id"],
 				"kebele": r["kebele"],
-				"kebele_name": kebele_names.get(r["kebele"]) if r["kebele"] else None,
 				"punched_date": r["punched_date"],
 				"status": "Checked In" if check_in else None,
 				"check_in": check_in.strftime("%H:%M:%S") if check_in else None,

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-attendance-punches",
     "name": "OAN DA Attendance Punches",
-    "description": "Punch-in / punch-out and daily attendance list for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n4. GET list → daily rows with user_name, kebele_name, check_in/out, hours_logged\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm + User Permissions on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET today always returns {next_action, id, punched_date, punched_time}\n- GET list returns one row per user per punched_date (punch-derived only)\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
+    "description": "Punch-in / punch-out and daily attendance list for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n4. GET list → daily rows with user_name, kebele, check_in/out, hours_logged (kebele display name is FE)\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm + User Permissions on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET today always returns {next_action, id, punched_date, punched_time}\n- GET list returns one row per user per punched_date (punch-derived only); date filter is from+to only\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -123,8 +123,10 @@
                   "const d = new Date();",
                   "const pad = (n) => String(n).padStart(2, \"0\");",
                   "const date = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate());",
-                  "pm.collectionVariables.set(\"punched_date\", date);",
-                  "pm.environment.set(\"punched_date\", date);"
+                  "pm.collectionVariables.set(\"from_date\", date);",
+                  "pm.collectionVariables.set(\"to_date\", date);",
+                  "pm.environment.set(\"from_date\", date);",
+                  "pm.environment.set(\"to_date\", date);"
                 ]
               }
             },
@@ -142,7 +144,8 @@
                   "if ((body.data || []).length) {",
                   "  const row = body.data[0];",
                   "  pm.test(\"row has user_name and hours fields\", function () {",
-                  "    pm.expect(row).to.include.keys([\"user\", \"user_name\", \"kebele\", \"kebele_name\", \"status\", \"check_in\", \"check_out\", \"hours_logged\", \"punched_date\"]);",
+                  "    pm.expect(row).to.include.keys([\"user\", \"user_name\", \"kebele\", \"status\", \"check_in\", \"check_out\", \"hours_logged\", \"punched_date\"]);",
+                  "    pm.expect(row).to.not.have.property(\"kebele_name\");",
                   "  });",
                   "}"
                 ]
@@ -153,12 +156,13 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&date={{punched_date}}&limit=50&start=0",
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from={{from_date}}&to={{to_date}}&limit=50&start=0",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "da-services", "attendance-punches"],
               "query": [
                 { "key": "user", "value": "{{user}}" },
-                { "key": "date", "value": "{{punched_date}}" },
+                { "key": "from", "value": "{{from_date}}" },
+                { "key": "to", "value": "{{to_date}}" },
                 { "key": "limit", "value": "50" },
                 { "key": "start", "value": "0" },
                 { "key": "da_id", "value": "", "disabled": true },
@@ -168,7 +172,7 @@
                 { "key": "kebele", "value": "{{kebele}}", "disabled": true }
               ]
             },
-            "description": "Daily attendance for required user. Optional: date | from+to, da_id, region, zone, woreda, kebele, limit, start."
+            "description": "Daily attendance for required user. Date filter: from+to only (same day for a single day). Optional: da_id, region, zone, woreda, kebele, limit, start."
           }
         },
         {
@@ -188,16 +192,17 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&date={{punched_date}}&kebele={{kebele}}",
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from={{from_date}}&to={{to_date}}&kebele={{kebele}}",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "da-services", "attendance-punches"],
               "query": [
                 { "key": "user", "value": "{{user}}" },
-                { "key": "date", "value": "{{punched_date}}" },
+                { "key": "from", "value": "{{from_date}}" },
+                { "key": "to", "value": "{{to_date}}" },
                 { "key": "kebele", "value": "{{kebele}}" }
               ]
             },
-            "description": "Required user + kebele get_list filter."
+            "description": "Required user + from/to + kebele get_list filter."
           }
         },
         {
