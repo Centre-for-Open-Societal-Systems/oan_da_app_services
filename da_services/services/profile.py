@@ -234,6 +234,8 @@ def _profile(ref: DAReference) -> dict:
 		"photo": ref.photo_url,
 		# DA Registry #66: view only here; changes to these lists come later.
 		"qualifications": ref.qualifications,
+		"family_members": ref.dependents,
+		# The earlier name of family_members, kept until the portal reads the new one.
 		"dependents": ref.dependents,
 		# The main education record's level and passout year, as the registry copies them
 		# onto the DA record: read only, changed through the education records.
@@ -269,6 +271,12 @@ def _profile(ref: DAReference) -> dict:
 		"zone_name": ref.zone_name,
 		"woreda_name": ref.woreda_name,
 		"kebele_name": ref.kebele_name,
+		# The record itself: the registry's id and status, its last approval and its origin
+		"internal_record_id": ref.record_id,
+		"record_status": ref.record_status,
+		"last_approved_at": ref.last_approved_at,
+		"last_approved_by": ref.last_approved_by,
+		"source": ref.source,
 	}
 
 
@@ -286,13 +294,18 @@ def _reports_to_person(da_id: str | None) -> tuple[str | None, str | None]:
 	return boss.full_name or None, boss.position
 
 
-def _profile_view(ref: DAReference) -> dict:
-	open_rows = frappe.get_all(
+def _open_requests(da_id: str) -> list[dict]:
+	"""The DA's change requests that are still open, newest first."""
+	rows = frappe.get_all(
 		DOCTYPE,
-		filters={"da_id": ref.da_id, "status": ("in", list(OPEN_STATES))},
+		filters={"da_id": da_id, "status": ("in", list(OPEN_STATES))},
 		fields=FIELDS,
 		order_by="creation desc",
 	)
+	return serialize_many(rows)
+
+
+def _profile_view(ref: DAReference) -> dict:
 	profile = _profile(ref)
 	if not profile["photo"] and ref.photo_document_id:
 		profile["photo"] = _document_url(ref.photo_document_id)
@@ -307,7 +320,56 @@ def _profile_view(ref: DAReference) -> dict:
 		"note_min_length": profile_fields.NOTE_MIN_LENGTH,
 		"list_options": profile_lists.form_options(get_client()),
 		"locked_fields": [],
-		"pending_requests": serialize_many(open_rows),
+		"pending_requests": _open_requests(ref.da_id),
+	}
+
+
+def _own_da() -> DAReference:
+	"""The signed-in user's own DA record, read from the registry.
+
+	Who the caller is comes from their User alone: ``da_registry_id``, which IAM fills
+	from the ``da_id`` claim at sign-in. Nothing the caller sends is used, so a DA can only
+	reach their own record. The claim carries the registry's own id of the record (read
+	directly, one call); a DA-ID (``DA-...``), as a User set by hand may hold, is looked
+	up instead. 404 for a user with no such id (an account that is not a DA) and for an
+	id the registry does not know.
+	"""
+	own_id = (frappe.db.get_value("User", frappe.session.user, "da_registry_id") or "").strip()
+	if not own_id:
+		raise frappe.DoesNotExistError(_("Your account is not linked to a DA Registry record."))
+	client = get_client()
+	try:
+		if own_id.upper().startswith("DA-"):
+			return client.get_da(own_id)
+		return client.get_da_by_record_id(own_id)
+	except DANotFound:
+		raise frappe.DoesNotExistError(_("Your record was not found in the DA Registry.")) from None
+	except DARegistryUnavailable:
+		frappe.throw(_("The DA Registry is unavailable. Try again shortly."), frappe.ValidationError)
+
+
+def my_profile() -> dict:
+	"""The signed-in DA's own profile, as the DA Registry holds it now, with open requests.
+
+	One registry call (``get_tab_records`` by the record id on the User): the DA's record
+	with its education records and family members. Nothing else is asked of the registry
+	here, so the person the DA reports to is their DA-ID only, and a certificate carries its
+	name and ``document_id``; GET /profile/documents/<document_id> gives the link when the
+	DA opens one. The photo's link comes with the record.
+
+	``validation`` says what the registry answered for the caller's record: it was found
+	(or this call is a 404), its status, and whether it is in service. What a DA may ask
+	to change is not answered here.
+	"""
+	ref = _own_da()
+	return {
+		"profile": _profile(ref),
+		"pending_requests": _open_requests(ref.da_id),
+		"validation": {
+			"record_found": True,
+			"record_status": ref.record_status,
+			"is_active": ref.record_status == "ACTIVE",
+		},
 	}
 
 
@@ -347,10 +409,12 @@ def _document_url(document_id: str) -> str | None:
 def document_link(document_id: str, *, da_id: str | None = None) -> dict:
 	"""A short-lived link to one of a DA's registry documents: a certificate or the photo.
 
-	The caller names the DA (``da_id``). Registry documents are not scoped. Only a document on that DA's record opens, so a guessed id leads nowhere.
+	The caller names the DA (``da_id``), or names none for their own record. Registry
+	documents are not scoped. Only a document on that DA's record opens, so a guessed id
+	leads nowhere.
 	"""
 	target = (da_id or "").strip()
-	ref = _named_da(target)  # scope: the registry's own posting of the DA
+	ref = _named_da(target) if target else _own_da()
 	names = _documents_of(ref)
 	if document_id not in names:
 		raise frappe.DoesNotExistError(_("DA {0} has no document {1}.").format(ref.da_id, document_id))

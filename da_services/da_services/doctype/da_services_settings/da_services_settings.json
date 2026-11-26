@@ -13,6 +13,7 @@
   "column_break_cciq",
   "da_registry_domain",
   "da_registry_form_register_id",
+  "da_registry_tab_id",
   "grievance_base_url",
   "sec_master_sync",
   "master_sync_username",
@@ -69,6 +70,12 @@
    "fieldname": "da_registry_form_register_id",
    "fieldtype": "Data",
    "label": "DA Registry Form Register ID"
+  },
+  {
+   "description": "Tab of the DA register that holds a DA's record with its education records and family members (the tab_id of register-data/get_tab_records), e.g. da_details_tab.",
+   "fieldname": "da_registry_tab_id",
+   "fieldtype": "Data",
+   "label": "DA Registry Tab ID"
   },
   {
    "description": "Grievance APISIX gateway host only (e.g. https://grievance-service.development.oanstaging.com). Public paths are /v1/... rewritten to /api/v1/... . Do not use the Desk hostname and do not append /api.",

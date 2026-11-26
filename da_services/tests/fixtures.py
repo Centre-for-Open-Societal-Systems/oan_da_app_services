@@ -327,6 +327,28 @@ from contextlib import contextmanager
 
 
 @contextmanager
+def da_registry_settings(domain: str | None, register_id: str | None, tab_id: str | None = "da_details_tab"):
+	"""Name the DA Registry in DA Services Settings for the block (the only place the HTTP
+	client reads its host, register id and tab id from; all three are required); what was
+	there comes back after."""
+	fields = ("da_registry_domain", "da_registry_form_register_id", "da_registry_tab_id")
+
+	def save(values):
+		doc = frappe.get_single("DA Services Settings")
+		for field, value in zip(fields, values, strict=True):
+			doc.set(field, value)
+		doc.save(ignore_permissions=True)
+
+	settings = frappe.get_single("DA Services Settings")
+	before = tuple(settings.get(field) for field in fields)
+	save((domain, register_id, tab_id))
+	try:
+		yield
+	finally:
+		save(before)
+
+
+@contextmanager
 def as_user(user: str):
 	"""Run the block signed in as `user`, then restore the previous session user."""
 	previous = frappe.session.user

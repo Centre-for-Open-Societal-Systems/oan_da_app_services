@@ -23,6 +23,7 @@ from da_services.integrations.da_registry.client import (
 from da_services.integrations.da_registry.http import DEFAULT_REGISTER_ID, HttpDARegistryClient
 from da_services.integrations.da_registry.schemas import ProfileUpdate
 from da_services.services import constants as C
+from da_services.tests.fixtures import da_registry_settings
 
 BASE = "https://staff-da.example"
 MASTER_DATA = "https://master-data.example"
@@ -261,6 +262,26 @@ class TestHttpDARegistryClient(IntegrationTestCase):
 		with self.assertRaises(DANotFound):
 			self.client.get_da("DA-9999999999")
 		self.assertFalse(self.client.validate_da_id("DA-9999999999"))
+
+	def test_get_da_by_record_id_reads_the_record_without_a_search(self):
+		self.registry.records["rec-1"].update(last_approved_by="iam-user-7", source="WEB_INTAKE")
+		ref = self.client.get_da_by_record_id("rec-1")
+		self.assertEqual((ref.da_id, ref.record_id, ref.record_status), ("DA-3821981536", "rec-1", "ACTIVE"))
+		self.assertEqual(
+			(ref.last_approved_at, ref.last_approved_by, ref.source),
+			("2026-10-30T08:07:31.627971", "iam-user-7", "WEB_INTAKE"),
+		)
+		self.assertEqual([c[0] for c in self.registry.calls], ["/register-data/get_tab_records"])
+
+	def test_the_tab_id_of_the_client_is_what_the_registry_is_asked_for(self):
+		self.client.tab_id = "another_tab"
+		self.client.get_da_by_record_id("rec-1")
+		payloads = [c[1] for c in self.registry.calls if c[0] == "/register-data/get_tab_records"]
+		self.assertEqual(payloads[-1]["tab_id"], "another_tab")
+
+	def test_unknown_record_id_raises_not_found(self):
+		with self.assertRaises(DANotFound):
+			self.client.get_da_by_record_id("no-such-record")
 
 	def test_list_das_filters_by_woreda_code_and_walks_every_page(self):
 		self.registry.records["rec-6"] = _record("DA-3333333333", "rec-6")
@@ -892,13 +913,63 @@ class TestUserTokenPassthrough(IntegrationTestCase):
 		keys = {
 			"da_registry_backend": "http",
 			"da_registry_auth": "user",
-			"da_registry_base_url": BASE,
 			"da_registry_keycloak": {},
 		}
-		with patch.dict(frappe.conf, keys):
+		with patch.dict(frappe.conf, keys), da_registry_settings(BASE, DEFAULT_REGISTER_ID):
 			from da_services.integrations.da_registry.client import get_client
 
 			self.assertEqual(get_client().auth_mode, "user")
+
+	def test_the_registry_is_named_in_da_services_settings_only(self):
+		"""Host, register id and tab id come from DA Services Settings. site_config.json is
+		not read for them, so a site that has not filled them in is told to."""
+		keys = {
+			"da_registry_backend": "http",
+			"da_registry_auth": "user",
+			"da_registry_base_url": "https://from-site-config.example",
+			"da_registry_register_id": "register-from-site-config",
+			"da_registry_keycloak": {},
+		}
+		with patch.dict(frappe.conf, keys):
+			with da_registry_settings(
+				"registry.settings.example/", "register-from-settings", "tab-from-settings"
+			):
+				client = HttpDARegistryClient.from_conf()
+				self.assertEqual(client.base_url, "https://registry.settings.example")
+				self.assertEqual(client.register_id, "register-from-settings")
+				self.assertEqual(client.tab_id, "tab-from-settings")
+
+			with da_registry_settings("http://registry.settings.example", "register-from-settings"):
+				client = HttpDARegistryClient.from_conf()
+				self.assertEqual(client.base_url, "http://registry.settings.example")
+
+			# every missing setting is named, and site_config.json is not offered instead
+			with da_registry_settings(None, None, None), self.assertRaises(DARegistryError) as ctx:
+				HttpDARegistryClient.from_conf()
+			self.assertEqual(
+				str(ctx.exception),
+				"DA Services Settings: set DA Registry Domain, DA Registry Form Register ID, DA Registry Tab ID",
+			)
+
+			with (
+				da_registry_settings("registry.settings.example", None),
+				self.assertRaises(DARegistryError) as ctx,
+			):
+				HttpDARegistryClient.from_conf()
+			self.assertEqual(str(ctx.exception), "DA Services Settings: set DA Registry Form Register ID")
+
+			# the tab id has no default either
+			with (
+				da_registry_settings("registry.settings.example", "register-from-settings", None),
+				self.assertRaises(DARegistryError) as ctx,
+			):
+				HttpDARegistryClient.from_conf()
+			self.assertEqual(str(ctx.exception), "DA Services Settings: set DA Registry Tab ID")
+			with (
+				da_registry_settings("registry.settings.example", "register-from-settings", "  "),
+				self.assertRaises(DARegistryError),
+			):
+				HttpDARegistryClient.from_conf()
 
 
 def _jwt_claims_iss(token):
