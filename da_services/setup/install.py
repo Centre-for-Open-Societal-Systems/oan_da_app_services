@@ -53,12 +53,28 @@ def after_install():
 	seed_roles()
 	seed_not_assigned_kebele()
 	seed_portal_menu()
+	seed_profile_change_workflow()
 
 
 def after_migrate():
 	seed_roles()
 	seed_not_assigned_kebele()
 	seed_portal_menu()
+	seed_profile_change_workflow()
+
+
+def seed_profile_change_workflow():
+	"""Create the Workflow of DA Profile Change Request when the site has none.
+
+	A Workflow that exists is left as it is, so changes made in Desk survive migrate.
+	"""
+	from da_services.services.profile_lists import pin_open_requests
+	from da_services.workflows.profile_change import ensure_workflow
+
+	ensure_workflow()
+	# Open certificate and photo requests from before requests recorded which file they were
+	# sent with: once pinned, nothing more is done here.
+	pin_open_requests()
 
 
 def seed_portal_menu():

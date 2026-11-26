@@ -779,6 +779,11 @@ class HttpDARegistryClient(DARegistryClient):
 
 	# ------------------------------------------------------------------ auth
 
+	def check_sign_in(self) -> None:
+		"""In user mode the caller's own staff IAM token is the only identity there is."""
+		if self.auth_mode == "user":
+			self._credentials()
+
 	def _credentials(self) -> tuple[str, str]:
 		"""(bearer token, CSRF value) for the next registry call.
 

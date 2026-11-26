@@ -8,11 +8,12 @@ One request changes one section of the DA register's ``da_details_tab``:
   Education & Professional records (services/profile_lists.py); the registry copies the main
   record's level and passout year onto the DA record and refuses them here.
 - Identity (da_identity_section_01): prefix, first_name, father_name, grandfather_name,
-  fayda_id, gender, marital_status, birth_month_ec, birth_year_ec
+  gender, marital_status, birth_month_ec, birth_year_ec. The Fayda ID is not offered: it is
+  the person's national identity and is corrected in the DA Registry itself.
 - Location (da_location_section_03): region, zone, woreda, kebele (Master Data codes)
 
 Anything else is refused here, before a row is stored. The registry checks formats,
-Master Data codes and duplicate Fayda IDs again, but never who asked or for which DA, so
+Master Data codes again, but never who asked or for which DA, so
 this allow-list and the approval in services/profile.py are the guard.
 
 Coded fields are checked against the Master Data list and stored as codes. A location
@@ -41,13 +42,12 @@ from da_services.integrations.da_registry.schemas import DAReference
 from da_services.services import constants as C
 
 SECTIONS = ("Contact", "Qualifications", "Identity", "Location")
-NOTE_MIN_LENGTH = 10  # a change of name or Fayda ID needs a reason this long
+NOTE_MIN_LENGTH = 10  # a change of name needs a reason this long
 GEO_LEVELS = ("region", "zone", "woreda", "kebele")
 
 # An Ethiopian phone number as the registry takes it (mobiles and landlines): 0911234567,
 # +251911234567, 911234567, 0111234567
 _PHONE_RE = re.compile(r"^(?:\+251|0)?[1-9][0-9]{8}$")
-_FAYDA_RE = re.compile(r"^\d{16}$")
 # A DA's name as the registry takes it: a Latin or Ethiopic letter, then also spaces,
 # apostrophes and hyphens; 100 characters at most.
 _NAME_RE = re.compile(r"^[A-Za-z\u1200-\u137F][A-Za-z\u1200-\u137F '\-]*$")
@@ -64,7 +64,7 @@ HOME_ADDRESS_MAX = 100  # as the registry allows
 @dataclass(frozen=True)
 class ProfileField:
 	section: str
-	kind: str  # phone, email, address, code, date, name, fayda, month, year, geo, da_ref
+	kind: str  # phone, email, address, code, date, name, month, year, geo, da_ref
 	key: str | None  # ProfileUpdate.changes key (integrations/da_registry/mapper.py PROFILE_FIELDS)
 	current: Callable[[DAReference], object]
 	attribute: str | None = None  # Master Data list of a coded field
@@ -83,7 +83,7 @@ FIELDS: dict[str, ProfileField] = {
 	),
 	"position": ProfileField("Qualifications", "code", "position", lambda r: r.position, "DA_POSITION"),
 	"joined_date": ProfileField("Qualifications", "date", "joined_date", lambda r: r.joined_at),
-	# The DA-ID of the person the DA reports to. Only the DA's Supervisor may ask to change it.
+	# The DA-ID of the person the DA reports to.
 	"reports_to": ProfileField("Qualifications", "da_ref", "reports_to", lambda r: r.reports_to),
 	"prefix": ProfileField("Identity", "code", "prefix", lambda r: r.salutation, "PREFIX"),
 	"first_name": ProfileField("Identity", "name", "first_name", lambda r: r.first_name, note_required=True),
@@ -93,7 +93,6 @@ FIELDS: dict[str, ProfileField] = {
 	"grandfather_name": ProfileField(
 		"Identity", "name", "grandfather_name", lambda r: r.grandfather_name, note_required=True
 	),
-	"fayda_id": ProfileField("Identity", "fayda", "fayda_id", lambda r: r.fayda_id, note_required=True),
 	"gender": ProfileField("Identity", "code", "gender", lambda r: r.gender, "GENDER"),
 	"marital_status": ProfileField(
 		"Identity", "code", "marital_status", lambda r: r.marital_status, "MARITAL_STATUS"
@@ -108,6 +107,26 @@ FIELDS: dict[str, ProfileField] = {
 }
 
 
+# What the organisation decides, not the person: where the DA is posted, their position and
+# specialisation, when they joined and whom they report to. Nobody asks to change these on
+# their own record; a Supervisor above them asks. The posting also decides who is above the
+# DA, so a DA asking for it would be choosing their own approver.
+# Fixed here for now: field rights per role are to be planned with the RBAC screens.
+SUPERVISOR_ONLY_FIELDS = frozenset(
+	{"region", "zone", "woreda", "kebele", "position", "specialisation", "joined_date", "reports_to"}
+)
+
+
+def editable_fields(*, own: bool) -> tuple[list[str], list[str]]:
+	"""(the fields this caller may ask to change, the fields they may only read).
+
+	``own``: the caller asks about their own record, so ``SUPERVISOR_ONLY_FIELDS`` are read
+	only. Otherwise a Supervisor asks about a DA below them and every field may be asked for.
+	"""
+	locked = SUPERVISOR_ONLY_FIELDS if own else frozenset()
+	return sorted(set(FIELDS) - locked), sorted(locked)
+
+
 # Where the profile view (services/profile.py) shows a field under another name
 PROFILE_KEYS = {
 	"telegram": "telegram_number",
@@ -117,8 +136,12 @@ PROFILE_KEYS = {
 }
 
 
-def catalog(ref: DAReference | None = None, client: DARegistryClient | None = None) -> dict[str, dict]:
+def catalog(
+	ref: DAReference | None = None, client: DARegistryClient | None = None, only: list[str] | None = None
+) -> dict[str, dict]:
 	"""What the portal may offer, per field: section, kind, Master Data list, note rule.
+
+	``only`` keeps these fields (and reads no Master Data list for the others).
 
 	With ``client``, a coded field also carries ``options`` ([{code, label}], the Master
 	Data list), or None when the list cannot be read now: the value is still checked
@@ -128,6 +151,8 @@ def catalog(ref: DAReference | None = None, client: DARegistryClient | None = No
 	"""
 	out = {}
 	for name, f in FIELDS.items():
+		if only is not None and name not in only:
+			continue
 		entry = {
 			"section": f.section,
 			"kind": f.kind,
@@ -294,10 +319,6 @@ def _check_value(
 				).format(field, NAME_MAX)
 			)
 		return text, None
-	if spec.kind == "fayda":
-		if not _FAYDA_RE.match(text):
-			_fail(_("fayda_id must be exactly 16 digits."))
-		return text, None
 	if spec.kind == "month":
 		if not text.isdigit() or not 1 <= int(text) <= 13:
 			_fail(_("birth_month_ec must be a month of the Ethiopian calendar, 1 to 13."))
@@ -326,19 +347,27 @@ def validate_changes(
 
 	``diff`` is {field: {"from", "to"[, "from_label", "to_label"]}} with only the fields
 	that change; the labels are the display names of coded and location values.
-	``as_supervisor``: the DA's Supervisor asks (a DA may not change whom they report to).
+	``as_supervisor``: a Supervisor above the DA asks; otherwise the request is about the
+	caller's own record, and ``SUPERVISOR_ONLY_FIELDS`` are refused.
 	"""
 	if not isinstance(changes, dict) or not changes:
 		_fail(_("changes must be a non-empty object."))
 	unknown = sorted(set(changes) - set(FIELDS))
 	if unknown:
 		_fail(_("These fields cannot be changed through a profile request: {0}").format(", ".join(unknown)))
+	if not as_supervisor:
+		not_theirs = sorted(set(changes) & SUPERVISOR_ONLY_FIELDS)
+		if not_theirs:
+			_fail(
+				_("Only a Supervisor above you can ask to change {0}.").format(", ".join(not_theirs)),
+				not_theirs[0],
+			)
 	sections = {FIELDS[f].section for f in changes}
 	if len(sections) > 1:
 		_fail(_("Send one section per request: {0}.").format(", ".join(sorted(sections))))
 	section = sections.pop()
 	if section == "Qualifications":
-		_check_position_rules(changes, ref, client, as_supervisor=as_supervisor)
+		_check_position_rules(changes, ref, client)
 
 	if section == "Location":
 		diff = _location_diff(changes, ref, client)
@@ -381,12 +410,8 @@ def validate_changes(
 	return section, diff
 
 
-def _check_position_rules(
-	changes: dict, ref: DAReference, client: DARegistryClient, *, as_supervisor: bool
-) -> None:
+def _check_position_rules(changes: dict, ref: DAReference, client: DARegistryClient) -> None:
 	"""The registry's rules of the Position and reporting section that depend on the position."""
-	if "reports_to" in changes and not as_supervisor:
-		_fail(_("Only the DA's Supervisor can ask to change whom the DA reports to."), "reports_to")
 	if "position" in changes:
 		position, _label = _code(client, "DA_POSITION", _text(changes["position"]), "position")
 	else:

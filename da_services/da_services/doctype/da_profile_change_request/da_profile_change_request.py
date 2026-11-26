@@ -3,25 +3,22 @@
 
 """DA Profile Change Request: a change to a DA's profile, approved at two levels.
 
-States:
-
-    Pending Supervisor ──approve──▶ Pending Administrator ──approve──▶ (sent to the registry)
-            │                               │                              │
-            ├─reject─▶ Rejected             ├─reject─▶ Rejected            ├─▶ Sent to registry ─▶ Applied
-            ├─request changes─▶ Changes requested                          ├─▶ Applied
-            └─cancel─▶ Cancelled            └─cancel─▶ Cancelled           └─▶ Registry failed
-                                                                                  │  retry ─▶ Sent / Applied / failed
-                                                                                  └─ close ─▶ Closed
-
-A Supervisor's own request starts at Pending Administrator (the Supervisor is level 1).
-"Sent to registry" waits for the registry's answer; it can still end in Registry failed
-when the registry rejects the change later. Writes go through services/profile.py, which
-checks scope; rows are history and are never deleted.
+The states and who may move a request between them are the Frappe Workflow of this DocType
+(see ``da_services/workflows/profile_change.py`` for the first version and the diagram);
+``status`` is its state field. Applied and Registry failed have no transition: the system
+writes them after the DA Registry answers. A step is taken through
+``services/profile.py``, from the portal's API or from the Desk's Workflow buttons
+(``workflows/desk.py`` routes those to the same service), never by a plain save: see
+``_refuse_changes_outside_a_step``. Who sees a request is
+``workflows/profile_change.py`` ``query_conditions`` / ``has_permission``. Rows are history
+and are never deleted.
 """
 
 import frappe
 from frappe import _
+from frappe.model import no_value_fields
 from frappe.model.document import Document
+from frappe.model.workflow import get_workflow_name
 
 PENDING_SUPERVISOR = "Pending Supervisor"
 PENDING_ADMINISTRATOR = "Pending Administrator"
@@ -33,38 +30,76 @@ CHANGES_REQUESTED = "Changes requested"
 CANCELLED = "Cancelled"
 CLOSED = "Closed"
 
+# The states of the Workflow this app creates. A site's Workflow may hold more (an approval
+# level added in the Desk): which states wait for a decision and which are still open is
+# asked of the Workflow (``workflows/profile_change.py``); these two are what holds on a
+# site with no active Workflow.
 PENDING_STATES = (PENDING_SUPERVISOR, PENDING_ADMINISTRATOR)
-# A DA has at most one of these per section: the registry also takes one pending change
-# per DA and section, and a failed push must be retried or closed before the next one.
 OPEN_STATES = (PENDING_SUPERVISOR, PENDING_ADMINISTRATOR, SENT_TO_REGISTRY, REGISTRY_FAILED)
-_AFTER_PUSH = {SENT_TO_REGISTRY, APPLIED, REGISTRY_FAILED}
-TRANSITIONS = {
-	PENDING_SUPERVISOR: {PENDING_ADMINISTRATOR, REJECTED, CHANGES_REQUESTED, CANCELLED},
-	PENDING_ADMINISTRATOR: {REJECTED, CANCELLED} | _AFTER_PUSH,
-	SENT_TO_REGISTRY: {APPLIED, REGISTRY_FAILED},
-	REGISTRY_FAILED: _AFTER_PUSH | {CLOSED},
-	APPLIED: set(),
-	REJECTED: set(),
-	CHANGES_REQUESTED: set(),
-	CANCELLED: set(),
-	CLOSED: set(),
-}
+# Set (to the request's name) by ``workflows.profile_change.apply`` while it takes a step.
+STEP_FLAG = "da_profile_change_step"
+# Set by ``workflows.profile_change.sending`` while the service inserts a new request.
+SEND_FLAG = "da_profile_change_send"
 
 
 class DAProfileChangeRequest(Document):
 	def validate(self):
 		self.client_op_id = (self.client_op_id or "").strip() or None  # NULL for the unique index
 		if self.is_new():
-			if self.status not in PENDING_STATES:
-				frappe.throw(_("A new change request must start waiting for a decision."))
-			return
-		before = self.get_doc_before_save()
-		if before and before.status != self.status and self.status not in TRANSITIONS.get(before.status, ()):
-			frappe.throw(
-				_("Change request {0} cannot move from {1} to {2}.").format(
-					self.name, before.status, self.status
+			if not frappe.flags.get(SEND_FLAG) and frappe.session.user != "Administrator":
+				# Whom a request is about, who sent it and its steps are what the service found
+				# and checked, never what a form or an API call carried.
+				frappe.throw(
+					_("A change request is sent from the DA portal, not created here."),
+					frappe.PermissionError,
 				)
-			)
+			start = self._first_state()
+			if self.status != start:
+				frappe.throw(_("A new change request starts at {0}.").format(start))
+			return
+		self._refuse_changes_outside_a_step()
+
+	def _first_state(self) -> str:
+		"""Where the site's Workflow starts a request (Frappe checks this too while a Workflow
+		is active; this also holds on a site whose Workflow was switched off)."""
+		name = get_workflow_name(self.doctype)
+		states = frappe.get_cached_doc("Workflow", name).states if name else []
+		return states[0].state if states else PENDING_SUPERVISOR
+
+	def _refuse_changes_outside_a_step(self):
+		"""A sent request changes through its steps only.
+
+		A step is more than a new state: it records who decided, tells the people concerned
+		and, at the last approval, sends the change to the DA Registry. Frappe checks the
+		state change of a plain save by role and condition but not "nobody decides their own
+		request", and it enforces neither read-only fields nor a state's "Only Allow Edit
+		For" on the server. So a step is taken by the service (``STEP_FLAG``; the portal's API
+		and the Desk's Workflow buttons both go through it), and its save changes the state
+		only. Any other save may change one thing: the note written in the Desk for the next
+		step. Everything else on a request the service writes directly.
+		"""
+		if not self.get_doc_before_save():
+			return
+		changed = [
+			df.fieldname
+			for df in self.meta.fields
+			if df.fieldtype not in no_value_fields and self.has_value_changed(df.fieldname)
+		]
+		if self.has_value_changed("owner"):
+			changed.append("owner")  # who sent the request: the Workflow reads it
+		taking_a_step = frappe.flags.get(STEP_FLAG) == self.name
+		beyond = [f for f in changed if f != ("status" if taking_a_step else "step_note")]
+		if not beyond:
+			return
+		labels = ", ".join(self.meta.get_label(f) or f for f in beyond)
+		if taking_a_step:
+			frappe.throw(_("A step cannot change {0} of change request {1}.").format(labels, self.name))
+		frappe.throw(
+			_(
+				"Change request {0} changes through its steps only: use the Workflow action "
+				"(Approve, Reject, Cancel ...) in the Actions menu or in the DA portal. Not saved: {1}."
+			).format(self.name, labels)
+		)
 
 	def on_trash(self):
 		frappe.throw(_("Change requests are history; cancel or reject them instead of deleting."))

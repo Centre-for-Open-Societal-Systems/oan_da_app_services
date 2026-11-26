@@ -151,6 +151,11 @@ after_migrate = "da_services.setup.install.after_migrate"
 # }
 
 doc_events = {
+	"Workflow": {
+		# The Workflow of DA Profile Change Request is edited in the Desk: refuse a shape the
+		# app could not run safely, and say what to change.
+		"validate": "da_services.workflows.profile_change.validate_shape",
+	},
 	"User": {
 		# On create with a DA Registry ID: create the DA's RBAC and Kebele assignments from
 		# their DA Registry record (in the request, not a job). A later change of
@@ -158,6 +163,27 @@ doc_events = {
 		"after_insert": "da_services.services.da_registry_assignment_sync.on_user_update",
 		# "on_update": "da_services.services.da_registry_assignment_sync.on_user_update",
 	},
+}
+
+# The Desk's Workflow buttons
+# ---------------------------
+# For DA Profile Change Request a step is taken by the service (it records who decided,
+# tells people and sends the last approval to the DA Registry); every other DocType is
+# passed on to Frappe (da_services/workflows/desk.py).
+override_whitelisted_methods = {
+	"frappe.model.workflow.apply_workflow": "da_services.workflows.desk.apply_workflow",
+	"frappe.model.workflow.bulk_workflow_approval": "da_services.workflows.desk.bulk_workflow_approval",
+}
+
+# Permissions
+# -----------
+# Who sees a DA Profile Change Request, beyond role and User Permissions (the rule and why
+# Frappe's own are not enough are in the module).
+permission_query_conditions = {
+	"DA Profile Change Request": "da_services.workflows.profile_change.query_conditions",
+}
+has_permission = {
+	"DA Profile Change Request": "da_services.workflows.profile_change.has_permission",
 }
 
 # Scheduled Tasks
