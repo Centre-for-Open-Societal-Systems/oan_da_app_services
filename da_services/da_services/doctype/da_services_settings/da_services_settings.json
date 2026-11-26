@@ -10,6 +10,8 @@
   "farmer_registry_form_register_id",
   "crop_registry_domain",
   "crop_registry_form_register_id",
+  "livestock_registry_domain",
+  "livestock_registry_form_register_id",
   "column_break_cciq",
   "da_registry_domain",
   "da_registry_form_register_id",
@@ -129,6 +131,18 @@
    "fieldname": "crop_registry_form_register_id",
    "fieldtype": "Data",
    "label": "Crop Registry Form Register ID"
+  },
+  {
+   "description": "Livestock staff host (e.g. staff-livestock.development.oanstaging.com). Required.",
+   "fieldname": "livestock_registry_domain",
+   "fieldtype": "Data",
+   "label": "Livestock Registry Domain"
+  },
+  {
+   "description": "Livestock register UUID (register_id). Required; no get_all_registers discovery.",
+   "fieldname": "livestock_registry_form_register_id",
+   "fieldtype": "Data",
+   "label": "Livestock Registry Form Register ID"
   }
  ],
  "grid_page_length": 50,

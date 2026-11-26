@@ -65,11 +65,11 @@ The envelope sender is `OAN_REGISTRY_API_TEST`. It has no `instance_id`. An empt
 | Save one section | `/intake-form-data/save_intake_form_submission` |
 | Finalize | `/intake-form-data/finalize_intake_form_submission` |
 
-`GET /crop-sown/intake-form?form=` requires `form` (`planning`, `cultivation`, `sowing`, or `harvesting`) and returns that form only. The flow, hosts, and payload rules are in [crop-sown-integration.md](crop-sown-integration.md). Farmer is in [farmer-integration.md](farmer-integration.md). Livestock auth, which does not call a Livestock host, is in [livestock-integration.md](livestock-integration.md).
+`GET /crop-sown/intake-form?form=` requires `form` (`planning`, `cultivation`, `sowing`, or `harvesting`) and returns that form only. The flow, hosts, and payload rules are in [crop-sown-integration.md](crop-sown-integration.md). Farmer is in [farmer-integration.md](farmer-integration.md). Livestock is in [livestock-integration.md](livestock-integration.md).
 
 ## Livestock
 
-`da_services/integrations/livestock_registry/auth.py` calls `auth_and_csrf_headers` with `livestock_registry_keycloak` (or the Farmer block) and portal client `livestock-registry-staff-portal`. It returns headers and cookies. No Livestock staff URL is called, and there is no DA Livestock route.
+Livestock uses Settings `livestock_registry_domain` / `livestock_registry_form_register_id` and shared `StaffRegistryTransport` (FE `Authorization` + `X-CSRF-Token`). GET list requires `source`; register detail requires `internal_record_id` + `tab_id` → one `get_tab_records`.
 
 ## End-to-end sequence
 
@@ -122,22 +122,4 @@ sequenceDiagram
 
 Farmer posts to `farmer_registry_url` with sender `DA_SERVICES`. Crop Sown posts to Settings `crop_registry_domain` with sender `OAN_REGISTRY_API_TEST`. The staff path is the one in the tables above. Crop Sown and Livestock reject an IAM token that has no roles for their portal client. Farmer does not do that check.
 
-Livestock has no DA route and no staff POST. Its sequence stops when the headers exist:
-
-```mermaid
-sequenceDiagram
-  participant Caller as Future Livestock caller
-  participant Live as livestock_auth_headers
-  participant Staff as staff_api
-  participant IAM as Staff IAM
-  participant KC as Keycloak
-
-  Caller->>Live: Ask for Livestock headers
-  Live->>Staff: auth_and_csrf_headers for livestock-registry-staff-portal
-  Staff->>IAM: Same IAM login as above, or the token cache
-  IAM->>KC: Keycloak login when the cache is empty
-  KC-->>IAM: Callback toward IAM
-  IAM-->>Staff: X-Access-Token and X-CSRF-Token
-  Staff-->>Live: Bearer and CSRF
-  Live-->>Caller: Headers and cookies
-```
+Livestock uses the same FE CSRF forward as Crop Sown (`StaffRegistryTransport`): the caller's `Authorization` and `X-CSRF-Token` are sent to the Livestock staff host. There is no separate Keycloak helper on the request path.

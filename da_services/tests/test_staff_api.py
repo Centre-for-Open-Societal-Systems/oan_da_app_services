@@ -1,4 +1,4 @@
-"""Shared staff auth: the Postman IAM login sequence, CSRF, and Livestock auth.
+"""Shared staff auth: the Postman IAM login sequence and CSRF.
 
 No test in this module contacts IAM, Keycloak, or a staff host.
 """
@@ -12,7 +12,6 @@ from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryClientError,
 	FarmerRegistryServerError,
 )
-from da_services.integrations.livestock_registry.auth import livestock_auth_headers
 from da_services.integrations.staff_api.auth import _STAFF_TOKEN_CACHE, auth_and_csrf_headers
 
 
@@ -128,21 +127,6 @@ class TestPostmanStaffLogin(unittest.TestCase):
 		self.assertEqual(headers["X-CSRF-Token"], "iam-csrf")
 		self.assertEqual(cookies["X-CSRF-Token"], headers["X-CSRF-Token"])
 		self.assertFalse(any("staff-" in url for _method, url in session.calls))
-
-
-class TestLivestockAuth(unittest.TestCase):
-	def test_livestock_auth_does_not_call_the_livestock_host(self):
-		def session(keycloak, timeout, **_kwargs):
-			return "livestock-user", "livestock-csrf"
-
-		with patch("da_services.integrations.staff_api.auth.staff_session", session):
-			with patch("da_services.integrations.staff_api.auth.requests.post") as post:
-				headers, cookies = livestock_auth_headers()
-
-		post.assert_not_called()
-		self.assertEqual(headers["Authorization"], "Bearer livestock-user")
-		self.assertEqual(headers["X-CSRF-Token"], cookies["X-CSRF-Token"])
-		self.assertEqual(cookies["X-CSRF-Token"], "livestock-csrf")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ import frappe
 
 from da_services.integrations.livestock_registry.client import (
 	LivestockRegistryClientError,
-	LivestockRegistryError,
 	LivestockRegistryServerError,
 )
 from da_services.integrations.livestock_registry.http import HTTPLivestockRegistryClient
@@ -36,7 +35,6 @@ from da_services.integrations.livestock_registry.mock import (
 	MOCK_FIELDS,
 	MOCK_FORM,
 	REGISTER_ID,
-	MockLivestockRegistryClient,
 )
 from da_services.integrations.livestock_registry.schemas import LivestockSubmission
 
@@ -70,6 +68,7 @@ _TEST_SSO = {"Authorization": "Bearer unused", "X-CSRF-Token": "test-csrf"}
 
 
 def _client(**kwargs):
+	kwargs.setdefault("register_id", REGISTER_ID)
 	return HTTPLivestockRegistryClient(
 		staff_url=STAFF,
 		tokens=type("Tokens", (), {"get_token": lambda self: "cached-token"})(),
@@ -79,7 +78,7 @@ def _client(**kwargs):
 
 def _patch_sso():
 	return patch(
-		"da_services.integrations.livestock_registry.http.frappe.get_request_header",
+		"da_services.integrations.staff_registry.http.frappe.get_request_header",
 		side_effect=_TEST_SSO.get,
 	)
 
@@ -397,13 +396,13 @@ class TestStaffAuth(unittest.TestCase):
 			seen.update(kwargs)
 			return _Resp(200, _envelope({"submission_id": "sub-1"}))
 
-		client = HTTPLivestockRegistryClient(staff_url=STAFF)
+		client = HTTPLivestockRegistryClient(staff_url=STAFF, register_id=REGISTER_ID)
 		with (
 			patch(
-				"da_services.integrations.livestock_registry.http.frappe.get_request_header",
+				"da_services.integrations.staff_registry.http.frappe.get_request_header",
 				side_effect=request_headers.get,
 			),
-			patch("da_services.integrations.livestock_registry.http.requests.post", post),
+			patch("da_services.integrations.staff_registry.http.requests.post", post),
 		):
 			client.get_submission("sub-1")
 
@@ -417,30 +416,28 @@ class TestStaffAuth(unittest.TestCase):
 				post = Mock()
 				with (
 					patch(
-						"da_services.integrations.livestock_registry.http.frappe.get_request_header",
+						"da_services.integrations.staff_registry.http.frappe.get_request_header",
 						side_effect=request_headers.get,
 					),
-					patch("da_services.integrations.livestock_registry.http.requests.post", post),
+					patch("da_services.integrations.staff_registry.http.requests.post", post),
 					self.assertRaises(LivestockRegistryClientError) as caught,
 				):
-					HTTPLivestockRegistryClient(staff_url=STAFF).get_submission("sub-1")
+					HTTPLivestockRegistryClient(staff_url=STAFF, register_id=REGISTER_ID).get_submission(
+						"sub-1"
+					)
 				self.assertEqual(caught.exception.status_code, 401)
 				post.assert_not_called()
 
 	def test_token_provider_overrides_bearer_but_keeps_fe_csrf(self):
 		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
 		with patch(
-			"da_services.integrations.livestock_registry.http.frappe.get_request_header",
+			"da_services.integrations.staff_registry.http.frappe.get_request_header",
 			side_effect=request_headers.get,
 		):
-			headers, cookies = _client()._auth_and_csrf_headers()
+			headers, cookies = _client()._transport.auth_and_csrf_headers()
 		self.assertEqual(headers["Authorization"], "Bearer cached-token")
 		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
 		self.assertEqual(cookies, {"X-CSRF-Token": "sso-csrf"})
-
-	def test_misconfigured_client_is_rejected(self):
-		with self.assertRaises(LivestockRegistryError):
-			HTTPLivestockRegistryClient(staff_url="staff-livestock.test")
 
 
 def _staff(responses: dict):
@@ -479,11 +476,11 @@ class TestHttpCalls(unittest.TestCase):
 
 	def _run(self, responses, call, **client_kwargs):
 		post, calls = _staff(responses)
-		with patch("da_services.integrations.livestock_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			result = call(_client(**client_kwargs))
 		return result, calls
 
-	def test_describe_discovers_renders_and_reads_every_catalog_page(self):
+	def test_describe_renders_and_reads_every_catalog_page(self):
 		def catalog(body):
 			page = body["request_body"]["pagination_request"]["current_page"]
 			attribute = body["request_body"]["request_payload"]["attribute_id"]
@@ -491,7 +488,6 @@ class TestHttpCalls(unittest.TestCase):
 			return _envelope({"attribute_values": rows[page - 1 : page]}, pages=max(len(rows), 1))
 
 		responses = {
-			"/register-metadata/get_all_registers": _REGISTERS,
 			"/intake-form-metadata/get_all_intake_forms": _FORMS,
 			"/intake-form-metadata/render_intake_form": MOCK_FORM,
 			"/register-metadata/get_register_fields": lambda body: {
@@ -565,17 +561,29 @@ class TestHttpCalls(unittest.TestCase):
 		self.assertEqual(submission.record_name, FIXTURE_FARMER_ID)
 		self.assertEqual(submission.sections[0].section_id, LOOKUP)
 
-	def test_list_returns_full_section_records_for_this_farmer(self):
-		def search(body):
-			register_id = body["request_body"]["request_payload"]["register_id"]
-			if register_id != REGISTER_ID:
-				return _envelope([])
-			return _envelope(
-				[
+	def test_list_submission_source_is_one_search(self):
+		rows, calls = self._run(
+			{
+				"/intake-form-data/search_in_intake_form_submissions": [
+					{"submission_id": "sub-1", "record_name": FIXTURE_FARMER_ID},
+					{"submission_id": "sub-2", "record_name": "FR-000000000001"},
+				]
+			},
+			lambda client: client.list_for_farmer(FIXTURE_FARMER_ID, source="submission"),
+		)
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["submission_id"], "sub-1")
+		self.assertEqual(len(calls), 1)
+		self.assertEqual(calls[0][0], "/intake-form-data/search_in_intake_form_submissions")
+		self.assertNotIn("get_all_registers", "".join(path for path, _ in calls))
+		self.assertNotIn("get_section_records", "".join(path for path, _ in calls))
+
+	def test_list_register_source_is_one_search(self):
+		rows, calls = self._run(
+			{
+				"/register-data/search_in_a_register": [
 					{
 						"internal_record_id": "rec-1",
-						"functional_record_id": "LS-1",
-						"record_name": "Bekele",
 						"display_fields": [{"field_name": "farmer_id", "value": FIXTURE_FARMER_ID}],
 					},
 					{
@@ -583,100 +591,30 @@ class TestHttpCalls(unittest.TestCase):
 						"display_fields": [{"field_name": "farmer_id", "value": "FR-x"}],
 					},
 				]
-			)
-
-		def section_records(body):
-			payload = body["request_body"]["request_payload"]
-			if payload["subject_record_id"] != "rec-1":
-				return _envelope([])
-			if payload["section_register_id"] == REGISTER_ID:
-				return _envelope(
-					[
-						{
-							"internal_record_id": "rec-1",
-							"farmer_id": FIXTURE_FARMER_ID,
-							"farmer_name": "Bekele",
-							"region": "Oromia",
-						}
-					]
-				)
-			if payload["section_register_id"] == ANIMAL_REGISTER_ID:
-				return _envelope(
-					[
-						{
-							"internal_record_id": "animal-1",
-							"link_internal_record_id": "rec-1",
-							"ear_tag_id": "ET-1",
-							"species": "CATTLE",
-							"breed": "HYBRID",
-							"gender": "FEMALE",
-							"health_status": "HEALTHY",
-							"vaccination_status": "UP_TO_DATE",
-							"quantity": 1,
-							"weight": 326,
-						}
-					]
-				)
-			return _envelope([])
-
-		responses = {
-			"/register-metadata/get_all_registers": _REGISTERS,
-			"/intake-form-metadata/get_all_intake_forms": _FORMS,
-			"/intake-form-metadata/render_intake_form": MOCK_FORM,
-			"/intake-form-data/search_in_intake_form_submissions": [
-				{"submission_id": "sub-1", "record_name": FIXTURE_FARMER_ID},
-				{"submission_id": "sub-2", "record_name": "FR-000000000001"},
-			],
-			"/register-data/search_in_a_register": search,
-			"/register-data/get_section_records": section_records,
-			"/intake-form-data/get_intake_form_submission": {
-				"submission_id": "sub-1",
-				"record_name": FIXTURE_FARMER_ID,
-				"draft_status": "DRAFT",
-				"section_payloads": [
-					{
-						"section_id": ANIMALS,
-						"section_register_id": ANIMAL_REGISTER_ID,
-						"records": [
-							{
-								"internal_record_id": "draft-animal",
-								"ear_tag_id": "ET-1",
-								"species": "CATTLE",
-								"breed": "HYBRID",
-								"gender": "FEMALE",
-							}
-						],
-					}
-				],
 			},
-		}
-		rows, calls = self._run(responses, lambda client: client.list_for_farmer(FIXTURE_FARMER_ID))
-		self.assertEqual(rows[0]["kind"], "submission")
-		self.assertEqual(rows[0]["submission_id"], "sub-1")
-		self.assertEqual(rows[0]["sections"][0]["records"][0]["breed"], "HYBRID")
-		holding = next(row for row in rows if row.get("internal_record_id") == "rec-1")
-		animal = next(row for row in rows if row.get("internal_record_id") == "animal-1")
-		self.assertEqual(holding["farmer_name"], "Bekele")
-		self.assertEqual(holding["region"], "Oromia")
-		self.assertEqual(animal["register_id"], ANIMAL_REGISTER_ID)
-		self.assertEqual(animal["ear_tag_id"], "ET-1")
-		self.assertEqual(animal["species"], "CATTLE")
-		self.assertEqual(animal["breed"], "HYBRID")
-		self.assertEqual(animal["gender"], "FEMALE")
-		self.assertEqual(animal["health_status"], "HEALTHY")
-		self.assertNotIn("rec-2", [row.get("internal_record_id") for row in rows])
-		section_calls = [
-			body["request_body"]["request_payload"]
-			for path, body in calls
-			if path == "/register-data/get_section_records"
-		]
-		self.assertIn(
+			lambda client: client.list_for_farmer(FIXTURE_FARMER_ID, source="register"),
+		)
+		self.assertEqual([row["internal_record_id"] for row in rows], ["rec-1"])
+		self.assertEqual(len(calls), 1)
+		self.assertEqual(calls[0][0], "/register-data/search_in_a_register")
+
+	def test_register_tab_is_one_get_tab_records(self):
+		detail, calls = self._run(
+			{"/register-data/get_tab_records": [{"ear_tag_id": "ET-1", "species": "CATTLE"}]},
+			lambda client: client.get_register_tab("rec-1", "livestock"),
+		)
+		self.assertEqual(detail["tab_id"], "livestock")
+		self.assertEqual(detail["tabs"][0]["records"][0]["ear_tag_id"], "ET-1")
+		self.assertEqual(len(calls), 1)
+		self.assertEqual(calls[0][0], "/register-data/get_tab_records")
+		payload = calls[0][1]["request_body"]["request_payload"]
+		self.assertEqual(
+			payload,
 			{
 				"subject_register_id": REGISTER_ID,
 				"subject_record_id": "rec-1",
-				"section_register_id": ANIMAL_REGISTER_ID,
+				"tab_id": "livestock",
 			},
-			section_calls,
 		)
 
 	def test_errors_are_typed(self):
@@ -694,29 +632,8 @@ class TestHttpCalls(unittest.TestCase):
 				{"/intake-form-data/get_intake_form_submission": _Resp(502, {})},
 				lambda client: client.get_submission("sub-1"),
 			)
-		with self.assertRaisesRegex(LivestockRegistryClientError, "missing or ambiguous"):
-			self._run(
-				{"/register-metadata/get_all_registers": [_REGISTERS[0]]},
-				lambda client: client.list_for_farmer(FIXTURE_FARMER_ID),
-			)
-
-
-class TestMockClient(unittest.TestCase):
-	def test_mock_saves_a_full_draft_and_reads_the_fixture(self):
-		client = MockLivestockRegistryClient()
-		saved = client.submit_sections(
-			[
-				{"section_id": LOOKUP, "records": [{"fayda_id": "123456789012"}]},
-				{"section_id": ANIMALS, "records": [ANIMAL]},
-			],
-			farmer_id=FIXTURE_FARMER_ID,
-		)
-		self.assertEqual(saved["submission_id"], FIXTURE_SUBMISSION_ID)
-		self.assertEqual(saved["subject_record_id"], FIXTURE_SUBJECT_ID)
-		self.assertEqual(client.get_submission(FIXTURE_SUBMISSION_ID).record_name, FIXTURE_FARMER_ID)
-		self.assertIsNone(client.get_submission("other"))
-		self.assertEqual(client.list_for_farmer(FIXTURE_FARMER_ID)[0]["kind"], "submission")
-		self.assertEqual(client.list_for_farmer("FR-000000000001"), [])
+		with self.assertRaisesRegex(LivestockRegistryClientError, "unsupported Livestock list source"):
+			_client().list_for_farmer(FIXTURE_FARMER_ID, source="both")
 
 
 class TestRoutes(unittest.TestCase):
@@ -789,30 +706,88 @@ class TestRoutes(unittest.TestCase):
 		result = self._call(finalize_farmer_livestock, FIXTURE_FARMER_ID, "sub-1", client=client)
 		self.assertEqual(result["data"]["approval_status"], "PENDING")
 
-	def test_list_and_one_submission(self):
+	def test_list_requires_source_and_returns_search_hits(self):
 		from da_services.api.v1.livestock import get_farmer_livestock
 
-		client = MockLivestockRegistryClient()
-		listed = self._call(get_farmer_livestock, FIXTURE_FARMER_ID, client=client)
+		client = Mock()
+		client.list_for_farmer.return_value = [{"submission_id": FIXTURE_SUBMISSION_ID}]
+		listed = self._call(
+			get_farmer_livestock,
+			FIXTURE_FARMER_ID,
+			form_dict={"source": "submission"},
+			client=client,
+		)
+		client.list_for_farmer.assert_called_once_with(FIXTURE_FARMER_ID, source="submission")
+		self.assertEqual(listed["data"]["source"], "submission")
 		self.assertEqual(listed["data"]["livestock"][0]["submission_id"], FIXTURE_SUBMISSION_ID)
+
+	def test_list_requires_source(self):
+		from da_services.api.v1.livestock import get_farmer_livestock
+
+		result = self._call(get_farmer_livestock, FIXTURE_FARMER_ID, form_dict={}, client=Mock())
+		self._assert_refused(result, 400)
+		self.assertIn("source", result["message"].lower())
+
+	def test_register_detail_requires_tab_id(self):
+		from da_services.api.v1.livestock import get_farmer_livestock
+
+		result = self._call(
+			get_farmer_livestock,
+			FIXTURE_FARMER_ID,
+			form_dict={"internal_record_id": "rec-1"},
+			client=Mock(),
+		)
+		self._assert_refused(result, 400)
+		self.assertIn("tab_id", result["message"].lower())
+
+	def test_register_tab_route(self):
+		from da_services.api.v1.livestock import get_farmer_livestock
+
+		client = Mock()
+		client.get_register_tab.return_value = {
+			"internal_record_id": "rec-1",
+			"register_id": REGISTER_ID,
+			"tab_id": "livestock",
+			"tabs": [{"tab_id": "livestock", "records": [{"ear_tag_id": "ET-1"}]}],
+		}
+		result = self._call(
+			get_farmer_livestock,
+			FIXTURE_FARMER_ID,
+			form_dict={"internal_record_id": "rec-1", "tab_id": "livestock"},
+			client=client,
+		)
+		client.get_register_tab.assert_called_once_with("rec-1", "livestock")
+		self.assertEqual(result["data"]["tab_id"], "livestock")
+
+	def test_one_submission(self):
+		from da_services.api.v1.livestock import get_farmer_livestock
+
+		client = Mock()
+		client.get_submission.return_value = LivestockSubmission(
+			submission_id=FIXTURE_SUBMISSION_ID,
+			record_name=FIXTURE_FARMER_ID,
+			sections=[],
+		)
 		one = self._call(
 			get_farmer_livestock,
 			FIXTURE_FARMER_ID,
 			form_dict={"submission_id": FIXTURE_SUBMISSION_ID},
 			client=client,
 		)
-		self.assertEqual(one["data"]["sections"][1]["section_register_id"], ANIMAL_REGISTER_ID)
+		self.assertEqual(one["data"]["submission_id"], FIXTURE_SUBMISSION_ID)
 
 	def test_internal_id_without_a_farmer_id_is_rejected(self):
 		from da_services.api.v1.livestock import get_farmer_livestock
 
-		result = self._call(get_farmer_livestock, "not-a-cached-farmer", client=MockLivestockRegistryClient())
+		result = self._call(get_farmer_livestock, "not-a-cached-farmer", client=Mock())
 		self._assert_refused(result, 400)
 
 	def test_intake_form_route_returns_the_described_form(self):
 		from da_services.api.v1.livestock import get_livestock_intake_form
 
-		result = self._call(get_livestock_intake_form, client=MockLivestockRegistryClient())
+		client = Mock()
+		client.describe_intake_form.return_value = describe_form(MOCK_FORM, MOCK_FIELDS, MOCK_CATALOGS)
+		result = self._call(get_livestock_intake_form, client=client)
 		sections = {section["section_id"]: section for section in result["data"]["sections"]}
 		self.assertEqual(sections[HEALTH]["section_register_id"], HEALTH_REGISTER_ID)
 		self.assertEqual(sections[ANIMALS]["section_register_id"], ANIMAL_REGISTER_ID)

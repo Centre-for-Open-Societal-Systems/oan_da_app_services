@@ -218,18 +218,15 @@ Do not send `age`. The form computes it from `date_of_birth`.
 
 ### 6. Open a saved farmer
 
-`GET /farmers/{farmer_id}/livestock` returns `{ farmer_id, livestock }`.
+Same call budget as Crop Sown. List requires `source`; register detail requires `tab_id`.
 
-Each item is either:
-
-| `kind` | What to render |
+| Call | Response |
 | --- | --- |
-| `submission` | A draft or a submission waiting for approval. `sections` holds the rows that were saved. Match `section_id` to the intake form. |
-| `record` | One full section row. Match `register_id` to `section_register_id` on the intake form. Animal rows have `ear_tag_id`, `species`, `breed`, `gender`, `health_status`, and `vaccination_status` on the object itself. |
+| `GET /farmers/{farmer_id}/livestock?source=submission\|register` | `{ farmer_id, livestock, source }` — **search hits only** (one staff search). Use intake-form labels for display. |
+| `GET …/livestock?submission_id=` | One submission with `sections`. Mutually exclusive with `internal_record_id`. |
+| `GET …/livestock?internal_record_id=&tab_id=` | One register tab via `get_tab_records`: `{ internal_record_id, register_id, tab_id, tabs }`. `tab_id` is required (not `section_register_id`). |
 
-Do not read the animal from `display_fields`. That array is the search summary. The list for `FR-512145929324` on 2026-11-02 returned the full rows: holdings, animals, health events, vaccinations, vital events, and breeding rows.
-
-`GET /farmers/{farmer_id}/livestock?submission_id={submission_id}` returns that one submission, including `sections`. The query must be a real id. An empty `submission_id` returns the list above.
+Missing `source` on list → 400. Do not expect a hydrated multi-section list from the list route.
 
 Pair each stored code with `value_display` from the intake-form `choices` for the label on screen. `HEALTHY` is shown as Healthy. `CATTLE` is shown as Cattle.
 
@@ -257,4 +254,4 @@ An unknown field name fails with `unknown Livestock field {name}`. A value outsi
 
 ## When the lists are empty
 
-`catalog_loaded: false` means the serving site has no `livestock_registry_master_data_url`. The geography route then fails because that URL is not configured. Do not fall back to the lists in `livestockReport.ts`. Show the error.
+`catalog_loaded: false` means DA Services Settings has no `master_data_domain`. The geography route then fails because that host is not configured. Do not fall back to the lists in `livestockReport.ts`. Show the error.

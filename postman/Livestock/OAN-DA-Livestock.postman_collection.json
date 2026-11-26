@@ -2,7 +2,7 @@
  "info": {
   "_postman_id": "oan-da-livestock",
   "name": "OAN DA Livestock",
-  "description": "DA Services Livestock routes. Every request sends Authorization: Bearer {{access_token}} and, when csrf_token is set, X-CSRF-Token: {{csrf_token}}. DA Services forwards both to the Livestock staff host, so put the SSO (Keycloak) staff token in access_token and its CSRF value in csrf_token. Save stores submission_id and subject_record_id. Example responses are shortened reads from the development hosts on 2026-11-02. Guide: docs/livestock-integration.md.",
+  "description": "DA Services Livestock routes. Prerequisites: Desk DA Services Settings must set livestock_registry_domain and livestock_registry_form_register_id (required; no get_all_registers). List requires source=submission|register (one staff search). List farmer livestock (source=register) stores internal_record_id; Register tab reuses it with tab_id (one get_tab_records). Every request sends Authorization: Bearer {{access_token}} and X-CSRF-Token: {{csrf_token}} (forwarded to Livestock staff). Save stores submission_id and subject_record_id. Guide: docs/livestock-integration.md.",
   "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
  },
  "auth": {
@@ -34,11 +34,15 @@
   },
   {
    "key": "usr",
-   "value": ""
+   "value": "da-agent@services.com"
   },
   {
    "key": "pwd",
-   "value": ""
+   "value": "admin@123"
+  },
+  {
+   "key": "sso_key",
+   "value": "agent"
   },
   {
    "key": "access_token",
@@ -79,11 +83,19 @@
   {
    "key": "subject_record_id",
    "value": ""
+  },
+  {
+   "key": "internal_record_id",
+   "value": ""
+  },
+  {
+   "key": "tab_id",
+   "value": "0ebdc221-187d-5df6-9dc3-c6f4c4ee160e"
   }
  ],
  "item": [
   {
-   "name": "Login",
+   "name": "SSO Login",
    "request": {
     "method": "POST",
     "header": [
@@ -97,24 +109,25 @@
      }
     ],
     "url": {
-     "raw": "{{base_url}}/api/v1/auth/login",
+     "raw": "{{base_url}}/api/v1/da-services/sso/login",
      "host": [
       "{{base_url}}"
      ],
      "path": [
       "api",
       "v1",
-      "auth",
+      "da-services",
+      "sso",
       "login"
      ]
     },
-    "description": "Local DA Services login. Stores access_token and refresh_token. Livestock calls also need the SSO token and csrf_token; see the collection description.",
+    "description": "Required login. Stores access_token and csrf_token for Bearer + X-CSRF-Token on later requests (forwarded to Livestock staff).",
     "auth": {
      "type": "noauth"
     },
     "body": {
      "mode": "raw",
-     "raw": "{\n  \"usr\": \"{{usr}}\",\n  \"pwd\": \"{{pwd}}\"\n}",
+     "raw": "{\n  \"username\": \"{{usr}}\",\n  \"password\": \"{{pwd}}\",\n  \"key\": \"{{sso_key}}\"\n}",
      "options": {
       "raw": {
        "language": "json"
@@ -128,14 +141,19 @@
      "script": {
       "type": "text/javascript",
       "exec": [
-       "pm.test(\"Login returns 200\", function () { pm.response.to.have.status(200); });",
+       "pm.test(\"SSO Login returns 200\", function () { pm.response.to.have.status(200); });",
        "const data = (pm.response.json() || {}).data || {};",
+       "pm.test(\"SSO Login returns access_token and csrf_token\", function () {",
+       "    pm.expect(data.access_token, \"data.access_token\").to.be.a(\"string\").and.not.empty;",
+       "    pm.expect(data.csrf_token, \"data.csrf_token\").to.be.a(\"string\").and.not.empty;",
+       "});",
        "function save(key, value) {",
        "    if (!value) return;",
        "    pm.collectionVariables.set(key, value);",
        "    if (pm.environment.name) pm.environment.set(key, value);",
        "}",
        "save(\"access_token\", data.access_token);",
+       "save(\"csrf_token\", data.csrf_token);",
        "save(\"refresh_token\", data.refresh_token);"
       ]
      }
@@ -398,7 +416,7 @@
       }
      ]
     },
-    "description": "One submission with every section. Skipped when submission_id is empty, because an empty query returns the full list."
+    "description": "One submission with every section. Skipped when submission_id is empty. List without submission_id requires source=."
    },
    "event": [
     {
@@ -478,7 +496,7 @@
    ]
   },
   {
-   "name": "List farmer livestock",
+   "name": "List farmer livestock (source=submission)",
    "request": {
     "method": "GET",
     "header": [
@@ -488,7 +506,7 @@
      }
     ],
     "url": {
-     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock",
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock?source=submission",
      "host": [
       "{{base_url}}"
      ],
@@ -499,9 +517,16 @@
       "farmers",
       "{{farmer_id}}",
       "livestock"
+     ],
+     "query": [
+      {
+       "key": "source",
+       "value": "submission",
+       "description": "Required. Form history — one staff search_in_intake_form_submissions."
+      }
      ]
     },
-    "description": "Full section rows for this farmer: submissions include sections, and records include the register columns (ear tag, species, holding, health, vaccination, vital, breeding). Not the search display_fields list."
+    "description": "Submissions list. source=submission is required. One staff search only; returns search hits (not hydrated sections)."
    },
    "event": [
     {
@@ -509,29 +534,76 @@
      "script": {
       "type": "text/javascript",
       "exec": [
-       "const rows = (((pm.response.json() || {}).data || {}).livestock) || [];",
-       "pm.test(\"List farmer livestock returns full section rows\", function () {",
-       "    pm.response.to.have.status(200);",
-       "    pm.expect(rows.length).to.be.above(0);",
-       "    const animal = rows.find(row => row.kind === \"record\" && row.ear_tag_id && row.breed);",
-       "    pm.expect(animal, \"an animal row with ear_tag_id\").to.be.an(\"object\");",
-       "    pm.expect(animal.species).to.be.a(\"string\").that.is.not.empty;",
-       "    pm.expect(animal.breed).to.be.a(\"string\").that.is.not.empty;",
-       "    pm.expect(animal.gender).to.be.a(\"string\").that.is.not.empty;",
-       "    pm.expect(animal.health_status).to.be.a(\"string\").that.is.not.empty;",
-       "    const holding = rows.find(row => row.kind === \"record\" && row.farmer_id);",
-       "    pm.expect(holding, \"a holding row\").to.be.an(\"object\");",
-       "    pm.expect(holding.farmer_name).to.be.a(\"string\").that.is.not.empty;",
-       "    const submission = rows.find(row => row.kind === \"submission\");",
-       "    if (submission) pm.expect(submission.sections).to.be.an(\"array\");",
+       "pm.test(\"List returns 200\", function () { pm.response.to.have.status(200); });",
+       "const data = (pm.response.json() || {}).data || {};",
+       "pm.test(\"source is submission\", function () { pm.expect(data.source).to.eql(\"submission\"); });",
+       "pm.test(\"livestock is an array\", function () {",
+       "    pm.expect(data.livestock).to.be.an(\"array\");",
        "});"
+      ]
+     }
+    }
+   ],
+   "response": []
+  },
+  {
+   "name": "List farmer livestock (source=register)",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock?source=register",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock"
+     ],
+     "query": [
+      {
+       "key": "source",
+       "value": "register",
+       "description": "Required. Registers tab — one staff search_in_a_register."
+      }
+     ]
+    },
+    "description": "Registers list. source=register is required. Stores internal_record_id from the first row for Register tab."
+   },
+   "event": [
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"List returns 200\", function () { pm.response.to.have.status(200); });",
+       "const data = (pm.response.json() || {}).data || {};",
+       "pm.test(\"source is register\", function () { pm.expect(data.source).to.eql(\"register\"); });",
+       "const livestock = data.livestock || [];",
+       "pm.test(\"At least one livestock row\", function () { pm.expect(livestock.length).to.be.above(0); });",
+       "const first = livestock.find((row) => row && row.internal_record_id) || livestock[0] || {};",
+       "function save(key, value) {",
+       "    if (!value) return;",
+       "    pm.collectionVariables.set(key, value);",
+       "    if (pm.environment.name) pm.environment.set(key, value);",
+       "}",
+       "save(\"internal_record_id\", first.internal_record_id);"
       ]
      }
     }
    ],
    "response": [
     {
-     "name": "List farmer livestock success",
+     "name": "List register success",
      "originalRequest": {
       "method": "GET",
       "header": [
@@ -540,20 +612,7 @@
         "value": "application/json"
        }
       ],
-      "url": {
-       "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock",
-       "host": [
-        "{{base_url}}"
-       ],
-       "path": [
-        "api",
-        "v1",
-        "da-services",
-        "farmers",
-        "{{farmer_id}}",
-        "livestock"
-       ]
-      }
+      "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock?source=register"
      },
      "status": "OK",
      "code": 200,
@@ -564,7 +623,98 @@
        "value": "application/json"
       }
      ],
-     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-512145929324\",\n    \"livestock\": [\n      {\n        \"kind\": \"submission\",\n        \"submission_id\": \"0348c99d-2f76-46c9-9be6-34aa0dbe9347\",\n        \"record_name\": \"FR-512145929324\",\n        \"draft_status\": \"FINAL\",\n        \"approval_status\": \"PENDING\",\n        \"sections\": [\n          {\n            \"section_id\": \"livestock_animal_details_section_01\",\n            \"records\": [\n              {\"ear_tag_id\": \"ET7936016202\", \"species\": \"CATTLE\"}\n            ]\n          }\n        ]\n      },\n      {\n        \"kind\": \"record\",\n        \"register_id\": \"997676d3-7008-59f9-b23e-613ad79bbb08\",\n        \"internal_record_id\": \"0d8f7083-59a5-4aca-b59b-f5199a9547cd\",\n        \"functional_record_id\": \"LS-467029269057\",\n        \"farmer_id\": \"FR-512145929324\",\n        \"farmer_name\": \"Bekele Mulugeta Mekonnen\",\n        \"region\": \"Oromia\",\n        \"kebele\": \"Bengua 01\"\n      },\n      {\n        \"kind\": \"record\",\n        \"register_id\": \"041a9f79-2142-548a-a15b-a4c76fc9f6f7\",\n        \"ear_tag_id\": \"ET7936016202\",\n        \"species\": \"CATTLE\",\n        \"breed\": \"BREED_LOCAL\",\n        \"gender\": \"SEX_FEMALE\",\n        \"health_status\": \"HEALTHY\",\n        \"vaccination_status\": \"NONE\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  }\n}"
+     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-512145929324\",\n    \"source\": \"register\",\n    \"livestock\": [\n      {\n        \"internal_record_id\": \"livestock-rec-001\",\n        \"record_name\": \"FR-512145929324\",\n        \"register_id\": \"997676d3-7008-59f9-b23e-613ad79bbb08\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
+    }
+   ]
+  },
+  {
+   "name": "Register tab (internal_record_id + tab_id)",
+   "request": {
+    "method": "GET",
+    "header": [
+     {
+      "key": "Accept",
+      "value": "application/json"
+     }
+    ],
+    "url": {
+     "raw": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock?internal_record_id={{internal_record_id}}&tab_id={{tab_id}}",
+     "host": [
+      "{{base_url}}"
+     ],
+     "path": [
+      "api",
+      "v1",
+      "da-services",
+      "farmers",
+      "{{farmer_id}}",
+      "livestock"
+     ],
+     "query": [
+      {
+       "key": "internal_record_id",
+       "value": "{{internal_record_id}}",
+       "description": "Livestock register row id from List farmer livestock (source=register)."
+      },
+      {
+       "key": "tab_id",
+       "value": "{{tab_id}}",
+       "description": "Required. Default livestock_intake_tab (0ebdc221-…). Other tabs come from GET /livestock/intake-form screen_tabs."
+      }
+     ]
+    },
+    "description": "One register tab via staff /register-data/get_tab_records (single round trip). Uses internal_record_id saved by List farmer livestock (source=register). tab_id is required."
+   },
+   "event": [
+    {
+     "listen": "prerequest",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "if (!pm.variables.get(\"internal_record_id\")) pm.execution.skipRequest();"
+      ]
+     }
+    },
+    {
+     "listen": "test",
+     "script": {
+      "type": "text/javascript",
+      "exec": [
+       "pm.test(\"Read returns 200\", function () { pm.response.to.have.status(200); });",
+       "const data = (pm.response.json() || {}).data || {};",
+       "pm.test(\"Same internal_record_id\", function () {",
+       "    pm.expect(data.internal_record_id).to.eql(pm.variables.get(\"internal_record_id\"));",
+       "});",
+       "pm.test(\"Has tabs\", function () {",
+       "    pm.expect(data.tabs).to.be.an(\"array\");",
+       "});"
+      ]
+     }
+    }
+   ],
+   "response": [
+    {
+     "name": "Read register tab success",
+     "originalRequest": {
+      "method": "GET",
+      "header": [
+       {
+        "key": "Accept",
+        "value": "application/json"
+       }
+      ],
+      "url": "{{base_url}}/api/v1/da-services/farmers/{{farmer_id}}/livestock?internal_record_id={{internal_record_id}}&tab_id={{tab_id}}"
+     },
+     "status": "OK",
+     "code": 200,
+     "_postman_previewlanguage": "json",
+     "header": [
+      {
+       "key": "Content-Type",
+       "value": "application/json"
+      }
+     ],
+     "body": "{\n  \"status\": \"success\",\n  \"message\": \"Success\",\n  \"data\": {\n    \"farmer_id\": \"FR-512145929324\",\n    \"internal_record_id\": \"livestock-rec-001\",\n    \"register_id\": \"997676d3-7008-59f9-b23e-613ad79bbb08\",\n    \"tab_id\": \"0ebdc221-187d-5df6-9dc3-c6f4c4ee160e\",\n    \"tabs\": [\n      {\n        \"tab_id\": \"0ebdc221-187d-5df6-9dc3-c6f4c4ee160e\",\n        \"records\": []\n      }\n    ]\n  },\n  \"meta\": {\n    \"api_version\": \"v1\"\n  },\n  \"request_id\": \"00000000-0000-4000-8000-000000000001\"\n}"
     }
    ]
   }
