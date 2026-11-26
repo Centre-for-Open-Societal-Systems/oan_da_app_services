@@ -3,9 +3,10 @@
 This is the Farmer Registry login sequence, shared with Crop Sown and
 Livestock. Staff IAM user login wins when it is configured. The callback
 ``X-CSRF-Token`` cookie is sent back as the header. Otherwise a
-client-credentials token is used with a generated matching pair. A static
-API key already on the headers is left in place, and a CSRF pair is still
-sent because every staff call is a POST.
+client-credentials token is used with a generated matching CSRF pair (legacy
+server-to-server path). Caller-forwarded SSO flows (Crop Sown, Livestock)
+must send the FE request ``X-CSRF-Token``; a self-generated value is rejected
+by staff.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import threading
 import time
 from urllib.parse import urljoin
 
+import frappe
 import requests
 
 _TOKEN_SKEW_SECONDS = 30
@@ -43,10 +45,6 @@ class StaffAuthError(Exception):
 
 
 def _log(title: str, message: str) -> None:
-	try:
-		import frappe
-	except ImportError:
-		return
 	frappe.log_error(title=title, message=message)
 
 
@@ -428,19 +426,6 @@ def auth_and_csrf_headers(
 		csrf = secrets.token_urlsafe(24)
 	out["X-CSRF-Token"] = csrf
 	return out, {"X-CSRF-Token": csrf}
-
-
-def apply_bearer_and_csrf(headers: dict, token: str | None) -> tuple[dict, dict]:
-	"""Set the bearer when we have one, and a matching CSRF header and cookie.
-
-	``token`` None leaves an Authorization header that is already on ``headers``
-	unchanged. Crop Sown uses this for an injected test token.
-	"""
-	if token:
-		headers["Authorization"] = f"Bearer {token}"
-	csrf = secrets.token_urlsafe(24)
-	headers["X-CSRF-Token"] = csrf
-	return headers, {"X-CSRF-Token": csrf}
 
 
 def keycloak_from_conf(own: dict | None, shared: dict | None) -> dict:

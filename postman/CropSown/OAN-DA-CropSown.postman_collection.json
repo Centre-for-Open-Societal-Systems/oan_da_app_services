@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-cropsown",
     "name": "OAN DA Crop Sown",
-    "description": "DA Services Crop Sown routes. Always sign in with POST /api/v1/da-services/sso/login (username, password, key). Stores access_token and csrf_token. Every later request sends Authorization: Bearer {{access_token}} and X-CSRF-Token: {{csrf_token}} (forwarded to Crop Sown staff). On 401, re-run SSO Login. Save farmer lookup stores submission_id. Guide: docs/crop-sown-integration.md.",
+    "description": "DA Services Crop Sown routes. Prerequisites: Desk DA Services Settings must set crop_registry_domain and crop_registry_form_register_id (required; no get_all_registers). List/register-tab calls hit one staff API only. Always sign in with POST /api/v1/da-services/sso/login (username, password, key). Stores access_token and csrf_token. Every later request sends Authorization: Bearer {{access_token}} and X-CSRF-Token: {{csrf_token}} (forwarded to Crop Sown staff). On 401, re-run SSO Login. Save farmer lookup stores submission_id. Guide: docs/crop-sown-integration.md.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {

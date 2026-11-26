@@ -33,6 +33,7 @@ from da_services.integrations.farmer_registry.client import (
 )
 from da_services.services import constants as C
 from da_services.services import farmers
+from da_services.services.utils import StaffAPIError
 
 _UNAVAILABLE = _("Crop Sown Registry is currently unavailable. Try again shortly.")
 _FRAMEWORK_KEYS = {"cmd", "_", "sid"}
@@ -146,7 +147,7 @@ def get_farmer_crops(farmer_id: str):
 			return success_response(data={"farmer_id": requested_id, "crops": crops, "source": source})
 		submission = client.get_submission(submission_id)
 		tabs = client.get_tabs(submission_id) if submission is not None else []
-	except CropRegistryClientError as exc:
+	except (CropRegistryClientError, StaffAPIError) as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
@@ -211,15 +212,15 @@ def get_crop_intake_form():
 
 	Query ``form`` is required and selects the staff form: ``planning``,
 	``cultivation``, ``sowing``, or ``harvesting``. Response is that form only.
-	Catalog rows load when ``crop_registry_master_data_url`` is set. Geography is
-	a separate call.
+	Catalog rows load when DA Services Settings ``master_data_domain`` is set.
+	Geography is a separate call.
 	"""
 	form_name = (frappe.form_dict.get("form") or "").strip()
 	if not form_name:
 		frappe.throw(_("form is required."), frappe.ValidationError)
 	try:
 		described = get_crop_registry_client().describe_intake_form(form_name=form_name)
-	except CropRegistryClientError as exc:
+	except (CropRegistryClientError, StaffAPIError) as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except CropRegistryServerError:
 		frappe.response["http_status_code"] = 503
@@ -298,7 +299,7 @@ def save_farmer_crop(farmer_id: str):
 			subject_record_id=subject_record_id,
 			form_name=form_name,
 		)
-	except CropRegistryClientError as exc:
+	except (CropRegistryClientError, StaffAPIError) as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
@@ -327,7 +328,7 @@ def finalize_farmer_crop(farmer_id: str, submission_id: str):
 	try:
 		requested_id, client = _open_crop_client(farmer_id)
 		finalized = client.finalize_submission(submission_id)
-	except CropRegistryClientError as exc:
+	except (CropRegistryClientError, StaffAPIError) as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
 	except FarmerRegistryClientError as exc:
 		frappe.throw(str(exc), frappe.ValidationError)
