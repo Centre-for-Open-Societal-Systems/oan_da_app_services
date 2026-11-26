@@ -144,10 +144,16 @@ class TestZoneScope(IntegrationTestCase):
 
 	# -- rows carry zone ------------------------------------------------------------
 
-	def test_visit_task_and_change_request_carry_zone_from_registry(self):
+	def test_visit_task_and_change_request_carry_zone_from_stamp(self):
 		self.assertEqual(frappe.db.get_value("DA Visit", self.v1["name"], "zone"), "ET04-Z01")
 		with as_user(DA1):
-			t = tasks.create_task(title="Soil sample", da_id="DA-000001")
+			t = tasks.create_task(
+				title="Soil sample",
+				user=DA1,
+				region="ET04",
+				zone="ET04-Z01",
+				woreda="ET04-W01",
+			)
 		self.assertEqual(frappe.db.get_value("DA Task", t["name"], "zone"), "ET04-Z01")
 		with as_user(ZONE_SUP):  # the DA's Woreda Supervisor asks for them
 			req = profile.submit_change_request(
@@ -208,10 +214,17 @@ class TestZoneScope(IntegrationTestCase):
 
 	def test_zone_grant_applies_to_tasks_links_and_change_requests(self):
 		with as_user(DA1):
-			tasks.create_task(title="Mine", da_id="DA-000001")
+			tasks.create_task(
+				title="Mine",
+				user=DA1,
+				region="ET04",
+				zone="ET04-Z01",
+				woreda="ET04-W01",
+			)
 		frappe.get_doc(
 			{
 				"doctype": "DA Task",
+				"user": ensure_da_user(OTHER_DA),
 				"da_id": OTHER_DA,
 				"title": "Theirs",
 				"task_type": "Custom",

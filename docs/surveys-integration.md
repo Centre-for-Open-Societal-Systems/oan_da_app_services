@@ -27,13 +27,13 @@ Desk writes stay with System Manager / OAN Administrator. Runtime writes go thro
 | --- | --- |
 | Create / patch template | Supervisor, OAN Administrator |
 | List / get assigned surveys | DA, Supervisor, Executive, Admin |
-| Submit response | DA, Supervisor / Admin (need `da_id` when acting as collector); DA must be individually assigned when the survey uses `Selected` mode |
+| Submit response | DA, Supervisor / Admin (need `da_id` when acting as collector) |
 | List responses | DA (own collector rows) unless a **live** Supervisor / Executive assignment exists, in which case the officer scope applies |
 | Results | Supervisor, Executive, Admin |
 | XLSX response export | Supervisor, Executive, Admin with a live officer assignment |
 | Surveys nav (`GET /me`) | DA, Supervisor, Executive, Admin |
 
-Scope stamps `region` / `zone` / `woreda` from the Woreda's authoritative `DA Administrative Area` hierarchy. A non-Admin creator must have an active Supervisor assignment covering the derived Woreda. Admin must pass `woreda` (and may pass `region` / `zone` as consistency checks); those codes must exist and match the hierarchy. A DA sees Woreda-wide templates whose woreda matches their grant, plus `Selected` templates where their DA-ID is actively assigned. An unassigned DA receives 403 on survey detail/capture. Response `da_id` is the collector DA-ID.
+Scope stamps `region` / `zone` / `woreda` from the Woreda's authoritative `DA Administrative Area` hierarchy. A non-Admin creator must have an active Supervisor assignment covering the derived Woreda. Admin must pass `woreda` (and may pass `region` / `zone` as consistency checks); those codes must exist and match the hierarchy. List/detail for DAs is Role DocPerm + User Permissions (Woreda). `Selected` mode opens assignment marker Tasks for the FE-supplied `assignedUsers` (dashboard tracking); it does not add a second list filter. Response `da_id` is the collector DA-ID.
 
 Dual-role precedence: a user with both DA and Supervisor/Executive roles is treated as the officer for response listing and export, but **only while the officer assignment is active**. When the officer grant is expired or missing, the DA rule applies (own collector rows) and export is denied. This matches `PRIMARY_ROLE_ORDER` in `GET /me` and the response query hook; it is never the union of both roles.
 
@@ -57,9 +57,9 @@ Prefix `/api/v1/da-services`. Bearer token only (no staff CSRF). Envelope: `succ
 | POST | `/surveys/templates` | 201. Body = `TemplateInput`. Prepends standard params. |
 | GET | `/surveys/templates` | Supervisor / Admin / Executive. Filters: `status`, `type`, `q`, `limit`, `start`. Filters and `meta.total` use the same matched set; `Closed` includes stored-Closed and expired `Open` templates. |
 | GET | `/surveys/templates/{id}` | Full template including parameters. |
-| PATCH | `/surveys/templates/{id}` | Partial: `name`, `open`/`close`, `languages`, `targetFarmers`, `status` Open\|Closed, `assignmentMode` / `assignedDaIds`. `questions` with no collected responses updates the existing template and bumps `templateVersion`; with collected responses it creates a new template version containing the submitted questions and zero responses. Invalid questions → **400**. See [Template versioning on question edits](#template-versioning-on-question-edits). |
-| GET | `/surveys` | Assigned tasks. Filters: `status`, `type`, `language`, `woreda`, `q`. DA `collected` / `queued` / `answered` are for that DA. Selected-assignment surveys are hidden from DAs not assigned. |
-| GET | `/surveys/{id}` | Full `SurveyTask` + `parameters`. Unassigned DA → 403 in `Selected` mode. |
+| PATCH | `/surveys/templates/{id}` | Partial: `name`, `open`/`close`, `languages`, `targetFarmers`, `status` Open\|Closed, `assignmentMode` / `assignedUsers`. `questions` with no collected responses updates the existing template and bumps `templateVersion`; with collected responses it creates a new template version containing the submitted questions and zero responses. Invalid questions → **400**. See [Template versioning on question edits](#template-versioning-on-question-edits). |
+| GET | `/surveys` | Assigned tasks. Filters: `status`, `type`, `language`, `woreda`, `q`. DA `collected` / `queued` / `answered` are for that DA. Scope is DocPerm + User Permissions. |
+| GET | `/surveys/{id}` | Full `SurveyTask` + `parameters`. |
 | POST | `/surveys/{id}/responses` | 201. Submit a completed response. Unknown farmer → 404; outside Kebele / Woreda or unassigned DA → 403; before `window_open`, after close, invalid answers, `sync_state="Draft"` or invalid client sync state → 400; duplicate completed farmer → 409. |
 | GET | `/surveys/{id}/responses` | Paginated. Filters: `farmer_id`, `da_id`, `region`, `zone`, `woreda`, `kebele`. Explicit area selections are validated against the caller's scope (403), never silently widened. |
 | GET | `/surveys/{id}/responses/export` | **XLSX download.** Supervisor / Executive / Admin with a live officer assignment. `type=download`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`. |
@@ -120,7 +120,7 @@ Matches the Create Template modal (`TemplateInput`):
 | `questions` | yes | ≥ 1; each `prompt`, `type` (rating\|single\|multi\|text), `options` (comma string or list; ≥ 2 for choice types), `required`, optional `translations` object keyed by non-English language |
 | `woreda` | Supervisor / Admin | required unless the creator has exactly one active Woreda scope. Resolved from `DA Administrative Area`; the server derives Zone and Region. |
 | `assignmentMode` | no | `Woreda` (default) or `Selected`. |
-| `assignedDaIds` | when `Selected` | Non-empty DA-ID list. Every DA must be in the template Woreda; duplicates are removed. |
+| `assignedUsers` | when `Selected` | Non-empty Frappe User Link list (emails). FE must send users; `da_id` on marker Tasks comes from `fetch_from: user.da_registry_id` when set. Duplicates are removed. |
 | `region`, `zone` | no | optional consistency checks for Admin (Supervisor values are derived). A code that does not exist or does not match the Woreda hierarchy is rejected with 400. |
 | `client_op_id` | no | idempotent create; see below. |
 
@@ -150,7 +150,8 @@ Custom questions become `p4`, `p5`, …. `templateVersion` looks like `FSS-T3-v1
 | `status` | derived: `Closed` when stored `Closed` or `window_close` has passed; `Closing soon` when the close date is within 7 days; otherwise `Open`. `Open` and `Closing soon` filters never include an expired template. |
 | `estMinutes` | int |
 | `assignmentMode` | `Woreda` when no active assignment markers exist, otherwise `Selected`. |
-| `assignedDaIds` | Present on template list/detail and template create/patch responses; active DA-IDs only. |
+| `assignedUsers` | Present on template list/detail; active User Links from assignment marker Tasks. |
+| `assignedDaIds` | Echo of marker Task `da_id` values when `fetch_from` filled them (may be empty). |
 | `parameters[]` | `{ id, order, prompt, type, required, options?, helper?, prefill?, translations?, condition? }`. `translations` is keyed by `English` / `Amharic` / `Afaan Oromoo` minus English; `prompt` is always English. |
 
 `GET /surveys/templates` applies `q`, `status` (derived) and `type` before pagination, so
@@ -330,10 +331,11 @@ bench --site <site> migrate
    no saved-draft or draft-update flow.
 2. **No survey approval workflow** — create equals publish (`status = Open`); there is no
    Woreda approval state, `approved_by` field or separate publication step.
-3. **Woreda-wide or selected-DA assignment** — default is every DA in the Woreda. Selected
-   assignment validates that each DA belongs to the Woreda and is enforced on survey
-   list/detail and capture. Active assignment markers are `DA Task` rows; removing an
-   assignment cancels its marker and re-assigning creates a new marker.
+3. **Woreda-wide or selected-user assignment** — default is every DA in the Woreda.
+   `Selected` requires FE-supplied `assignedUsers` (User Links). Active assignment markers
+   are `DA Task` rows with `user` set from FE (`da_id` may fill via `fetch_from`); removing
+   an assignment cancels its marker and re-assigning creates a new marker. Markers feed the
+   dashboard; they do not add a second list/detail filter beyond DocPerm + User Permissions.
 4. **Multilingual questions** — custom prompts accept `translations` for Amharic and Afaan
    Oromoo (English stays in `prompt`). Language aliases are normalised to the canonical
    names. Skip logic, lookup, prefill and other advanced questionnaire features are not

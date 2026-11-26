@@ -16,6 +16,7 @@ import re
 from datetime import timedelta
 
 import frappe
+from frappe import _
 from frappe.utils import get_datetime, getdate, today
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
@@ -186,7 +187,8 @@ def _response_counts(survey_id: str, collector_da_id: str | None = None) -> dict
 
 def serialize_survey(doc, *, include_parameters: bool = True, collector_da_id: str | None = None) -> dict:
 	counts = _response_counts(doc.name, collector_da_id)
-	assigned = _assigned_da_ids(doc.name)
+	assigned_users = _assigned_users(doc.name)
+	assigned_da_ids = _assigned_da_ids(doc.name)
 	out = {
 		"id": doc.name,
 		"name": doc.title,
@@ -209,10 +211,11 @@ def serialize_survey(doc, *, include_parameters: bool = True, collector_da_id: s
 		"zone": doc.zone,
 		"woreda": doc.woreda,
 		"created_by_user": doc.created_by_user,
-		"assignmentMode": "Selected" if assigned else "Woreda",
+		"assignmentMode": "Selected" if assigned_users else "Woreda",
 	}
 	if collector_da_id is None:
-		out["assignedDaIds"] = assigned
+		out["assignedUsers"] = assigned_users
+		out["assignedDaIds"] = assigned_da_ids
 	if include_parameters:
 		out["parameters"] = [serialize_parameter(r) for r in doc.parameters]
 	return out
@@ -272,6 +275,15 @@ def _assignment_rule(survey_id: str) -> str:
 	return f"{ASSIGNMENT_RULE_PREFIX}{survey_id}"
 
 
+def _assigned_users(survey_id: str) -> list[str]:
+	rows = frappe.get_all(
+		"DA Task",
+		filters={"generated_by_rule": _assignment_rule(survey_id), "status": ("!=", "Cancelled")},
+		pluck="user",
+	)
+	return sorted({u for u in rows if u})
+
+
 def _assigned_da_ids(survey_id: str) -> list[str]:
 	rows = frappe.get_all(
 		"DA Task",
@@ -281,27 +293,31 @@ def _assigned_da_ids(survey_id: str) -> list[str]:
 	return sorted({d for d in rows if d})
 
 
-def _sync_assignments(doc, da_ids) -> None:
-	"""Open a DA Task for each newly assigned DA and cancel the ones taken off."""
-	wanted = {str(d).strip() for d in (da_ids or []) if str(d).strip()}
+def _sync_assignments(doc, users) -> None:
+	"""Open a DA Task for each newly assigned User and cancel the ones taken off.
+
+	``users`` must come from the FE (User Link emails). ``da_id`` is optional on the
+	marker Task and is filled by DocType ``fetch_from: user.da_registry_id`` when set.
+	"""
+	wanted = {str(u).strip() for u in (users or []) if str(u).strip()}
 	rule = _assignment_rule(doc.name)
 	for task in frappe.get_all(
 		"DA Task",
 		filters={"generated_by_rule": rule, "status": ("!=", "Cancelled")},
-		fields=["name", "da_id"],
+		fields=["name", "user"],
 	):
-		if task.da_id in wanted:
-			wanted.discard(task.da_id)
+		if task.user in wanted:
+			wanted.discard(task.user)
 			continue
 		marker = frappe.get_doc("DA Task", task.name)
 		marker.flags.ignore_permissions = True
 		marker.cancel_task("Survey assignment removed.")
-	for da_id in sorted(wanted):
+	for user in sorted(wanted):
 		# A system marker that follows the template write the caller was allowed to make.
 		frappe.get_doc(
 			{
 				"doctype": "DA Task",
-				"da_id": da_id,
+				"user": user,
 				"task_type": "Survey due",
 				"title": f"Complete survey: {doc.title}",
 				"description": f"Survey {doc.name} is assigned to you.",
@@ -351,7 +367,7 @@ def create_template(
 	questions=None,
 	woreda=None,
 	assignmentMode=None,
-	assignedDaIds=None,
+	assignedUsers=None,
 	client_op_id=None,
 ) -> str:
 	"""Insert one template (create = publish). Returns its id."""
@@ -379,7 +395,12 @@ def create_template(
 		}
 	).insert()
 	if assignmentMode == "Selected":
-		_sync_assignments(doc, assignedDaIds)
+		users = [str(u).strip() for u in (assignedUsers or []) if str(u).strip()]
+		if not users:
+			frappe.throw(
+				_("assignedUsers is required when assignmentMode is Selected."), frappe.ValidationError
+			)
+		_sync_assignments(doc, users)
 	return doc.name
 
 
@@ -418,8 +439,13 @@ def patch_template(survey_id: str, body: dict) -> str:
 
 	if body.get("assignmentMode") == "Woreda":
 		_sync_assignments(doc, [])
-	elif body.get("assignedDaIds") is not None:
-		_sync_assignments(doc, body["assignedDaIds"])
+	elif body.get("assignedUsers") is not None:
+		users = [str(u).strip() for u in (body.get("assignedUsers") or []) if str(u).strip()]
+		if body.get("assignmentMode") == "Selected" and not users:
+			frappe.throw(
+				_("assignedUsers is required when assignmentMode is Selected."), frappe.ValidationError
+			)
+		_sync_assignments(doc, users)
 	return target.name
 
 

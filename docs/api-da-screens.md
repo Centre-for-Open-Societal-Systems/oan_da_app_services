@@ -416,25 +416,25 @@ Backend contract: [surveys-integration.md](surveys-integration.md). Frontend wir
 
 `SurveyTask {id, name, templateVersion, type (Satisfaction | Service quality | Needs assessment), window {open,
 close}, languages[], targetFarmers, collected, queued, status (Open | Closing soon | Closed), estMinutes,
-assignmentMode (Woreda | Selected), assignedDaIds[], parameters[], answered[] farmer ids}`; `Parameter {id, order,
+assignmentMode (Woreda | Selected), assignedUsers[], assignedDaIds[], parameters[], answered[] farmer ids}`; `Parameter {id, order,
 prompt, type (consent | auto | lookup | rating | single | multi | text), required, options?, helper?, prefill?
 (Farmer Registry | DA assignment), translations? {Amharic?, Afaan Oromoo?}, condition? {parameterId, equals}}`.
 Capture: pick farmer (one response per farmer per survey), consent first (declined ends the response), then submit
 directly → `Synced | Queued`. Only `Queued` and `Synced` are client-settable; `Draft` is rejected with 400.
 `Declined` is forced when consent is declined, and `Rejected` / `Conflict` are server-only. Supervisor/Admin create
 template `TemplateInput {name, type, open, close, languages[], targetFarmers, questions[] {prompt, type, options,
-required, translations?}, assignmentMode?, assignedDaIds?, woreda?, region?, zone?, client_op_id?}`.
+required, translations?}, assignmentMode?, assignedUsers?, woreda?, region?, zone?, client_op_id?}`.
 The Woreda is resolved from `DA Administrative Area`, its Zone/Region are derived, and the target is checked
 against the creator's live RBAC assignment; supplied Region/Zone are consistency checks only. Deployments are
-Woreda-wide by default; `Selected` restricts visibility/capture to the listed DAs in that Woreda.
+Woreda-wide by default; `Selected` opens assignment marker Tasks for the listed User Links (FE supplies `assignedUsers`).
 
 | Element | API | Source |
 |---|---|---|
-| Assigned surveys | `GET /surveys?status&type&language&woreda&q` → tasks with my `collected`, `queued`, `answered[]`; `Selected` surveys hidden from unassigned DAs | ours: DA Survey Template + DA Survey Response (data-model §7) |
-| Capture | `GET /surveys/{id}` (parameters; unassigned DA → 403 in `Selected` mode); `POST /surveys/{id}/responses {farmer_id, da_id?, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}`. `da_id` is required when a Supervisor or Admin collects on behalf of a DA. Farmer must be in the collector DA's assigned Kebele and the survey Woreda: unknown → 404, out of scope → 403, duplicate farmer/template → 409 (across all DAs). Before `window_open` / after close, invalid timestamps, or an invalid client `sync_state` (including `Draft`) → 400. Response stores the farmer's location, not the DA's | ours |
-| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey into the authoritative Woreda. The Woreda → Zone → Region hierarchy is resolved from master data; forged, unknown, inactive or mismatched areas are rejected and the target must be inside the caller's active assignment. `assignmentMode=Selected` requires non-empty `assignedDaIds` from the same Woreda | ours |
+| Assigned surveys | `GET /surveys?status&type&language&woreda&q` → tasks with my `collected`, `queued`, `answered[]`; scope is DocPerm + User Permissions | ours: DA Survey Template + DA Survey Response (data-model §7) |
+| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, da_id?, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}`. `da_id` is required when a Supervisor or Admin collects on behalf of a DA. Farmer must be in the collector DA's assigned Kebele and the survey Woreda: unknown → 404, out of scope → 403, duplicate farmer/template → 409 (across all DAs). Before `window_open` / after close, invalid timestamps, or an invalid client `sync_state` (including `Draft`) → 400. Response stores the farmer's location, not the DA's | ours |
+| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey into the authoritative Woreda. The Woreda → Zone → Region hierarchy is resolved from master data; forged, unknown, inactive or mismatched areas are rejected and the target must be inside the caller's active assignment. `assignmentMode=Selected` requires non-empty `assignedUsers` (Frappe User Links from FE) | ours |
 | Template list / detail | `GET /surveys/templates?status&type&woreda&q`, `GET /surveys/templates/{id}` (Supervisor/Admin/Executive). Search and derived status filters apply before pagination; `meta.total` is the filtered count and `Closed` includes expired Open templates | ours |
-| Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed, assignmentMode/assignedDaIds; question edits with no collected responses update the template and bump its version, while edits after responses exist create a new template version with the submitted questions and zero responses (original template/questions/responses unchanged); invalid questions → 400 | ours |
+| Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed, assignmentMode/assignedUsers; question edits with no collected responses update the template and bump its version, while edits after responses exist create a new template version with the submitted questions and zero responses (original template/questions/responses unchanged); invalid questions → 400 | ours |
 | Responses list | `GET /surveys/{id}/responses?farmer_id&da_id&region&zone&woreda&kebele` — DA own rows; a DA + Supervisor/Executive with a **live** officer assignment uses the officer scope. An expired officer grant falls back to DA rows. Explicit area/DA selections are validated; unauthorized values are 403, not silently ignored | ours |
 | Excel export | `GET /surveys/{id}/responses/export` → complete XLSX download (all base columns + every parameter; Supervisor/Executive/Admin with a live assignment, survey in scope) | ours |
 | Results | `GET /surveys/{id}/results` — counts, rating averages, choice histograms (basic; Part 2 analytics later) | ours |
@@ -543,7 +543,7 @@ two types.
   enum (Low, Medium, High, Critical); status values mirror the Grievance Service list above.
 - **DA Beneficiary Classification**: statuses Enrolled / Pending verification / Removed map to
   `active` + `review_state` + `previously_removed`; no change, document the mapping.
-- **Surveys**: parameter `type` enum, `translations`, `prefill`; one-response-per-farmer is enforced by a unique canonical `duplicate_guard_key` (cross-DA, 409). Declined responses do not reserve the farmer; new drafts are rejected (historical Draft rows remain readable/exported). Template scope comes from the `DA Administrative Area` hierarchy and a live RBAC assignment; client `region` / `zone` values are only consistency checks. Woreda-wide is the default; `Selected` restricts the survey to the listed DA-IDs.
+- **Surveys**: parameter `type` enum, `translations`, `prefill`; one-response-per-farmer is enforced by a unique canonical `duplicate_guard_key` (cross-DA, 409). Declined responses do not reserve the farmer; new drafts are rejected (historical Draft rows remain readable/exported). Template scope comes from the `DA Administrative Area` hierarchy and a live RBAC assignment; client `region` / `zone` values are only consistency checks. Woreda-wide is the default; `Selected` opens marker Tasks for FE-supplied `assignedUsers`.
 - **KPI**: `DA KPI Record` fields per `ManualForm`; tier thresholds as a single settings doc.
 
 ## 4. Consolidated endpoint list (DA screens)

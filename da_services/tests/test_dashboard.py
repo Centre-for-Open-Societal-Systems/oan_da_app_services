@@ -87,13 +87,17 @@ class TestDashboard(IntegrationTestCase):
 				visits.submit_outcome(v["name"], observed="ok")
 		# tasks: 2 open due today (1 urgent), 1 open later, 1 done in range
 		with as_user(admin):
-			tasks.create_task(title="Report", da_id="DA-000001", due_at=f"{t} 13:00:00", priority="Urgent")
+			tasks.create_task(
+				title="Report", user=DA1, da_id="DA-000001", due_at=f"{t} 13:00:00", priority="Urgent"
+			)
 		with as_user(admin):
-			tasks.create_task(title="Sample", da_id="DA-000001", due_at=f"{t} 08:30:00")
+			tasks.create_task(title="Sample", user=DA1, da_id="DA-000001", due_at=f"{t} 08:30:00")
 		with as_user(admin):
-			tasks.create_task(title="Later", da_id="DA-000001", due_at=f"{add_days(t, 4)} 09:00:00")
+			tasks.create_task(title="Later", user=DA1, da_id="DA-000001", due_at=f"{add_days(t, 4)} 09:00:00")
 		with as_user(admin):
-			done = tasks.create_task(title="Old", da_id="DA-000001", due_at=f"{add_days(t, -5)} 09:00:00")
+			done = tasks.create_task(
+				title="Old", user=DA1, da_id="DA-000001", due_at=f"{add_days(t, -5)} 09:00:00"
+			)
 		with as_user(admin):
 			tasks.complete_task(done["name"])
 		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit
@@ -173,7 +177,7 @@ class TestDashboard(IntegrationTestCase):
 			out = dashboard.today(date=d, da_id="DA-000001")
 		self.assertEqual([i["status"] for i in out["items"]], ["Done"])
 		with as_user("Administrator"):
-			tasks.create_task(title="Missed", da_id="DA-000001", due_at=f"{d} 10:00:00")
+			tasks.create_task(title="Missed", user=DA1, da_id="DA-000001", due_at=f"{d} 10:00:00")
 		with as_user(DA1):
 			out = dashboard.today(date=d, da_id="DA-000001")
 		self.assertEqual(sorted(i["status"] for i in out["items"]), ["Done", "Overdue"])

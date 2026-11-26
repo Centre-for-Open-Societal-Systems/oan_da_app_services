@@ -15,7 +15,7 @@ from openpyxl import load_workbook
 from da_services.api.v1 import surveys as api
 from da_services.services import constants as C
 from da_services.services import surveys as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_doctype_schema
+from da_services.tests.fixtures import create_administrative_areas, ensure_doctype_schema, set_da_registry_id
 
 DA1 = "srv-da1@da.local"  # DA-000001, ET04-W01
 DA2 = "srv-da2@da.local"  # DA-000002, ET04-W01
@@ -82,6 +82,9 @@ class TestSurveys(IntegrationTestCase):
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA2, "DA-000002")
+		set_da_registry_id(DA3, "DA-000004")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -143,11 +146,12 @@ class TestSurveys(IntegrationTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			self._create(user=DA1, woreda="ET04-W01")
 
-	def test_create_with_selected_das_assigns_them(self):
-		survey_id = self._create(assignmentMode="Selected", assignedDaIds=["DA-000002"])
+	def test_create_with_selected_users_assigns_them(self):
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
 		with _as(SUP):
 			out = svc.get_template(survey_id)
 		self.assertEqual(out["assignmentMode"], "Selected")
+		self.assertEqual(out["assignedUsers"], [DA2])
 		self.assertEqual(out["assignedDaIds"], ["DA-000002"])
 
 	def test_create_api_returns_the_new_id(self):
@@ -193,7 +197,7 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(len(frappe.get_doc("DA Survey Template", saved).parameters), 4)
 
 	def test_patch_assignment_mode_switches(self):
-		survey_id = self._create(assignmentMode="Selected", assignedDaIds=["DA-000002"])
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
 		with _as(SUP):
 			svc.patch_template(survey_id, {"assignmentMode": "Woreda"})
 			self.assertEqual(svc.get_template(survey_id)["assignmentMode"], "Woreda")
@@ -231,7 +235,7 @@ class TestSurveys(IntegrationTestCase):
 	def test_da_lists_every_survey_of_their_woreda(self):
 		# No caller DA-ID: assignment to selected DAs no longer narrows the list.
 		woreda_wide = self._create(name="Woreda wide")
-		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedDaIds=["DA-000002"])
+		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedUsers=[DA2])
 		for user in (DA1, DA2):
 			with _as(user):
 				rows, _total = svc.list_surveys()
