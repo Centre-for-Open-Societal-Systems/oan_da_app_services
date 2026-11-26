@@ -484,7 +484,7 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
-| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only; `GET /attendance-punches?user=&from=&to=` → daily rows with `user_name`, `kebele`, `check_in`/`check_out`, `hours_logged` | ours: DA Attendance Punch |
+| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only; `GET /attendance-punches?user=&from_date=&to_date=` → daily rows with `user_name`, `kebele`, `check_in`/`check_out`, `hours_logged` | ours: DA Attendance Punch |
 
 Supervisor-side approvals for all of the above are the `ApprovalRequest` queue (`/approvals`): `kind
 (Onboarding | Profile change | Assignment | Specialization)`, `data[] {label, value, verified}`, `trail[]`,
@@ -505,7 +505,7 @@ Postman: `postman/AttendancePunches/`.
 |---|---|---|
 | Today status / button | `GET /attendance-punches/today` → `next_action` | ours |
 | Punch In / Punch Out | `POST /attendance-punches {action, punched_date, punched_time, geo?, lat?, lng?}` | ours |
-| Team / self attendance list | `GET /attendance-punches?user=` (required) + `from`+`to` (omit both → today) + optional geo/`da_id` → `{user_name, kebele, status, check_in, check_out, hours_logged}` | ours |
+| Team / self attendance list | `GET /attendance-punches?user=` (required) + `from_date`+`to_date` (omit both → today) + optional geo/`da_id` → `{user_name, kebele, status, check_in, check_out, hours_logged}` | ours |
 
 ### 2.19 Notifications
 

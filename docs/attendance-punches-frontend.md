@@ -16,7 +16,7 @@ After midnight (site date), GET returns `next_action: "Punch In"` with null id/d
 ## Sequence (attendance list / Team attendance)
 
 1. SSO login → Bearer.
-2. Load table: `GET /api/v1/da-services/attendance-punches?user=<User>&from=&to=` (both `from`/`to` for a day or range; omit both → site today). **`user` is required** (DA self or the DA the Supervisor is viewing).
+2. Load table: `GET /api/v1/da-services/attendance-punches?user=<User>&from_date=&to_date=` (both for a day or range; omit both → site today). **`user` is required** (DA self or the DA the Supervisor is viewing).
 3. Render one row per item: `user_name`, `kebele` (resolve display name in the FE), `status`, `check_in`, `check_out`, `hours_logged`.
 4. Optional filters (get_list only): `da_id`, `region`, `zone`, `woreda`, `kebele`. Out-of-scope filters return an empty list.
 5. Only days with at least one punch appear — do not expect “Not checked in” rows from this API.

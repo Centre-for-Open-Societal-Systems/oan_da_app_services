@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-attendance-punches",
     "name": "OAN DA Attendance Punches",
-    "description": "Punch-in / punch-out and daily attendance list for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n4. GET list → daily rows with user_name, kebele, check_in/out, hours_logged (kebele display name is FE)\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm + User Permissions on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET today always returns {next_action, id, punched_date, punched_time}\n- GET list returns one row per user per punched_date (punch-derived only); date filter is from+to only\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
+    "description": "Punch-in / punch-out and daily attendance list for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n4. GET list → daily rows with user_name, kebele, check_in/out, hours_logged (kebele display name is FE)\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm + User Permissions on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET today always returns {next_action, id, punched_date, punched_time}\n- GET list returns one row per user per punched_date (punch-derived only); date filter is from_date+to_date only\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -156,13 +156,13 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from={{from_date}}&to={{to_date}}&limit=50&start=0",
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from_date={{from_date}}&to_date={{to_date}}&limit=50&start=0",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "da-services", "attendance-punches"],
               "query": [
                 { "key": "user", "value": "{{user}}" },
-                { "key": "from", "value": "{{from_date}}" },
-                { "key": "to", "value": "{{to_date}}" },
+                { "key": "from_date", "value": "{{from_date}}" },
+                { "key": "to_date", "value": "{{to_date}}" },
                 { "key": "limit", "value": "50" },
                 { "key": "start", "value": "0" },
                 { "key": "da_id", "value": "", "disabled": true },
@@ -172,7 +172,7 @@
                 { "key": "kebele", "value": "{{kebele}}", "disabled": true }
               ]
             },
-            "description": "Daily attendance for required user. Date filter: from+to only (same day for a single day). Optional: da_id, region, zone, woreda, kebele, limit, start."
+            "description": "Daily attendance for required user. Date filter: from_date+to_date only (same day for a single day). Optional: da_id, region, zone, woreda, kebele, limit, start."
           }
         },
         {
@@ -192,17 +192,17 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from={{from_date}}&to={{to_date}}&kebele={{kebele}}",
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from_date={{from_date}}&to_date={{to_date}}&kebele={{kebele}}",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "da-services", "attendance-punches"],
               "query": [
                 { "key": "user", "value": "{{user}}" },
-                { "key": "from", "value": "{{from_date}}" },
-                { "key": "to", "value": "{{to_date}}" },
+                { "key": "from_date", "value": "{{from_date}}" },
+                { "key": "to_date", "value": "{{to_date}}" },
                 { "key": "kebele", "value": "{{kebele}}" }
               ]
             },
-            "description": "Required user + from/to + kebele get_list filter."
+            "description": "Required user + from_date/to_date + kebele get_list filter."
           }
         },
         {
@@ -224,16 +224,16 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from={{from_date}}&to={{to_date}}",
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from_date={{from_date}}&to_date={{to_date}}",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "da-services", "attendance-punches"],
               "query": [
                 { "key": "user", "value": "{{user}}" },
-                { "key": "from", "value": "{{from_date}}" },
-                { "key": "to", "value": "{{to_date}}" }
+                { "key": "from_date", "value": "{{from_date}}" },
+                { "key": "to_date", "value": "{{to_date}}" }
               ]
             },
-            "description": "Required user + from/to range (both required)."
+            "description": "Required user + from_date/to_date range (both required)."
           }
         }
       ]

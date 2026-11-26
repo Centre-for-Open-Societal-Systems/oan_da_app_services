@@ -68,7 +68,7 @@ def list_attendance(
 ) -> tuple[list[dict], int]:
 	"""Daily attendance for one user, scoped by Role DocPerm + User Permissions.
 
-	``user`` is required from the FE. Date range uses ``from`` + ``to`` only
+	``user`` is required from the FE. Date range uses ``from_date`` + ``to_date``
 	(defaults to site today when both omitted). Other query args only narrow get_list.
 	"""
 	user = user.strip()
@@ -79,7 +79,7 @@ def list_attendance(
 	if from_date and to_date:
 		filters["punched_date"] = ("between", [getdate(from_date), getdate(to_date)])
 	elif from_date or to_date:
-		frappe.throw(_("from and to are both required for a date range."), frappe.ValidationError)
+		frappe.throw(_("from_date and to_date are both required for a date range."), frappe.ValidationError)
 	else:
 		filters["punched_date"] = getdate()
 

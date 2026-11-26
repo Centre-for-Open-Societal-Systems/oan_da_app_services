@@ -62,7 +62,7 @@ Query (map to `frappe.get_list` filters only):
 | Param | Notes |
 | --- | --- |
 | `user` | **Required.** Frappe User Link whose attendance to list. Missing/blank → 400 `user is required.` |
-| `from`, `to` | Inclusive range on `punched_date`. **Both required** together (use the same day for a single day); one alone → 400. Omit both → **site today**. |
+| `from_date`, `to_date` | Inclusive range on `punched_date`. **Both required** together (use the same day for a single day); one alone → 400. Omit both → **site today**. |
 | `da_id` | Optional narrower on `da_id` |
 | `region`, `zone`, `woreda`, `kebele` | Geo Link filters; out-of-grant → empty page |
 | `limit`, `start` | Page of **daily rows** (default 50 / 0; limit clamped 1..500) |
