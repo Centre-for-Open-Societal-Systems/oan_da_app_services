@@ -281,24 +281,11 @@ ENDSSH
             }
         }
 
-        // The routes chart (apisix/k8s) is packaged and published like the app chart, but only for a build that
-        // changed the routes or the gateway values: those are the builds that install it.
-        // staging packages it on every build: each QA deploy installs the routes with the staging values.
+        // The routes chart (apisix/k8s) is packaged on every develop and staging build: "develop → gateway (apisix)"
+        // decides at deploy time whether to install it (gateway files changed, or the release is missing), so its
+        // unstash must always find the archive. Packaging only copies apisix/k8s; publishing stays conditional.
         stage('Package gateway chart') {
-            when {
-                beforeAgent true
-                anyOf {
-                    branch 'staging'
-                    allOf {
-                        branch 'develop'
-                        anyOf {
-                            changeset 'apisix/**'
-                            changeset 'da_services/api/**'
-                            changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
-                        }
-                    }
-                }
-            }
+            when { anyOf { branch 'develop'; branch 'staging' } }
             steps {
                 sh 'python3 ci/package_chart.py gateway-package'
                 stash name: 'built-gateway-chart', includes: 'built-gateway-chart/**'
