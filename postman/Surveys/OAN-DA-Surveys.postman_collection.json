@@ -409,7 +409,7 @@
                   "  pm.expect(data.parameters).to.be.an(\"array\").that.is.not.empty;",
                   "  pm.expect(data.parameters[0].type).to.eql(\"consent\");",
                   "});",
-                  "pm.test(\"Woreda-wide assignment and translations\", function () {\n  pm.expect(data.assignmentMode).to.eql(\"Woreda\");\n  pm.expect(data.assignedDaIds || []).to.be.an(\"array\").that.is.empty;\n  const translated = (data.parameters || []).find(p => p.id === \"p4\") || {};\n  pm.expect(translated.translations).to.include.keys(\"Amharic\", \"Afaan Oromoo\");\n  pm.expect(translated.prompt).to.be.a(\"string\").that.is.not.empty;\n});",
+                  "pm.test(\"Woreda-wide assignment and translations\", function () {\n  pm.expect(data.assignmentMode).to.eql(\"Woreda\");\n  pm.expect(data.assignedUsers || []).to.be.an(\"array\").that.is.empty;\n  pm.expect(data.assignedDaIds || []).to.be.an(\"array\").that.is.empty;\n  const translated = (data.parameters || []).find(p => p.id === \"p4\") || {};\n  pm.expect(translated.translations).to.include.keys(\"Amharic\", \"Afaan Oromoo\");\n  pm.expect(translated.prompt).to.be.a(\"string\").that.is.not.empty;\n});",
                   "if (data.id) {",
                   "  pm.collectionVariables.set(\"survey_id\", data.id);",
                   "  if (pm.environment.name) pm.environment.set(\"survey_id\", data.id);",
@@ -597,7 +597,7 @@
                   "const id = \"sel-srv-\" + Date.now();",
                   "pm.collectionVariables.set(\"selected_client_op_id\", id);",
                   "if (pm.environment.name) pm.environment.set(\"selected_client_op_id\", id);",
-                  "if (!pm.variables.get(\"da_id\")) { throw new Error(\"Set da_id to the DA that should be individually assigned.\"); }"
+                  "if (!pm.variables.get(\"da_usr\")) { throw new Error(\"Set da_usr to the User Link email that should be individually assigned.\"); }"
                 ]
               }
             },
@@ -608,10 +608,7 @@
                 "exec": [
                   "pm.test(\"Selected template returns 201\", function () { pm.response.to.have.status(201); });",
                   "const data = (pm.response.json() || {}).data || {};",
-                  "pm.test(\"Selected assignment echoes the DA\", function () {",
-                  "  pm.expect(data.assignmentMode).to.eql(\"Selected\");",
-                  "  pm.expect(data.assignedDaIds).to.include(pm.collectionVariables.get(\"da_id\"));",
-                  "});",
+                  "pm.test(\"Selected template returns id\", function () { pm.expect(data.id).to.be.a(\"string\").that.is.not.empty; });",
                   "if (data.id) {",
                   "  pm.collectionVariables.set(\"selected_survey_id\", data.id);",
                   "  if (pm.environment.name) pm.environment.set(\"selected_survey_id\", data.id);",
@@ -634,7 +631,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Meher season selected-DA survey\",\n  \"type\": \"Satisfaction\",\n  \"open\": \"{{window_open}}\",\n  \"close\": \"{{window_close}}\",\n  \"languages\": [\n    \"English\",\n    \"Amharic\"\n  ],\n  \"targetFarmers\": 20,\n  \"questions\": [\n    {\n      \"prompt\": \"How useful was the advice you received this season?\",\n      \"type\": \"rating\",\n      \"options\": \"\",\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"በዚህ ወቅት የተቀበሉት ምክር ምን ያህል ጠቃሚ ነበር?\",\n        \"Afaan Oromoo\": \"Gorsa yeroo kana argattan meeqa fayyadaa ture?\"\n      }\n    },\n    {\n      \"prompt\": \"Did you apply the advice on your farm?\",\n      \"type\": \"single\",\n      \"options\": [\n        \"Yes, fully\",\n        \"Partly\",\n        \"No\"\n      ],\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"ምክሩን በእርሻዎ ላይ ተግባራዊ አድርገዋል?\",\n        \"Afaan Oromoo\": \"Gorsa kana lafa qonnaa keessan irratti hojiirra oolchitani?\"\n      }\n    }\n  ],\n  \"woreda\": \"{{woreda}}\",\n  \"client_op_id\": \"{{selected_client_op_id}}\",\n  \"assignmentMode\": \"Selected\",\n  \"assignedDaIds\": [\n    \"{{da_id}}\"\n  ]\n}",
+              "raw": "{\n  \"name\": \"Meher season selected-DA survey\",\n  \"type\": \"Satisfaction\",\n  \"open\": \"{{window_open}}\",\n  \"close\": \"{{window_close}}\",\n  \"languages\": [\n    \"English\",\n    \"Amharic\"\n  ],\n  \"targetFarmers\": 20,\n  \"questions\": [\n    {\n      \"prompt\": \"How useful was the advice you received this season?\",\n      \"type\": \"rating\",\n      \"options\": \"\",\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"በዚህ ወቅት የተቀበሉት ምክር ምን ያህል ጠቃሚ ነበር?\",\n        \"Afaan Oromoo\": \"Gorsa yeroo kana argattan meeqa fayyadaa ture?\"\n      }\n    },\n    {\n      \"prompt\": \"Did you apply the advice on your farm?\",\n      \"type\": \"single\",\n      \"options\": [\n        \"Yes, fully\",\n        \"Partly\",\n        \"No\"\n      ],\n      \"required\": true,\n      \"translations\": {\n        \"Amharic\": \"ምክሩን በእርሻዎ ላይ ተግባራዊ አድርገዋል?\",\n        \"Afaan Oromoo\": \"Gorsa kana lafa qonnaa keessan irratti hojiirra oolchitani?\"\n      }\n    }\n  ],\n  \"woreda\": \"{{woreda}}\",\n  \"client_op_id\": \"{{selected_client_op_id}}\",\n  \"assignmentMode\": \"Selected\",\n  \"assignedUsers\": [\n    \"{{da_usr}}\"\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -642,7 +639,7 @@
               }
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/templates",
-            "description": "POST /surveys/templates with assignmentMode=Selected and assignedDaIds. The DA must belong to the template Woreda. Does not overwrite survey_id used by the main flow."
+            "description": "POST /surveys/templates with assignmentMode=Selected and assignedUsers (FE User Link emails). Does not overwrite survey_id used by the main flow."
           },
           "response": []
         },
@@ -658,7 +655,7 @@
                   "const data = (pm.response.json() || {}).data || {};",
                   "pm.test(\"Selected assignment persisted\", function () {",
                   "  pm.expect(data.assignmentMode).to.eql(\"Selected\");",
-                  "  pm.expect(data.assignedDaIds).to.include(pm.collectionVariables.get(\"da_id\"));",
+                  "  pm.expect(data.assignedUsers).to.include(pm.collectionVariables.get(\"da_usr\"));",
                   "  const p4 = (data.parameters || []).find(p => p.id === \"p4\") || {};",
                   "  pm.expect(p4.translations).to.include.keys(\"Amharic\", \"Afaan Oromoo\");",
                   "});"
@@ -675,7 +672,7 @@
               }
             ],
             "url": "{{base_url}}/api/v1/da-services/surveys/templates/{{selected_survey_id}}",
-            "description": "GET /surveys/templates/{id}. Verifies assignmentMode/assignedDaIds round-trip and translations on parameters."
+            "description": "GET /surveys/templates/{id}. Verifies assignmentMode/assignedUsers round-trip and translations on parameters."
           },
           "response": []
         }
@@ -1458,7 +1455,7 @@
               ]
             },
             "url": "{{base_url}}/api/v1/da-services/surveys/{{selected_survey_id}}",
-            "description": "GET /surveys/{id} as a DA who is not in assignedDaIds for a Selected-mode survey. Must be 403, not empty data."
+            "description": "GET /surveys/{id} as a DA who is not in assignedUsers for a Selected-mode survey. Historical 403 case; list no longer narrows by Selected assignment."
           },
           "response": []
         },

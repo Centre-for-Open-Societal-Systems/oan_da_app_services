@@ -15,9 +15,10 @@ STATUSES = (OPEN, DONE, CANCELLED)
 class DATask(Document):
 	"""One unit of work for a DA (data-model 5.5).
 
-	Row access is Role DocPerm + User Permissions on geo Links. ``user`` is the DA
-	User Link; ``da_id`` is ``fetch_from: user.da_registry_id``. Geo stamps come from
-	the client / masters / tests — not registry HTTP.
+	Row access is Role DocPerm + User Permissions on geo Links. ``user`` (User ID) is
+	the required assignee Link from the FE; ``da_id`` is optional via
+	``fetch_from: user.da_registry_id``. Geo stamps come from the client / masters /
+	tests — not registry HTTP.
 	"""
 
 	def before_insert(self):

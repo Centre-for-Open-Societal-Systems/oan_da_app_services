@@ -36,9 +36,9 @@ TEMPLATE_KEYS = (
 	"questions",
 	"woreda",
 	"assignmentMode",
-	"assignedDaIds",
+	"assignedUsers",
 )
-JSON_KEYS = ("languages", "questions", "assignedDaIds")
+JSON_KEYS = ("languages", "questions", "assignedUsers")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -51,7 +51,7 @@ def _page(q: dict) -> tuple[int, int]:
 @handle_api_errors
 def create_template(**kwargs):
 	"""Body: name, type, open, close, languages[], targetFarmers, questions[], woreda?,
-	assignmentMode?, assignedDaIds?, client_op_id?. Returns the new template id."""
+	assignmentMode?, assignedUsers?, client_op_id?. Returns the new template id."""
 	b = request_fields(kwargs, *TEMPLATE_KEYS, "client_op_id", json_keys=JSON_KEYS)
 	survey_id = svc.create_template(
 		name=b.get("name"),
@@ -63,7 +63,7 @@ def create_template(**kwargs):
 		questions=b.get("questions"),
 		woreda=b.get("woreda"),
 		assignmentMode=b.get("assignmentMode"),
-		assignedDaIds=b.get("assignedDaIds"),
+		assignedUsers=b.get("assignedUsers"),
 		client_op_id=b.get("client_op_id"),
 	)
 	return success_response(data={"id": survey_id}, message="Survey template published")
@@ -98,7 +98,7 @@ def get_template(survey_id: str):
 @handle_api_errors
 def patch_template(survey_id: str, **kwargs):
 	"""Body: only the keys to change (name, status, open, close, languages, targetFarmers,
-	questions, assignmentMode, assignedDaIds). Returns the id saved to (a new version
+	questions, assignmentMode, assignedUsers). Returns the id saved to (a new version
 	when questions change after responses were collected)."""
 	b = request_fields(kwargs, *TEMPLATE_KEYS, "status", json_keys=JSON_KEYS)
 	body = {k: v for k, v in b.items() if v is not None}

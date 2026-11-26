@@ -230,6 +230,10 @@ class TestDATask(IntegrationTestCase):
 		with as_user(DA1):
 			rows, total = tasks.list_tasks(status="Open", da_id="DA-000001")
 		self.assertEqual(total, 2)
+		with as_user(DA1):
+			rows, total = tasks.list_tasks(user=DA2)
+		self.assertEqual(total, 1)
+		self.assertEqual(rows[0]["user"], DA2)
 		frappe.set_user(SUP)
 		with as_user(SUP):
 			_rows, total = tasks.list_tasks()

@@ -129,6 +129,7 @@ def list_tasks(
 	*,
 	status: str | None = None,
 	due: str | None = None,
+	user: str | None = None,
 	da_id: str | None = None,
 	region: str | None = None,
 	zone: str | None = None,
@@ -144,6 +145,8 @@ def list_tasks(
 	filters: dict = {}
 	if status:
 		filters["status"] = status
+	if user:
+		filters["user"] = user
 	if da_id:
 		filters["da_id"] = da_id
 	if region:

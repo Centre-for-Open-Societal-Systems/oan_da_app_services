@@ -146,11 +146,12 @@ class TestSurveys(IntegrationTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			self._create(user=DA1, woreda="ET04-W01")
 
-	def test_create_with_selected_das_assigns_them(self):
-		survey_id = self._create(assignmentMode="Selected", assignedDaIds=["DA-000002"])
+	def test_create_with_selected_users_assigns_them(self):
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
 		with _as(SUP):
 			out = svc.get_template(survey_id)
 		self.assertEqual(out["assignmentMode"], "Selected")
+		self.assertEqual(out["assignedUsers"], [DA2])
 		self.assertEqual(out["assignedDaIds"], ["DA-000002"])
 
 	def test_create_api_returns_the_new_id(self):
@@ -196,7 +197,7 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(len(frappe.get_doc("DA Survey Template", saved).parameters), 4)
 
 	def test_patch_assignment_mode_switches(self):
-		survey_id = self._create(assignmentMode="Selected", assignedDaIds=["DA-000002"])
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
 		with _as(SUP):
 			svc.patch_template(survey_id, {"assignmentMode": "Woreda"})
 			self.assertEqual(svc.get_template(survey_id)["assignmentMode"], "Woreda")
@@ -234,7 +235,7 @@ class TestSurveys(IntegrationTestCase):
 	def test_da_lists_every_survey_of_their_woreda(self):
 		# No caller DA-ID: assignment to selected DAs no longer narrows the list.
 		woreda_wide = self._create(name="Woreda wide")
-		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedDaIds=["DA-000002"])
+		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedUsers=[DA2])
 		for user in (DA1, DA2):
 			with _as(user):
 				rows, _total = svc.list_surveys()
