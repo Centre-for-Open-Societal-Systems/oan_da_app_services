@@ -154,7 +154,8 @@ Errors use the standard envelope (`status`, `message`, `code`).
 | HTTP | `code` | Cause |
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | `current_page` or `page_size` out of range; `filter_by` not a JSON object; a geo code with no record; no `X-CSRF-Token` header |
-| 401 | `AUTHENTICATION_ERROR` | No Bearer `Authorization` header, or the registry refused the token (401 or 403) |
+| 401 | `AUTHENTICATION_ERROR` | No Bearer `Authorization` header |
+| 403 | `FARMER_REGISTRY_ACCESS_DENIED` | The registry refused the token (401 or 403): "Farmer Registry access is not there. Contact Admin." |
 | 403 | `PERMISSION_DENIED` | A geo code in `filter_by` is outside the caller's User Permissions |
 | 500 | `FARMER_REGISTRY_NOT_CONFIGURED` | `farmer_registry_domain` or `farmer_registry_form_register_id` is empty |
 | 502 | `BAD_GATEWAY` | The registry answered with an error or a body that is not usable |
