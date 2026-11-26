@@ -509,6 +509,9 @@ class TestMyTeamAPI(IntegrationTestCase):
 		self._node(self.DA3, SUP_W02)
 		self._node(self.DA4, SUP_W02)
 		self._node(self.LONE, ROOT)
+		# The Supervisors' Woredas, on their nodes
+		frappe.db.set_value("DA Hierarchy", {"user": SUP_W01}, "woreda", "ET04-W01")
+		frappe.db.set_value("DA Hierarchy", {"user": SUP_W02}, "woreda", "ET03-W02")
 
 		MockDARegistryClient.reset()
 		frappe.db.commit()
@@ -516,6 +519,9 @@ class TestMyTeamAPI(IntegrationTestCase):
 	def tearDown(self):
 		frappe.set_user("Administrator")
 		self._delete_nodes()
+		# Free the DA-IDs again: they are unique, and the local demo users hold them
+		for u in (DA1, DA2, self.DA3, self.DA4, self.LONE, SUP_W01):
+			frappe.db.set_value("User", u, "da_registry_id", None)
 		frappe.db.commit()
 		MockDARegistryClient.reset()
 
@@ -529,6 +535,11 @@ class TestMyTeamAPI(IntegrationTestCase):
 				"is_group": 1 if group else 0,
 			}
 		).insert(ignore_permissions=True)
+
+	def _drop_woreda_permissions(self, user):
+		"""Other suites may leave a DA Woreda User Permission on the user."""
+		frappe.db.delete("User Permission", {"user": user, "allow": "DA Woreda"})
+		frappe.clear_cache(user=user)
 
 	def _delete_nodes(self):
 		# deepest first: a node with children cannot be deleted
@@ -562,11 +573,37 @@ class TestMyTeamAPI(IntegrationTestCase):
 	def test_administrator_user_sees_every_da(self):
 		self.assertEqual(self._team("Administrator")["team"], "all")
 
-	def test_supervisor_sees_their_reports(self):
+	def test_supervisor_sees_their_woreda(self):
 		data = self._team(SUP_W01)
-		self.assertEqual((data["team"], data["root"]["user"]), ("reports", SUP_W01))
+		self.assertEqual(
+			(data["team"], data["areas"], data["root"]["user"]), ("woreda", ["ET04-W01"], SUP_W01)
+		)
 		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
 		self.assertEqual(self._team(SUP_W02)["ids"], {"DA-000003", "DA-000004"})
+
+	def test_supervisor_sees_woreda_das_who_report_elsewhere(self):
+		"""The Woreda decides, not the reporting line: DA2 moved under SUP_W02 stays in W01."""
+		doc = frappe.get_doc("DA Hierarchy", DA2)
+		doc.parent_da_hierarchy = SUP_W02
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		self.assertEqual(self._team(SUP_W01)["ids"], {"DA-000001", "DA-000002"})
+		self.assertEqual(self._team(SUP_W02)["ids"], {"DA-000003", "DA-000004"})
+
+	def test_supervisor_woreda_falls_back_to_own_record(self):
+		frappe.db.set_value("DA Hierarchy", {"user": SUP_W01}, "woreda", None)
+		self._drop_woreda_permissions(SUP_W01)
+		set_da_registry_id(SUP_W01, "DA-000003")
+		frappe.db.commit()
+		data = self._team(SUP_W01)
+		self.assertEqual((data["areas"], data["ids"]), (["ET03-W02"], {"DA-000003", "DA-000004"}))
+
+	def test_supervisor_without_woreda_gets_empty_list(self):
+		frappe.db.set_value("DA Hierarchy", {"user": SUP_W01}, "woreda", None)
+		self._drop_woreda_permissions(SUP_W01)
+		frappe.db.commit()
+		data = self._team(SUP_W01)
+		self.assertEqual((data["team"], data["areas"], data["total"]), ("woreda", [], 0))
 
 	def test_manager_sees_every_level_below(self):
 		"""The Executive is above SUP_W01, so SUP_W01's DAs are in their team too."""
@@ -574,33 +611,54 @@ class TestMyTeamAPI(IntegrationTestCase):
 		self.assertEqual(data["team"], "reports")
 		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
 
-	def test_da_sees_boss_reports(self):
-		"""A DA has nobody under them: their team is their boss's reports, them included."""
-		data = self._team(DA1)
-		self.assertEqual((data["team"], data["root"]["user"]), ("peers", SUP_W01))
-		self.assertEqual(data["ids"], {"DA-000001", "DA-000002"})
-		self.assertEqual(self._team(self.DA4)["ids"], {"DA-000003", "DA-000004"})
+	def _place(self, da_id, kebele):
+		MockDARegistryClient.shared()._records[da_id]["assigned_kebele"] = kebele
 
-	def test_da_without_boss_sees_only_self(self):
-		"""Straight under the root: never the whole tree."""
+	def test_da_sees_their_kebele(self):
+		"""A DA's list is every DA posted to their Kebele, them included, whoever their boss is."""
+		self._place("DA-000002", "ET04-W01-K03")  # DA2: same Kebele as DA1
+		self._place("DA-000004", "ET04-W01-K03")  # DA4: same Kebele, another boss
+		data = self._team(DA1)
+		self.assertEqual(
+			(data["team"], data["areas"], data["root"]["user"]), ("kebele", ["ET04-W01-K03"], DA1)
+		)
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000004"})
+
+	def test_da_alone_in_kebele_sees_only_self(self):
+		data = self._team(DA1)
+		self.assertEqual((data["team"], data["ids"]), ("kebele", {"DA-000001"}))
+
+	def test_da_without_boss_sees_their_kebele(self):
+		"""Straight under the root: still their Kebele, never the whole tree."""
 		set_da_registry_id(self.LONE, "DA-000004")
 		frappe.db.commit()
 		data = self._team(self.LONE)
-		self.assertEqual((data["team"], data["root"]["user"]), ("self", self.LONE))
+		self.assertEqual((data["team"], data["root"]["user"]), ("kebele", self.LONE))
 		self.assertEqual(data["ids"], {"DA-000004"})
+
+	def test_da_without_kebele_gets_empty_list(self):
+		"""DA-000003 has no Kebele on the registry and none on the node."""
+		data = self._team(self.DA3)
+		self.assertEqual((data["team"], data["areas"], data["total"]), ("kebele", [], 0))
+
+	def test_da_kebele_falls_back_to_node(self):
+		frappe.db.set_value("DA Hierarchy", {"user": self.DA3}, "kebele", "ET04-W01-K07")
+		frappe.db.commit()
+		data = self._team(self.DA3)
+		self.assertEqual((data["areas"], data["ids"]), (["ET04-W01-K07"], {"DA-000002"}))
 
 	def test_no_node_gets_empty_team(self):
 		data = self._team(self.NOBODY)
 		self.assertEqual((data["team"], data["root"], data["total"]), ("none", None, 0))
 
-	def test_moving_a_da_changes_teams(self):
-		"""The team follows the tree: DA2 moved under SUP_W02 joins that team."""
+	def test_moving_a_da_changes_the_managers_team(self):
+		"""Above the Supervisors the team follows the tree: DA2 moved under SUP_W02 leaves the
+		Executive's team."""
 		doc = frappe.get_doc("DA Hierarchy", DA2)
 		doc.parent_da_hierarchy = SUP_W02
 		doc.save(ignore_permissions=True)
 		frappe.db.commit()
-		self.assertEqual(self._team(SUP_W01)["ids"], {"DA-000001"})
-		self.assertEqual(self._team(SUP_W02)["ids"], {"DA-000002", "DA-000003", "DA-000004"})
+		self.assertEqual(self._team(EXEC_ET04)["ids"], {"DA-000001"})
 
 	# ========== Filters / facets / search / paging on the team ==========
 
@@ -610,6 +668,7 @@ class TestMyTeamAPI(IntegrationTestCase):
 
 	def test_filters_cannot_widen_the_team(self):
 		self.assertEqual(self._team(DA1, kebele="ET03-W02-K01")["ids"], set())
+		self.assertEqual(self._team(DA1, kebele="ET04-W01-K07")["ids"], set())
 		self.assertEqual(self._team(SUP_W01, region="ET03")["ids"], set())
 
 	def test_facets_cover_only_the_team(self):

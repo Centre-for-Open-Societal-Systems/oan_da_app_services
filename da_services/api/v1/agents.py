@@ -200,9 +200,12 @@ def list_my_team(
 
 	Team selector (the DA Hierarchy: who reports to whom):
 	- Admin (OAN Administrator / System Manager / Administrator): every DA ("all")
-	- someone with people under them: their reports, at every level ("reports")
-	- someone with nobody under them (a DA): their boss's reports, them included ("peers")
-	- a DA with no boss (straight under the root): just them ("self")
+	- Supervisor: every DA posted to their Woreda ("woreda"); the Woreda comes from their DA
+	  Hierarchy node, else their DA Woreda User Permissions, else their own DA record
+	- someone else with people under them (e.g. an Executive): their reports, at every level
+	  ("reports")
+	- a DA (nobody under them): every DA posted to the DA's own Kebele, them included ("kebele");
+	  the Kebele comes from the DA's registry record, else their DA Hierarchy node
 	- no DA Hierarchy node: an empty list ("none")
 
 	Each team member bound to a DA record (User.da_registry_id) is listed with that record.
@@ -245,8 +248,9 @@ def list_my_team(
 	        }
 	    }
 
-	root is the DA Hierarchy node the team hangs from (the caller, their boss, or the root);
-	null for "none".
+	root is the DA Hierarchy node the team hangs from (the caller, or the root); for "kebele" it
+	is the DA's own node; null for "none". areas: the Woreda codes for "woreda", the Kebele code
+	for "kebele", else [].
 
 	Errors:
 	- 401: Not signed in
@@ -275,6 +279,7 @@ def list_my_team(
 		data={
 			"team": result["team"],
 			"root": result["root"],
+			"areas": result["areas"],
 			"agents": result["agents"],
 			"total": result["total"],
 			"page": {"limit": limit, "start": start},

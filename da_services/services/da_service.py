@@ -14,6 +14,7 @@ from frappe import _
 from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ROOT
 from da_services.integrations.da_registry.client import get_client
 from da_services.services import constants as C
+from da_services.utils.permissions import granted_areas
 
 # Filters the agent lists accept. Each takes one value or several (comma-separated).
 FILTER_FIELDS = (
@@ -173,6 +174,10 @@ TEAM_REPORTS = "reports"
 TEAM_PEERS = "peers"
 TEAM_SELF = "self"
 TEAM_NONE = "none"
+# A Supervisor's list: the Development Agents posted to the Supervisor's Woreda(s).
+TEAM_WOREDA = "woreda"
+# A DA's list: the Development Agents posted to the DA's own Kebele.
+TEAM_KEBELE = "kebele"
 _NODE_FIELDS = [
 	"name",
 	"user",
@@ -261,9 +266,18 @@ def list_my_team(
 	    user: The caller; defaults to the session user
 	    **filters: Any of FILTER_FIELDS; one value or several (comma-separated)
 
+	Two roles get an area instead of a subtree:
+	- a Supervisor: every Development Agent posted to their Woreda (team "woreda"); the Woreda is
+	  the one on their DA Hierarchy node, else their DA Woreda User Permissions, else their own
+	  DA record
+	- a DA (nobody under them): every Development Agent posted to their own Kebele (team
+	  "kebele"), the DA included; the Kebele is the one on the DA's registry record, else the one
+	  on their DA Hierarchy node
+
 	Returns:
-	    {"team": "all" | "reports" | "peers" | "self" | "none", "root": {node} | None,
-	     "agents": [...], "total": int, "facets": {...}}
+	    {"team": "all" | "woreda" | "reports" | "kebele" | "none", "root": {node} | None,
+	     "areas": [codes], "agents": [...], "total": int, "facets": {...}}
+	    areas: the Woreda codes for "woreda", the Kebele code for "kebele", else [].
 
 	Example:
 	    >>> team = list_my_team(limit=20)
@@ -275,9 +289,24 @@ def list_my_team(
 	# Step 1: The node whose subtree is the team
 	team, root = team_root(user)
 
-	# Step 2: The team's DAs: every registry DA for an Admin, else the DA records of the subtree's users
+	# Step 2: The team's DAs: every registry DA for an Admin, the Supervisor's Woreda, the DA's
+	# Kebele, else the DA records of the subtree's users
+	areas: list[str] = []
 	if team == TEAM_ALL:
 		team_das = registry_client.list_das()
+	elif C.ROLE_SUPERVISOR in frappe.get_roles(user):
+		root = _own_node(user)
+		all_das = registry_client.list_das()
+		areas = _own_woredas(user, all_das, root)
+		team = TEAM_WOREDA
+		team_das = [da for da in all_das if da.woreda in areas]
+	elif team in (TEAM_PEERS, TEAM_SELF):
+		root = _own_node(user)
+		all_das = registry_client.list_das()
+		kebele = _own_kebele(user, all_das, root)
+		areas = [kebele] if kebele else []
+		team = TEAM_KEBELE
+		team_das = [da for da in all_das if kebele and da.kebele == kebele]
 	elif root:
 		members = [root.user] if team == TEAM_SELF else [n.user for n in _team_nodes(root)]
 		da_ids = set(_da_ids_of(members).values())
@@ -289,8 +318,34 @@ def list_my_team(
 	return {
 		"team": team,
 		"root": _node_summary(root),
+		"areas": areas,
 		**_query(team_das, filters, search=search, limit=limit, start=start),
 	}
+
+
+def _own_node(user: str) -> dict | None:
+	"""The user's own DA Hierarchy node."""
+	return frappe.db.get_value(HIERARCHY, {"user": user}, _NODE_FIELDS, as_dict=True)
+
+
+def _own_woredas(user: str, das: list, node: dict | None) -> list[str]:
+	"""A Supervisor's Woredas: their DA Hierarchy node, else their DA Woreda User Permissions,
+	else their own DA record."""
+	if node and node.woreda:
+		return [node.woreda]
+	granted = sorted(granted_areas(user)["woredas"])
+	if granted:
+		return granted
+	da_id = _da_ids_of([user]).get(user)
+	record = next((da for da in das if da.da_id == da_id), None) if da_id else None
+	return [record.woreda] if record and record.woreda else []
+
+
+def _own_kebele(user: str, das: list, node: dict | None) -> str | None:
+	"""The Kebele a DA is posted to: from their DA record, else from their DA Hierarchy node."""
+	da_id = _da_ids_of([user]).get(user)
+	record = next((da for da in das if da.da_id == da_id), None) if da_id else None
+	return (record and record.kebele) or (node and node.kebele) or None
 
 
 def my_team_tree(user: str | None = None) -> dict:
