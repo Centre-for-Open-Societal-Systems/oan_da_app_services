@@ -172,13 +172,14 @@ def _registry_failure(exc: da_farmer_registry.FarmerRegistryError, title: str):
 # kind -> (HTTP status, error code)
 _SEARCH_ERRORS = {
 	"config": (500, "FARMER_REGISTRY_NOT_CONFIGURED"),
-	"unauthorized": (401, "AUTHENTICATION_ERROR"),
+	# The registry refused the caller's token: no access to it, not a signed-out session.
+	"unauthorized": (403, "FARMER_REGISTRY_ACCESS_DENIED"),
 	"unavailable": (503, "SERVICE_UNAVAILABLE"),
 	"rejected": (502, "BAD_GATEWAY"),
 }
 _SEARCH_MESSAGES = {
 	"config": "Farmer Registry is not configured.",
-	"unauthorized": "Farmer Registry refused your token. Sign in again.",
+	"unauthorized": "Farmer Registry access is not there. Contact Admin.",
 	"unavailable": "Farmer Registry is unavailable. Try again shortly.",
 	"rejected": "Farmer Registry could not complete the request.",
 }

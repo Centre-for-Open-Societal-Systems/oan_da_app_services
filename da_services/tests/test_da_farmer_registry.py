@@ -254,7 +254,8 @@ class TestListFarmersEndpoint(IntegrationTestCase):
 
 	def test_registry_errors_map_to_status(self):
 		for response, status, code in (
-			(_answer(401), 401, "AUTHENTICATION_ERROR"),
+			(_answer(401), 403, "FARMER_REGISTRY_ACCESS_DENIED"),
+			(_answer(403), 403, "FARMER_REGISTRY_ACCESS_DENIED"),
 			(_answer(500), 503, "SERVICE_UNAVAILABLE"),
 			(_answer(200, {"response_header": {"response_status": "FAILURE"}}), 502, "BAD_GATEWAY"),
 		):
