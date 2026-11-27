@@ -17,7 +17,6 @@ from da_services.integrations.a2c import (
 )
 
 
-
 def get_loan_application_summary() -> dict | list:
 	"""Read the A2C loan application summary unchanged."""
 	return get_a2c_client().get_loan_application_summary()
