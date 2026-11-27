@@ -16,7 +16,6 @@ from da_services.integrations.crop_registry import get_crop_registry_client
 from da_services.integrations.crop_registry.client import (
 	CropRegistryClientError,
 	CropRegistryServerError,
-	_staff_url_and_register_id,
 )
 from da_services.integrations.crop_registry.http import HTTPCropRegistryClient
 from da_services.integrations.crop_registry.intake import (
@@ -30,6 +29,7 @@ from da_services.integrations.crop_registry.intake import (
 from da_services.integrations.crop_registry.mapper import submission_to_crop
 from da_services.integrations.crop_registry.schemas import CropSection, CropSubmission
 from da_services.integrations.staff_api.auth import _cookie_value
+from da_services.integrations.staff_registry import load_registry_module_config
 from da_services.services.utils import StaffAPIError
 
 
@@ -65,17 +65,16 @@ class TestStaffAuth(unittest.TestCase):
 		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
 		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", register_id="reg-1")
 		with patch(
-			"da_services.integrations.crop_registry.http.frappe.get_request_header",
+			"da_services.integrations.staff_registry.http.frappe.get_request_header",
 			side_effect=request_headers.get,
 		):
-			headers, cookies = client._auth_and_csrf_headers()
+			headers, cookies = client._transport.auth_and_csrf_headers()
 
 		self.assertEqual(headers["Authorization"], "Bearer sso-token")
 		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
 		self.assertEqual(headers["Content-Type"], "application/json")
 		self.assertEqual(headers["Accept"], "application/json")
 		self.assertEqual(cookies, {"X-CSRF-Token": "sso-csrf"})
-		self.assertNotIn("Authorization", client.headers)
 
 	def test_forwarded_sso_headers_reach_the_staff_post(self):
 		seen = {}
@@ -89,10 +88,10 @@ class TestStaffAuth(unittest.TestCase):
 		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", register_id="reg-1")
 		with (
 			patch(
-				"da_services.integrations.crop_registry.http.frappe.get_request_header",
+				"da_services.integrations.staff_registry.http.frappe.get_request_header",
 				side_effect=request_headers.get,
 			),
-			patch("da_services.integrations.crop_registry.http.requests.post", post),
+			patch("da_services.integrations.staff_registry.http.requests.post", post),
 		):
 			client.get_submission("sub-1")
 
@@ -111,10 +110,10 @@ class TestStaffAuth(unittest.TestCase):
 				post = Mock()
 				with (
 					patch(
-						"da_services.integrations.crop_registry.http.frappe.get_request_header",
+						"da_services.integrations.staff_registry.http.frappe.get_request_header",
 						side_effect=request_headers.get,
 					),
-					patch("da_services.integrations.crop_registry.http.requests.post", post),
+					patch("da_services.integrations.staff_registry.http.requests.post", post),
 					self.assertRaises(CropRegistryClientError) as caught,
 				):
 					client.get_submission("sub-1")
@@ -124,10 +123,10 @@ class TestStaffAuth(unittest.TestCase):
 	def test_token_provider_overrides_bearer_but_keeps_fe_csrf(self):
 		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
 		with patch(
-			"da_services.integrations.crop_registry.http.frappe.get_request_header",
+			"da_services.integrations.staff_registry.http.frappe.get_request_header",
 			side_effect=request_headers.get,
 		):
-			headers, cookies = _client()._auth_and_csrf_headers()
+			headers, cookies = _client()._transport.auth_and_csrf_headers()
 
 		self.assertEqual(headers["Authorization"], "Bearer cached-token")
 		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
@@ -165,7 +164,7 @@ def _client(**overrides):
 def _patch_sso(extra_headers: dict | None = None):
 	headers = {**_TEST_SSO, **(extra_headers or {})}
 	return patch(
-		"da_services.integrations.crop_registry.http.frappe.get_request_header",
+		"da_services.integrations.staff_registry.http.frappe.get_request_header",
 		side_effect=headers.get,
 	)
 
@@ -504,7 +503,7 @@ class TestHttpReadPath(unittest.TestCase):
 				),
 			)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			crop = _client().get_submission("sub-1")
 
 		self.assertEqual(seen["url"], "https://staff-crop.test/intake-form-data/get_intake_form_submission")
@@ -526,7 +525,7 @@ class TestHttpReadPath(unittest.TestCase):
 			seen["payload"] = kwargs["json"]["request_body"]["request_payload"]
 			return _Resp(200, _envelope({"submission_id": "sub-new", "draft_status": "DRAFT"}))
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			saved = _client().save_section(
 				section_id="section-1",
 				section_register_id="crop-section-1",
@@ -562,7 +561,7 @@ class TestHttpReadPath(unittest.TestCase):
 				),
 			)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			finalized = _client().finalize_submission("sub-new")
 
 		self.assertEqual(
@@ -576,7 +575,7 @@ class TestHttpReadPath(unittest.TestCase):
 		def post(url, **kwargs):
 			return _Resp(200, _envelope(None, status="ERROR", error="not allowed"))
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			with self.assertRaises(CropRegistryClientError):
 				_client().get_submission("sub-1")
 
@@ -584,7 +583,7 @@ class TestHttpReadPath(unittest.TestCase):
 		def post(url, **kwargs):
 			return _Resp(503, text="down")
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			with self.assertRaises(CropRegistryServerError):
 				_client().get_submission("sub-1")
 
@@ -610,7 +609,7 @@ class TestHttpReadPath(unittest.TestCase):
 				return _Resp(200, _envelope([{"section_register_id": "sec-1", "records": []}]))
 			raise AssertionError(url)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			tabs = _client().get_tabs("sub-1")
 
 		self.assertEqual(calls[0][1], {"register_id": "reg-1"})
@@ -649,7 +648,7 @@ class TestHttpReadPath(unittest.TestCase):
 			)
 			return _Resp(200, body)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			rows = _client().list_for_farmer("FR-427495614351", source="submission")
 
 		self.assertEqual(
@@ -684,7 +683,7 @@ class TestHttpReadPath(unittest.TestCase):
 				)
 			raise AssertionError(url)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			rows = _client().list_for_farmer("farmer-1", reg_id="FR-427495614351", source="submission")
 
 		self.assertEqual(
@@ -715,7 +714,7 @@ class TestHttpReadPath(unittest.TestCase):
 				)
 			raise AssertionError(url)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			rows = _client().list_for_farmer("farmer-1", reg_id="FR-1", source="register")
 
 		self.assertEqual(
@@ -745,7 +744,7 @@ class TestHttpReadPath(unittest.TestCase):
 				)
 			raise AssertionError(url)
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			detail = _client().get_register_tab("crop-rec-9", "cropsown_cropsown_tab")
 
 		self.assertEqual(
@@ -777,7 +776,7 @@ class TestHttpReadPath(unittest.TestCase):
 			return _Resp(200, _envelope([]))
 
 		client = _client(register_id="crop-reg-fixed")
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			self.assertEqual(client.list_for_farmer("farmer-1", reg_id="FR-1", source="register"), [])
 
 		self.assertEqual(
@@ -791,17 +790,22 @@ class TestHttpReadPath(unittest.TestCase):
 			crop_registry_form_register_id="settings-reg",
 		)
 		with patch(
-			"da_services.integrations.crop_registry.client.frappe.db.get_value",
+			"da_services.integrations.staff_registry.config.frappe.db.get_value",
 			return_value=settings,
 		):
-			staff_url, register_id = _staff_url_and_register_id()
+			staff_url, register_id = load_registry_module_config(
+				domain_field="crop_registry_domain",
+				register_field="crop_registry_form_register_id",
+				domain_label="Crop Registry Domain",
+				register_label="Crop Registry Form Register ID",
+			)
 		self.assertEqual(staff_url, "https://staff-crop.example.org")
 		self.assertEqual(register_id, "settings-reg")
 
 	def test_factory_fails_closed_without_settings(self):
 		empty = frappe._dict(crop_registry_domain="", crop_registry_form_register_id="")
 		with patch(
-			"da_services.integrations.crop_registry.client.frappe.db.get_value",
+			"da_services.integrations.staff_registry.config.frappe.db.get_value",
 			return_value=empty,
 		):
 			with self.assertRaises(StaffAPIError) as ctx:
@@ -815,7 +819,7 @@ class TestHttpReadPath(unittest.TestCase):
 			crop_registry_form_register_id="",
 		)
 		with patch(
-			"da_services.integrations.crop_registry.client.frappe.db.get_value",
+			"da_services.integrations.staff_registry.config.frappe.db.get_value",
 			return_value=partial,
 		):
 			with self.assertRaises(StaffAPIError) as ctx:
@@ -1103,7 +1107,7 @@ class TestIntakeContract(unittest.TestCase):
 			raise AssertionError(url)
 
 		client = _client()
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			saved = client.submit_sections(
 				[{"section_id": "section-1", "records": [{"local_name": "Teff", "note": "late"}]}]
 			)
@@ -1245,8 +1249,8 @@ class TestCropRenderContract(unittest.TestCase):
 			raise AssertionError(url)
 
 		client = _client(master_data_url="https://master-data.test")
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
-			values = client._attribute_values("CROP_COMMODITY")
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
+			values = client._transport.attribute_values("CROP_COMMODITY", action="read crop code list")
 
 		self.assertEqual([row["value_id"] for row in values], ["ROW-1", "ROW-2"])
 		self.assertEqual([item[1] for item in seen], [1, 2])
@@ -1310,7 +1314,7 @@ class TestCropRenderContract(unittest.TestCase):
 			raise AssertionError(url)
 
 		client = _client()
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
+		with patch("da_services.integrations.staff_registry.http.requests.post", post):
 			described = client.describe_intake_form(form_name="cultivation")
 
 		self.assertEqual(rendered, ["form-cult"])

@@ -1,20 +1,14 @@
-"""Crop Sown Registry client interface and Settings helpers.
+"""Crop Sown Registry client interface.
 
-Staff host and CropSown ``register_id`` come from DA Services Settings
-(``crop_registry_domain``, ``crop_registry_form_register_id``). Catalog host
-is Settings ``master_data_domain`` when set. Auth is the caller's SSO bearer
-and CSRF. There is no ``get_all_registers`` discovery. The HTTP factory is
-``get_crop_registry_client`` in this package. Writes follow the collection:
-save one intake section at a time, then finalize. Crop Sown has no ingest API.
+Staff host and CropSown ``register_id`` come from DA Services Settings via
+``get_crop_registry_client``. Auth is the caller's SSO bearer and CSRF. There
+is no ``get_all_registers`` discovery. Writes follow the collection: save one
+intake section at a time, then finalize. Crop Sown has no ingest API.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-
-import frappe
-
-from da_services.services.utils import SETTINGS_DOCTYPE, base_url_from_domain, required_setting_value
 
 from .schemas import CropSubmission
 
@@ -103,28 +97,3 @@ class CropRegistryClient(ABC):
 		form_name: str | None = None,
 	) -> dict:
 		"""Validate records against intake metadata, then save each section."""
-
-
-def _staff_url_and_register_id() -> tuple[str, str]:
-	"""Crop Registry Domain + Form Register ID from DA Services Settings."""
-	settings = (
-		frappe.db.get_value(
-			SETTINGS_DOCTYPE,
-			SETTINGS_DOCTYPE,
-			["crop_registry_domain", "crop_registry_form_register_id"],
-			as_dict=True,
-		)
-		or frappe._dict()
-	)
-	return (
-		base_url_from_domain(settings.crop_registry_domain, "Crop Registry Domain"),
-		required_setting_value(settings.crop_registry_form_register_id, "Crop Registry Form Register ID"),
-	)
-
-
-def _master_data_url() -> str | None:
-	"""Optional Master Data Domain from DA Services Settings."""
-	domain = (frappe.db.get_single_value(SETTINGS_DOCTYPE, "master_data_domain") or "").strip()
-	if not domain:
-		return None
-	return base_url_from_domain(domain, "Master Data Domain")

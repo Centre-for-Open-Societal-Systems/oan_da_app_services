@@ -31,7 +31,7 @@ from da_services.integrations.farmer_registry.client import (
 	FarmerRegistryClientError,
 	FarmerRegistryServerError,
 )
-from da_services.services import constants as C
+from da_services.integrations.staff_registry import parse_registry_get_query
 from da_services.services import farmers
 from da_services.services.utils import StaffAPIError
 
@@ -115,13 +115,7 @@ def get_farmer_crops(farmer_id: str):
 	if not farmer_id:
 		frappe.throw(_("Farmer ID is required."), frappe.ValidationError)
 
-	submission_id = (frappe.form_dict.get("submission_id") or "").strip()
-	internal_record_id = (frappe.form_dict.get("internal_record_id") or "").strip()
-	if submission_id and internal_record_id:
-		frappe.throw(
-			_("Pass submission_id or internal_record_id, not both."),
-			frappe.ValidationError,
-		)
+	submission_id, internal_record_id, tab_id, source = parse_registry_get_query(frappe.form_dict)
 	requested_id = farmer_id
 	try:
 		resolved_id = _internal_farmer_id(farmer_id)
@@ -130,15 +124,9 @@ def get_farmer_crops(farmer_id: str):
 			farmer_id = resolved_id
 		client = get_crop_registry_client()
 		if internal_record_id:
-			tab_id = (frappe.form_dict.get("tab_id") or "").strip()
-			if not tab_id:
-				frappe.throw(_("tab_id is required with internal_record_id."), frappe.ValidationError)
 			detail = client.get_register_tab(internal_record_id, tab_id)
 			return success_response(data={"farmer_id": requested_id, **detail})
 		if not submission_id:
-			source = (frappe.form_dict.get("source") or "").strip().lower()
-			if not source:
-				frappe.throw(_("source is required."), frappe.ValidationError)
 			search_id = farmer_id if in_registry else requested_id
 			reg_id = _submission_reg_id(requested_id, search_id, in_registry=in_registry)
 			crops = client.list_for_farmer(search_id, reg_id=reg_id, source=source)
