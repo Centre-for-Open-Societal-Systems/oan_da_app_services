@@ -134,8 +134,8 @@
       "value": ""
     },
     {
-      "key": "decision",
-      "value": "Request changes"
+      "key": "action",
+      "value": "Request Changes"
     },
     {
       "key": "decision_note",
@@ -641,7 +641,60 @@
           ]
         },
         {
-          "name": "1.3 Request a contact change",
+          "name": "1.2b What I may ask to change (edit form)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "description": "Staff IAM access token saved by 0.4"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "description": "Staff IAM CSRF value saved by 0.4; DA Services forwards it to the registry"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/profile/editable-fields",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "profile",
+                "editable-fields"
+              ]
+            },
+            "description": "For the Edit profile form. Own record (no `da_id`): `editable_fields`, `locked_fields` (the organisation's fields: posting, position, specialisation, joining date, reports to), per field in `fields` its section, kind, current value and the Master Data `options` of a coded field, and `list_options` for education records, family members and files. A Supervisor adds `?da_id=` for a DA below them: every field may then be asked for."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const d = pm.response.json().data;",
+                  "pm.test('Says what may be asked and what is read only', function () {",
+                  "    pm.expect(d.editable_fields).to.be.an('array').that.includes('mobile');",
+                  "    pm.expect(d.locked_fields).to.be.an('array');",
+                  "    pm.expect(d.editable_fields).to.not.include('fayda_id');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Request a change to my own contact details",
           "request": {
             "method": "POST",
             "header": [
@@ -677,10 +730,10 @@
                 "change-requests"
               ]
             },
-            "description": "One section per request (Contact, Qualifications [position, specialisation, joined_date; reports_to for a Supervisor], Identity or Location; the education level changes through folder 4), only the fields that change. It goes to the DA's Woreda Supervisor (level 1), then an OAN Administrator (level 2); only then is it sent to the DA Registry. A change of a name or the Fayda ID needs a reason of 10+ characters; a location change sends region, zone, woreda and kebele codes.",
+            "description": "No `da_id`: the request is about the caller's own record and waits for a Supervisor above them in DA Hierarchy. `section` is Contact, Qualifications, Identity or Location; `values` holds the fields of that one section that change. On your own record the organisation's fields (region, zone, woreda, kebele, position, specialisation, joined_date, reports_to) are refused: see 1.2b. The Fayda ID cannot be changed here.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"changes\": {\n    \"telegram\": \"{{new_telegram}}\",\n    \"alternate_mobile\": \"{{new_alternate_mobile}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"section\": \"Contact\",\n  \"values\": {\n    \"telegram\": \"{{new_telegram}}\",\n    \"alternate_mobile\": \"{{new_alternate_mobile}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -865,7 +918,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{my_change_request_id}}/cancel",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/action",
               "host": [
                 "{{base_url}}"
               ],
@@ -875,14 +928,13 @@
                 "da-services",
                 "profile",
                 "change-requests",
-                "{{my_change_request_id}}",
-                "cancel"
+                "action"
               ]
             },
-            "description": "Cancels the request from 1.3 so the run leaves nothing pending. Skip it to let a supervisor decide the request instead.",
+            "description": "Only the person who sent a request cancels it, while it waits for a decision (`allowed_actions` holds `Cancel`). Cancels the request from 1.3 so the run leaves nothing pending. Skip it to let a Supervisor decide the request instead.",
             "body": {
               "mode": "raw",
-              "raw": "{}",
+              "raw": "{\n  \"request_id\": \"{{my_change_request_id}}\",\n  \"action\": \"Cancel\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1319,7 +1371,7 @@
           ]
         },
         {
-          "name": "2.6 Decide a change request (level 1 Supervisor, level 2 Administrator)",
+          "name": "2.6 Take a step on a change request (Approve, Reject, Request Changes)",
           "request": {
             "method": "POST",
             "header": [
@@ -1343,7 +1395,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{change_request_id}}/decide",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/action",
               "host": [
                 "{{base_url}}"
               ],
@@ -1353,14 +1405,13 @@
                 "da-services",
                 "profile",
                 "change-requests",
-                "{{change_request_id}}",
-                "decide"
+                "action"
               ]
             },
-            "description": "Level 1, status Pending Supervisor: a Supervisor of the DA's Woreda; Approve, Reject or Request changes. Level 2, status Pending Administrator: an OAN Administrator, never the level-1 approver; Approve or Reject. A note of 5+ characters is needed to reject or request changes. Only the level-2 Approve sends the change to the DA Registry, with the Administrator's own token; the answer says Applied, Sent to registry (the registry still decides) or Registry failed (reason in registry_error). Nobody decides their own request.",
+            "description": "`action` is one of the request's `allowed_actions` (2.5): the steps the Frappe Workflow gives this caller now. Level 1, status Pending Supervisor: a Supervisor above the DA in DA Hierarchy; Approve, Reject or Request Changes. Level 2, status Pending Administrator: an OAN Administrator who did not give level 1; Approve or Reject, and Approve sends the change to the DA Registry with the Administrator's token. Reject and Request Changes need a note of 5+ characters. Nobody decides a request they sent.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"decision\": \"{{decision}}\",\n  \"note\": \"{{decision_note}}\"\n}",
+              "raw": "{\n  \"request_id\": \"{{change_request_id}}\",\n  \"action\": \"{{action}}\",\n  \"note\": \"{{decision_note}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1385,7 +1436,7 @@
           ]
         },
         {
-          "name": "2.6b Decide several change requests (bulk Approve / Reject)",
+          "name": "2.6b The same step on several change requests (bulk Approve / Reject)",
           "request": {
             "method": "POST",
             "header": [
@@ -1409,7 +1460,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/bulk-decide",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/action",
               "host": [
                 "{{base_url}}"
               ],
@@ -1419,13 +1470,13 @@
                 "da-services",
                 "profile",
                 "change-requests",
-                "bulk-decide"
+                "action"
               ]
             },
-            "description": "The same decision on up to 20 requests, each with every rule of 2.6. A request that cannot be decided (outside the Woreda, already decided, own request) is reported in results and the others go on. An Administrator's Approve sends each change to the registry without waiting for its answer: still PENDING shows as Sent to registry.",
+            "description": "`request_ids` (at most 20) instead of `request_id`: each request is tried on its own, with every rule of 2.6. One that cannot take the step (another team's, already decided, own request) is reported in `results` and the others go on. The registry's answer is read once, not waited for.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"ids\": [\"{{change_request_id}}\"],\n  \"decision\": \"{{decision}}\",\n  \"note\": \"{{decision_note}}\"\n}",
+              "raw": "{\n  \"request_ids\": [\n    \"{{change_request_id}}\"\n  ],\n  \"action\": \"{{action}}\",\n  \"note\": \"{{decision_note}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1498,7 +1549,7 @@
           ]
         },
         {
-          "name": "2.8 Supervisor: request a change for a DA of my Woreda",
+          "name": "2.8 Supervisor: request a change for a DA below me",
           "request": {
             "method": "POST",
             "header": [
@@ -1534,10 +1585,10 @@
                 "change-requests"
               ]
             },
-            "description": "A Supervisor names the DA (da_id). The request skips level 1 (the Supervisor is level 1) and waits for an OAN Administrator. The DA is told.",
+            "description": "A Supervisor names a DA below them in DA Hierarchy (`da_id`). The request skips level 1 (the Supervisor is level 1) and waits for an OAN Administrator. The DA is told.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"changes\": {\"telegram\": \"+251911222333\"},\n  \"reason\": \"{{change_reason}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Contact\",\n  \"values\": {\n    \"telegram\": \"+251911222333\"\n  },\n  \"reason\": \"{{change_reason}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1585,7 +1636,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{change_request_id}}/retry",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/action",
               "host": [
                 "{{base_url}}"
               ],
@@ -1595,11 +1646,19 @@
                 "da-services",
                 "profile",
                 "change-requests",
-                "{{change_request_id}}",
-                "retry"
+                "action"
               ]
             },
-            "description": "Only for status Registry failed (refused or registry unavailable). Sends the change again with the Administrator's token."
+            "description": "Only for status Registry failed (refused or registry unavailable). Sends the change again with the Administrator's token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"request_id\": \"{{change_request_id}}\",\n  \"action\": \"Retry\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "event": [
             {
@@ -1640,7 +1699,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/{{change_request_id}}/close",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests/action",
               "host": [
                 "{{base_url}}"
               ],
@@ -1650,14 +1709,13 @@
                 "da-services",
                 "profile",
                 "change-requests",
-                "{{change_request_id}}",
-                "close"
+                "action"
               ]
             },
-            "description": "Only for status Registry failed. A note of 5+ characters is needed; the DA can then send a corrected request for that section.",
+            "description": "Only for status Registry failed. A note of 5+ characters is needed; a corrected request can then be sent for those fields.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"note\": \"{{decision_note}}\"\n}",
+              "raw": "{\n  \"request_id\": \"{{change_request_id}}\",\n  \"action\": \"Close\",\n  \"note\": \"{{decision_note}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2070,7 +2128,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/qualifications",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2079,13 +2137,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "qualifications"
+                "change-requests"
               ]
             },
             "description": "action update, record_id from 4.1, only the values that change. An education record holds education_level and passout_year (and its certificates) since the registry change of 18 Nov; position, specialisation and joined_date belong to the DA's Position and reporting section (1.3 / 2.8).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"action\": \"update\",\n  \"record_id\": \"{{record_id}}\",\n  \"values\": {\n    \"passout_year\": \"{{new_passout_year}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Education records\",\n  \"action\": \"update\",\n  \"record_id\": \"{{record_id}}\",\n  \"values\": {\n    \"passout_year\": \"{{new_passout_year}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2149,7 +2207,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/qualifications",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2158,13 +2216,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "qualifications"
+                "change-requests"
               ]
             },
             "description": "action add with education_level (a DA_EDUCATION_LEVEL code) and passout_year (Ethiopian calendar); both are needed and nothing else is accepted.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"action\": \"add\",\n  \"values\": {\n    \"education_level\": \"{{education_level}}\",\n    \"passout_year\": \"{{new_passout_year}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Education records\",\n  \"action\": \"add\",\n  \"values\": {\n    \"education_level\": \"{{education_level}}\",\n    \"passout_year\": \"{{new_passout_year}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2228,7 +2286,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/qualifications",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2237,13 +2295,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "qualifications"
+                "change-requests"
               ]
             },
             "description": "action delete, record_id. A Development Agent or Senior DA keeps at least one record.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"action\": \"delete\",\n  \"record_id\": \"{{record_id}}\",\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Education records\",\n  \"action\": \"delete\",\n  \"record_id\": \"{{record_id}}\",\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2358,7 +2416,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/certificates",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2367,10 +2425,10 @@
                 "v1",
                 "da-services",
                 "profile",
-                "certificates"
+                "change-requests"
               ]
             },
-            "description": "multipart/form-data. PDF, JPG, JPEG, PNG or WebP, up to 2 MB, at most 3 per record. replaces: the document_id of a certificate this file takes the place of. Choose the file in Postman (Body > form-data > file).",
+            "description": "multipart/form-data on the same route as every change request. PDF, JPG, JPEG, PNG or WebP, up to 2 MB, at most 3 per education record. Choose the file in Postman (Body > form-data > file). The file stays in DA Services, private, until both levels approve.",
             "body": {
               "mode": "formdata",
               "formdata": [
@@ -2381,25 +2439,37 @@
                   "description": "Choose the file in Postman (Body > form-data > file)."
                 },
                 {
+                  "key": "section",
+                  "value": "Certificates",
+                  "type": "text"
+                },
+                {
+                  "key": "action",
+                  "value": "add",
+                  "type": "text"
+                },
+                {
                   "key": "record_id",
                   "value": "{{record_id}}",
                   "type": "text"
                 },
                 {
-                  "key": "title",
-                  "value": "Diploma",
-                  "type": "text"
+                  "key": "values",
+                  "value": "{\"title\": \"Diploma\", \"issuer\": \"Test College\"}",
+                  "type": "text",
+                  "description": "JSON: title, issuer, issued_on, expires_on (all optional)"
                 },
                 {
-                  "key": "issuer",
-                  "value": "Test College",
-                  "type": "text"
+                  "key": "replaces",
+                  "value": "",
+                  "type": "text",
+                  "description": "Optional: the document_id of a certificate this file takes the place of"
                 },
                 {
                   "key": "da_id",
                   "value": "{{da_id}}",
                   "type": "text",
-                  "description": "Supervisor only; a DA leaves it out"
+                  "description": "Supervisor only: the DA below them. Leave it out for your own record."
                 },
                 {
                   "key": "reason",
@@ -2521,7 +2591,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/certificates/remove",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2530,14 +2600,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "certificates",
-                "remove"
+                "change-requests"
               ]
             },
             "description": "record_id and the document_id of a verified certificate (4.1 or 4.5).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"record_id\": \"{{record_id}}\",\n  \"document_id\": \"{{document_id}}\",\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Certificates\",\n  \"action\": \"delete\",\n  \"record_id\": \"{{record_id}}\",\n  \"document_id\": \"{{document_id}}\",\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2657,7 +2726,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/family-members",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2666,13 +2735,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "family-members"
+                "change-requests"
               ]
             },
             "description": "name (letters of any script), relationship (a DA_RELATIONSHIP code such as REL_SPOUSE), date_of_birth (optional, YYYY-MM-DD).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"action\": \"add\",\n  \"values\": {\n    \"name\": \"{{member_name}}\",\n    \"relationship\": \"{{member_relationship}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Family members\",\n  \"action\": \"add\",\n  \"values\": {\n    \"name\": \"{{member_name}}\",\n    \"relationship\": \"{{member_relationship}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2736,7 +2805,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/family-members",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2745,13 +2814,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "family-members"
+                "change-requests"
               ]
             },
-            "description": "action update (values that change) or delete, member_id from 4.1.",
+            "description": "action update (values that change) or delete; `record_id` is the family member's id from 4.1.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"action\": \"update\",\n  \"member_id\": \"{{member_id}}\",\n  \"values\": {\n    \"relationship\": \"{{member_relationship}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Family members\",\n  \"action\": \"update\",\n  \"record_id\": \"{{member_id}}\",\n  \"values\": {\n    \"relationship\": \"{{member_relationship}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2811,7 +2880,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/photo",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2820,10 +2889,10 @@
                 "v1",
                 "da-services",
                 "profile",
-                "photo"
+                "change-requests"
               ]
             },
-            "description": "multipart/form-data, JPEG, PNG or WebP, up to 2 MB. Choose the file in Postman (Body > form-data > file).",
+            "description": "multipart/form-data on the same route as every change request. JPEG, PNG or WebP, up to 2 MB. Choose the file in Postman (Body > form-data > file).",
             "body": {
               "mode": "formdata",
               "formdata": [
@@ -2834,10 +2903,20 @@
                   "description": "Choose the file in Postman (Body > form-data > file)."
                 },
                 {
+                  "key": "section",
+                  "value": "Photo",
+                  "type": "text"
+                },
+                {
+                  "key": "action",
+                  "value": "add",
+                  "type": "text"
+                },
+                {
                   "key": "da_id",
                   "value": "{{da_id}}",
                   "type": "text",
-                  "description": "Supervisor only; a DA leaves it out"
+                  "description": "Supervisor only: the DA below them. Leave it out for your own record."
                 },
                 {
                   "key": "reason",
@@ -2908,7 +2987,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/da-services/profile/photo/remove",
+              "raw": "{{base_url}}/api/v1/da-services/profile/change-requests",
               "host": [
                 "{{base_url}}"
               ],
@@ -2917,14 +2996,13 @@
                 "v1",
                 "da-services",
                 "profile",
-                "photo",
-                "remove"
+                "change-requests"
               ]
             },
             "description": "Removes the registry photo after both approvals.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Photo\",\n  \"action\": \"delete\",\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -3000,10 +3078,10 @@
                 "change-requests"
               ]
             },
-            "description": "reports_to is the DA-ID of an active person posted in the DA's Woreda or Zone, never the DA. Only the DA's Supervisor may ask (a DA's own request is refused with 400); not used for position ADMIN. Goes to the Administrator, then to the registry's Position and reporting section.",
+            "description": "reports_to is the DA-ID of an active person posted in the DA's Woreda or Zone, never the DA. Only a Supervisor above the DA may ask: on their own record a person's request for it is refused with 400.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"changes\": {\n    \"reports_to\": \"{{reports_to}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
+              "raw": "{\n  \"da_id\": \"{{da_id}}\",\n  \"section\": \"Qualifications\",\n  \"values\": {\n    \"reports_to\": \"{{reports_to}}\"\n  },\n  \"reason\": \"{{change_reason}}\",\n  \"client_op_id\": \"{{client_op_id}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

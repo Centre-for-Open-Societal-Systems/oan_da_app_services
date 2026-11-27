@@ -6,6 +6,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import add_days, now_datetime, today
 
+from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ensure_root
 from da_services.services import constants as C
 from da_services.services import farmers, profile, tasks, visits
 from da_services.tests.fixtures import (
@@ -17,6 +18,7 @@ from da_services.tests.fixtures import (
 	ensure_geo_masters,
 	set_da_registry_id,
 )
+from da_services.workflows.profile_change import ensure_workflow
 
 DA1 = "zone-da1@da.local"  # DA-000001: ET04 / ET04-Z01 / ET04-W01
 ZONE_EXEC = "zone-exec@da.local"  # Executive ET04 / ET04-Z01
@@ -81,9 +83,17 @@ def _ctx(user):
 
 
 class TestZoneScope(IntegrationTestCase):
+	def _remove_hierarchy(self):
+		frappe.set_user("Administrator")
+		for user in (DA1, ZONE_SUP):  # the leaf before its group
+			if frappe.db.exists("DA Hierarchy", user):
+				frappe.delete_doc("DA Hierarchy", user, ignore_permissions=True, force=True)
+		frappe.db.delete("User Permission", {"user": ("in", (DA1, ZONE_SUP)), "allow": "User"})
+
 	def setUp(self):
 		frappe.set_user("Administrator")
 		ensure_doctype_schema("DA Profile Change Request")
+		ensure_workflow()
 		cleanup_test_rows(users=USERS, da_ids=DA_IDS, farmer_ids=("farmer-z-1",))
 		for code, level, parent in AREAS:
 			ensure_administrative_area(code, level, parent, code)
@@ -100,6 +110,14 @@ class TestZoneScope(IntegrationTestCase):
 		_grant(MIXED_EXEC, C.ROLE_EXECUTIVE, region_scope="ET04", zone_scope="ET04-Z02")
 		_grant(REGION_EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
 		set_da_registry_id(DA1, "DA-000001")
+		# A Supervisor sends a change request for a DA below them in DA Hierarchy.
+		ensure_root()
+		self.addCleanup(self._remove_hierarchy)
+		self._remove_hierarchy()
+		for user, parent, group in ((ZONE_SUP, None, 1), (DA1, ZONE_SUP, 0)):
+			frappe.get_doc(
+				{"doctype": "DA Hierarchy", "user": user, "is_group": group, "parent_da_hierarchy": parent}
+			).insert(ignore_permissions=True)
 
 		frappe.set_user(DA1)
 		self.v1 = visits.plan_visit(
@@ -155,7 +173,7 @@ class TestZoneScope(IntegrationTestCase):
 				woreda="ET04-W01",
 			)
 		self.assertEqual(frappe.db.get_value("DA Task", t["name"], "zone"), "ET04-Z01")
-		with as_user(ZONE_SUP):  # the DA's Woreda Supervisor asks for them
+		with as_user(ZONE_SUP):  # the Supervisor above the DA asks for them
 			req = profile.submit_change_request(
 				changes={"telegram": "+251911222333"}, reason="New Telegram number", da_id="DA-000001"
 			)

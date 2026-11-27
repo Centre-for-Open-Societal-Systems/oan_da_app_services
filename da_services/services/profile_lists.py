@@ -22,6 +22,7 @@ one-open-request-per-field rule of services/profile.py becomes one per record.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 from datetime import date
@@ -39,6 +40,7 @@ from da_services.integrations.da_registry.mapper import (
 )
 from da_services.integrations.da_registry.schemas import DA_PLACEHOLDER, DAReference, SectionChange
 from da_services.services import profile_fields as pf
+from da_services.workflows.profile_change import DOCTYPE, open_states
 
 SECTION_RECORDS = "Education records"
 SECTION_CERTIFICATES = "Certificates"
@@ -567,19 +569,94 @@ def _changes(doc) -> dict:
 # -- the file a request carries ----------------------------------------------------------------
 
 
-def request_file(doc):
-	"""The private File a certificate or photo request carries, or None."""
-	name = frappe.db.get_value(
+def file_bytes(f) -> bytes:
+	"""The stored file as bytes: Frappe decodes a file that reads as text unless told not to."""
+	content = f.get_content(encodings=[])
+	return content.encode() if isinstance(content, str) else content
+
+
+def fingerprint(content: bytes) -> str:
+	"""What a request keeps of its file (in ``changes``, which no save can change)."""
+	return hashlib.sha256(content).hexdigest()
+
+
+def pin_file(doc, file_name: str, content: bytes) -> None:
+	"""Attach the file a request is sent with and record its fingerprint on the request.
+
+	The fingerprint is of the bytes Frappe stored, not of the upload: Frappe rewrites some
+	files as it stores them (a JPEG with EXIF data is re-encoded without it), and it is the
+	stored file that approvers see and that goes to the registry. Written directly, in the
+	request that creates the row: after that no save can change ``changes``.
+	"""
+	# read again from the site: the document just inserted still holds the bytes it was given
+	stored = frappe.get_doc("File", attach_file(doc, file_name, content).name)
+	changes = frappe.parse_json(doc.changes) if isinstance(doc.changes, str) else dict(doc.changes or {})
+	entry = next(iter(changes.values()))
+	entry["to"] = {**(entry.get("to") or {}), "sha256": fingerprint(file_bytes(stored))}
+	doc.db_set("changes", frappe.as_json(changes), update_modified=False)
+
+
+def _fingerprint_of(doc) -> str | None:
+	"""The fingerprint the request recorded of its file, or None for one that recorded none."""
+	changes = frappe.parse_json(doc.changes) if isinstance(doc.changes, str) else (doc.changes or {})
+	entry = next(iter(changes.values()), None) or {}
+	return (entry.get("to") or {}).get("sha256")
+
+
+def _attachments(doc) -> list[str]:
+	return frappe.get_all(
 		"File",
-		{"attached_to_doctype": doc.doctype, "attached_to_name": doc.name, "is_private": 1},
-		"name",
-		order_by="creation desc",
+		filters={"attached_to_doctype": doc.doctype, "attached_to_name": doc.name, "is_private": 1},
+		pluck="name",
+		order_by="creation asc",
 	)
-	return frappe.get_doc("File", name) if name else None
 
 
-def attach_file(doc, file_name: str, content: bytes) -> None:
-	frappe.get_doc(
+def request_file(doc) -> tuple[str, bytes] | None:
+	"""(file name, content) of the file a certificate or photo request was sent with, or None.
+
+	Anyone who may save the request may attach another file to it in Frappe, so the file is
+	not "an attachment of the request": it is the one whose content has the fingerprint the
+	request recorded when it was sent. The content returned is the content that was
+	checked. A request with no fingerprint has no file that can be shown or sent
+	(``pin_open_requests`` gives the open ones from before fingerprints theirs).
+	"""
+	wanted = _fingerprint_of(doc)
+	if not wanted:
+		return None
+	for name in _attachments(doc):
+		f = frappe.get_doc("File", name)
+		content = file_bytes(f)
+		if fingerprint(content) == wanted:
+			return f.file_name, content
+	return None
+
+
+def pin_open_requests() -> int:
+	"""Give every open certificate or photo request that has none the fingerprint of the file
+	it carries. Run on migrate: requests sent before fingerprints were recorded are pinned
+	to their first attachment, once; after that nothing is left to do."""
+	pinned = 0
+	for name in frappe.get_all(
+		DOCTYPE,
+		filters={"section": ("in", list(FILE_SECTIONS)), "status": ("in", open_states())},
+		pluck="name",
+	):
+		doc = frappe.get_doc(DOCTYPE, name)
+		changes = frappe.parse_json(doc.changes) if isinstance(doc.changes, str) else dict(doc.changes or {})
+		entry = next(iter(changes.values()), None) or {}
+		files = _attachments(doc)
+		if (entry.get("to") or {}).get("sha256") or not entry.get("to") or not files:
+			continue
+		entry["to"] = {**entry["to"], "sha256": fingerprint(file_bytes(frappe.get_doc("File", files[0])))}
+		doc.db_set("changes", frappe.as_json(changes), update_modified=False)
+		pinned += 1
+	return pinned
+
+
+def attach_file(doc, file_name: str, content: bytes):
+	"""Keep a request's file in DA Services, private; returns the File as stored."""
+	return frappe.get_doc(
 		{
 			"doctype": "File",
 			"file_name": file_name,
