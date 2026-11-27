@@ -58,7 +58,7 @@ Results analysis copy on the page (“Part 2 preview”) stays a UI note. Basic 
 | Assignment mode | `assignmentMode`: `Woreda` (default, every DA in the Woreda) or `Selected` |
 | Selected DAs | `assignedUsers: string[]` — required when `assignmentMode = Selected`; Frappe User Link emails from FE |
 
-Do not send consent / Farmer ID / Kebele questions. The API prepends them as `p1`–`p3`. Only custom question prompts accept `translations`; language keys are normalised to `Amharic` / `Afaan Oromoo` (aliases such as `am` / `om` are accepted). English is not duplicated in `translations`.
+Do not send consent / Farmer ID / Kebele questions: the template holds only the written questions (`p1`, `p2`, …). The capture form takes consent as its own first step and sends it as the response's `consent`; Farmer ID and Kebele come from the picked farmer. Only custom question prompts accept `translations`; language keys are normalised to `Amharic` / `Afaan Oromoo` (aliases such as `am` / `om` are accepted). English is not duplicated in `translations`.
 
 Client validation in `templateErrors` matches the API. On success, drop Zustand; append or refetch `GET /surveys`.
 
@@ -86,7 +86,7 @@ The list and detail payloads use the same camelCase names the UI already types:
 | `assignedDaIds` | Echo of marker Task `da_id` when `fetch_from: user.da_registry_id` filled it (may be empty) |
 | `parameters[]` | `id`, `order`, `prompt`, `type`, `required`, `options?`, `helper?`, `prefill?`, `translations?`, `condition?`. `translations` maps `Amharic` / `Afaan Oromoo` to text; `prompt` is English. |
 
-Filters on the list: `status`, `type`, `language`, `woreda`, `q`. List/detail scope is Role DocPerm + User Permissions (Woreda); Selected-mode marker Tasks are for dashboard/assignment tracking, not a second list filter.
+Filters on the list: `status`, `type`, `language`, `woreda`, `q`. List/detail scope is Role DocPerm + User Permissions (Woreda); a DA sees a Selected-mode survey only when they are one of its `assignedUsers` (Supervisors and above see all). Agent rows (`GET /agents`, `GET /agents/my-team`) carry `user`, the DA's portal User, to send as `assignedUsers`.
 
 ## Farmer picker and prefill
 

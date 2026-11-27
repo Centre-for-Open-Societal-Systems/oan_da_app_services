@@ -137,10 +137,21 @@ def _query(
 	# Step 7: Apply pagination
 	paginated_das = filtered_das[start : start + limit]
 
-	# Step 8: Convert to dicts for API response
-	agents = [to_dict(da) for da in paginated_das]
+	# Step 8: Convert to dicts for API response, each with the portal User bound to the DA record
+	users = _users_of([da.da_id for da in paginated_das])
+	agents = [{**to_dict(da), "user": users.get(da.da_id)} for da in paginated_das]
 
 	return {"agents": agents, "total": total, "facets": facets}
+
+
+def _users_of(da_ids: list[str]) -> dict[str, str]:
+	"""DA-ID -> the portal User bound to it (User.da_registry_id); DAs with no User are left out."""
+	if not da_ids:
+		return {}
+	rows = frappe.get_all(
+		"User", filters={"da_registry_id": ("in", da_ids)}, fields=["name", "da_registry_id"]
+	)
+	return {r.da_registry_id: r.name for r in rows}
 
 
 def _field_value(da, field: str) -> str:

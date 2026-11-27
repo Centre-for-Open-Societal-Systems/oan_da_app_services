@@ -126,13 +126,9 @@ Matches the Create Template modal (`TemplateInput`):
 
 A Supervisor's target is always checked against their live Supervisor assignment. Region-only and Zone-only grants cover every Woreda beneath them; a target outside the grant is rejected with **403**. Unknown, inactive or wrong-level area codes are rejected with **400**, as is an incomplete Woreda → Zone → Region tree.
 
-Server prepends:
+The template holds only the written questions: they become `p1`, `p2`, …. Consent, Farmer ID and Kebele are not template questions: the capture form takes consent first, and the response holds `consent`, `farmer_id` and `kebele` in its own fields. (Templates created before this change also carry consent / auto rows `p1`–`p3`; the form skips them.)
 
-1. `p1` consent
-2. `p2` Farmer ID (`auto`, prefill Farmer Registry)
-3. `p3` Kebele (`auto`, prefill DA assignment)
-
-Custom questions become `p4`, `p5`, …. `templateVersion` looks like `FSS-T3-v1.0`. `estMinutes` ≈ 40s per parameter, minimum 2.
+Publishing notifies the DAs (DA Notification, kind `Task`, event `survey.published`, link `/surveys/<id>`): every DA of the Woreda for `Woreda`, only the `assignedUsers` for `Selected`. A `Selected` survey is listed, opened and answered only by its assigned DAs; Supervisors and above see every survey of their area. `templateVersion` looks like `FSS-T3-v1.0`. `estMinutes` ≈ 40s per parameter, minimum 2.
 
 ## SurveyTask response shape
 
