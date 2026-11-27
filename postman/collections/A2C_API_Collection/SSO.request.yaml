@@ -1,0 +1,15 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/da-services/sso/login"
+method: POST
+body:
+  type: json
+  content: "{\r
+
+    \    \"username\": \"{{iam_user}}\",\r
+
+    \    \"password\": \"{{iam_password}}\",\r
+
+    \    \"key\": \"{{keycloak_login_key}}\"\r
+
+    }"
+order: 370

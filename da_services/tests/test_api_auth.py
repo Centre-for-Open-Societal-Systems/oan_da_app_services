@@ -76,6 +76,7 @@ class TestRoutes(_Base):
 		for expected in (
 			"/api/v1/da-services/health",
 			"/api/v1/da-services/charts/visits",
+			"/api/v1/da-services/credit/applications/summary",
 			"/api/v1/da-services/me",
 			"/api/v1/da-services/agents/<da_id>",
 			"/api/v1/da-services/rbac-assignments",

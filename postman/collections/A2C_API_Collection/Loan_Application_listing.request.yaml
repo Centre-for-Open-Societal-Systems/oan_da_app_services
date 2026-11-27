@@ -1,0 +1,61 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/da-services/credit/applications?status=Approved&page=1"
+method: GET
+queryParams:
+  status: Approved
+  page: "1"
+scripts:
+  - type: afterResponse
+    code: "var responseJson = pm.response.json();\r
+
+      var expectedStatus = pm.iterationData.get('expected_status') || 'success';\r
+
+      \r
+
+      pm.test('Response status check', function () {\r
+
+      \    if (responseJson.message && responseJson.message.status) {\r
+
+      \        pm.expect(responseJson.message.status).to.eql(expectedStatus);\r
+
+      \    } else if (responseJson.status) {\r
+
+      \        pm.expect(responseJson.status).to.eql(expectedStatus);\r
+
+      \    } else {\r
+
+      \        pm.expect(pm.response.code).to.be.oneOf([200, 201, 202]);\r
+
+      \    }\r
+
+      });\r
+
+      \r
+
+      var expectedMsg = pm.iterationData.get('expected_message');\r
+
+      if (expectedStatus === 'error' && expectedMsg) {\r
+
+      \    pm.test('Error message verification', function () {\r
+
+      \        const errMsg = responseJson.message && responseJson.message.message ? responseJson.message.message : (responseJson.message || '');\r
+
+      \        pm.expect(errMsg.toString().toLowerCase()).to.include(expectedMsg.toLowerCase());\r
+
+      \    });\r
+
+      }\r
+
+      \r
+
+      if (responseJson.status === 'success' && responseJson.results && responseJson.results.length > 0) {\r
+
+      \    pm.collectionVariables.set('loan_application', responseJson.results[0].application_id);\r
+
+      } else if (responseJson.message && responseJson.message.status === 'success' && responseJson.message.results && responseJson.message.results.length > 0) {\r
+
+      \    pm.collectionVariables.set('loan_application', responseJson.message.results[0].application_id);\r
+
+      }"
+    language: text/javascript
+order: 3000
