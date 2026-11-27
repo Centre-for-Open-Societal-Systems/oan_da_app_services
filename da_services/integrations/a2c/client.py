@@ -126,7 +126,7 @@ def validate_status(status: object) -> str | None:
 def _positive_timeout(value: object, default: float = 30) -> float:
 	try:
 		timeout = float(value)  # type: ignore[arg-type]
-	except (TypeError, ValueError):
+	except TypeError, ValueError:
 		return default
 	return timeout if timeout > 0 else default
 
@@ -304,7 +304,7 @@ class HttpA2CClient(A2CClient):
 		"""
 		try:
 			return frappe.get_request_header("Authorization")
-		except (AttributeError, RuntimeError):
+		except AttributeError, RuntimeError:
 			# AttributeError: no request is bound (background job, bench console).
 			return None
 
