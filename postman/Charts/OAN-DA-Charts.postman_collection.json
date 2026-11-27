@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-charts",
     "name": "OAN DA Charts",
-    "description": "Central dashboard Visit chart feeder (Confluence Dashboard APIs contract).\n\nBase path: /api/v1/da-services\n\nRoute: GET /charts/visits → **raw JSON array** (no status/data envelope).\nChart id for BFF: `visits`\n\n## Auth\nKeycloak staff realm client-credentials + role `charts:read`.\nLeave `charts_client_id` empty for local (Charts Auth Enabled unchecked on DA Services Settings).\nWhen client id is set, the collection pre-request fetches a token from `charts_token_url`.\n\n## Query params\n| Param | Env key | Notes |\n|-------|---------|-------|\n| region, zone, woreda, kebele | same | Empty / `all` = no filter |\n| from, to | same | Inclusive calendar days on `scheduled_at`. Both omitted → current month |\n| da_id, visit_type, status | same | Optional equality (`status` → `physical_status`) |\n| groupBy | groupBy | Omit → one KPI object. Else `visit_type` \\| `woreda` \\| `da_id` \\| `month` |\n\n## Docs\ndocs/charts-visits-integration.md",
+    "description": "Central dashboard chart feeders (Confluence Dashboard APIs contract).\n\nBase path: /api/v1/da-services\n\nRoutes, both a **raw JSON array** (no status/data envelope):\n- GET /charts/visits, chart id for BFF: `visits`\n- GET /charts/assignments, chart id for BFF: `assignments`\n\n## Auth\nKeycloak staff realm client-credentials + role `charts:read`.\nLeave `charts_client_id` empty for local (Charts Auth Enabled unchecked on DA Services Settings).\nWhen client id is set, the collection pre-request fetches a token from `charts_token_url`.\n\n## Query params\n| Param | Env key | Notes |\n|-------|---------|-------|\n| region, zone, woreda, kebele | same | Empty / `all` = no filter |\n| from, to | same | Inclusive calendar days on `scheduled_at`. Both omitted → current month |\n| da_id, visit_type, status | same | Optional equality (`status` → `physical_status`) |\n| groupBy | groupBy | Omit → one KPI object. Else `visit_type` \\| `woreda` \\| `da_id` \\| `month` |\n\n## Assignments chart\nSame auth and geo params. `from` / `to` are inclusive calendar days on `effective_date`. `da_id` is optional. `groupBy` is `month` | `woreda`; omit for one KPI object. `visit_type` and `status` do not apply.\n\n## Docs\ndocs/charts-visits-integration.md\ndocs/charts-assignments-integration.md",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -557,6 +557,576 @@
               "_postman_previewlanguage": "json",
               "header": [{ "key": "Content-Type", "value": "application/json" }],
               "body": "[\n  {\n    \"planned\": 0,\n    \"completed\": 0,\n    \"missed\": 0,\n    \"rescheduled\": 0,\n    \"in_progress\": 0,\n    \"cancelled\": 0,\n    \"total\": 0,\n    \"farmers_reached\": 0\n  }\n]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Assignments chart",
+      "description": "GET /charts/assignments - raw KPI array for BFF chart id `assignments`, counted from DA Kebele Assignment. Same auth and filter rules as the visits chart. Saved bodies are examples of the row shape; counts depend on the site's assignment records.",
+      "item": [
+        {
+          "name": "Assignments KPI (default month)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/assignments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "charts",
+                "assignments"
+              ]
+            },
+            "description": "No query params: current calendar month, all geo. Returns one KPI object (zeroed if no matches)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Ungrouped returns one row with the KPI keys\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.lengthOf(1);",
+                  "  [\"assignments\",\"reassignments\",\"out_of_bounds\",\"superseded\"].forEach(function (k) { pm.expect(body[0]).to.have.property(k); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Ungrouped KPI (current month)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/charts/assignments",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "charts",
+                    "assignments"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"assignments\": 14,\n    \"reassignments\": 5,\n    \"out_of_bounds\": 2,\n    \"superseded\": 5\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Assignments KPI (all filters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/assignments?region={{region}}&zone={{zone}}&woreda={{woreda}}&kebele={{kebele}}&from={{from}}&to={{to}}&da_id={{da_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "charts",
+                "assignments"
+              ],
+              "query": [
+                {
+                  "key": "region",
+                  "value": "{{region}}",
+                  "description": "Empty / all = no filter"
+                },
+                {
+                  "key": "zone",
+                  "value": "{{zone}}",
+                  "description": "Empty / all = no filter"
+                },
+                {
+                  "key": "woreda",
+                  "value": "{{woreda}}",
+                  "description": "Empty / all = no filter"
+                },
+                {
+                  "key": "kebele",
+                  "value": "{{kebele}}",
+                  "description": "Empty / all = no filter"
+                },
+                {
+                  "key": "from",
+                  "value": "{{from}}",
+                  "description": "Inclusive YYYY-MM-DD on effective_date"
+                },
+                {
+                  "key": "to",
+                  "value": "{{to}}",
+                  "description": "Inclusive YYYY-MM-DD on effective_date"
+                },
+                {
+                  "key": "da_id",
+                  "value": "{{da_id}}",
+                  "description": "Optional DA-ID equality"
+                }
+              ]
+            },
+            "description": "Every supported filter param via env. Clear env values you do not want (empty / all = no filter)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Ungrouped returns one row with the KPI keys\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.lengthOf(1);",
+                  "  [\"assignments\",\"reassignments\",\"out_of_bounds\",\"superseded\"].forEach(function (k) { pm.expect(body[0]).to.have.property(k); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Filtered ungrouped KPI",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/charts/assignments?region=ET04&woreda=ET04-W01&from=2026-10-01&to=2026-11-30&da_id=DA-000001",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "charts",
+                    "assignments"
+                  ],
+                  "query": [
+                    {
+                      "key": "region",
+                      "value": "ET04"
+                    },
+                    {
+                      "key": "woreda",
+                      "value": "ET04-W01"
+                    },
+                    {
+                      "key": "from",
+                      "value": "2026-10-01"
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-11-30"
+                    },
+                    {
+                      "key": "da_id",
+                      "value": "DA-000001"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"assignments\": 3,\n    \"reassignments\": 1,\n    \"out_of_bounds\": 1,\n    \"superseded\": 2\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Assignments KPI groupBy=month",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/assignments?from={{from}}&to={{to}}&groupBy=month",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "charts",
+                "assignments"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{from}}",
+                  "description": "Inclusive YYYY-MM-DD on effective_date"
+                },
+                {
+                  "key": "to",
+                  "value": "{{to}}",
+                  "description": "Inclusive YYYY-MM-DD on effective_date"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "month"
+                }
+              ]
+            },
+            "description": "One row per calendar month of effective_date (YYYY-MM), oldest first. No matches: []."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Each row has month and the KPI keys\", function () {",
+                  "  pm.response.json().forEach(function (row) {",
+                  "    pm.expect(row).to.have.property(\"month\");",
+                  "    [\"assignments\",\"reassignments\",\"out_of_bounds\",\"superseded\"].forEach(function (k) { pm.expect(row).to.have.property(k); });",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Grouped by month",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/charts/assignments?from=2026-10-01&to=2026-11-30&groupBy=month",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "charts",
+                    "assignments"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2026-10-01"
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-11-30"
+                    },
+                    {
+                      "key": "groupBy",
+                      "value": "month"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"assignments\": 8,\n    \"reassignments\": 2,\n    \"out_of_bounds\": 1,\n    \"superseded\": 4,\n    \"month\": \"2026-10\"\n  },\n  {\n    \"assignments\": 6,\n    \"reassignments\": 3,\n    \"out_of_bounds\": 1,\n    \"superseded\": 1,\n    \"month\": \"2026-11\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Assignments KPI groupBy=woreda",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/assignments?region={{region}}&from={{from}}&to={{to}}&groupBy=woreda",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "charts",
+                "assignments"
+              ],
+              "query": [
+                {
+                  "key": "region",
+                  "value": "{{region}}",
+                  "description": "Empty / all = no filter"
+                },
+                {
+                  "key": "from",
+                  "value": "{{from}}",
+                  "description": "Inclusive YYYY-MM-DD on effective_date"
+                },
+                {
+                  "key": "to",
+                  "value": "{{to}}",
+                  "description": "Inclusive YYYY-MM-DD on effective_date"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "woreda"
+                }
+              ]
+            },
+            "description": "One row per Woreda code, sorted by code. No matches: []."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Each row has woreda and the KPI keys\", function () {",
+                  "  pm.response.json().forEach(function (row) {",
+                  "    pm.expect(row).to.have.property(\"woreda\");",
+                  "    [\"assignments\",\"reassignments\",\"out_of_bounds\",\"superseded\"].forEach(function (k) { pm.expect(row).to.have.property(k); });",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Grouped by woreda",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/charts/assignments?region=ET04&from=2026-10-01&to=2026-11-30&groupBy=woreda",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "charts",
+                    "assignments"
+                  ],
+                  "query": [
+                    {
+                      "key": "region",
+                      "value": "ET04"
+                    },
+                    {
+                      "key": "from",
+                      "value": "2026-10-01"
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-11-30"
+                    },
+                    {
+                      "key": "groupBy",
+                      "value": "woreda"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"assignments\": 9,\n    \"reassignments\": 4,\n    \"out_of_bounds\": 1,\n    \"superseded\": 4,\n    \"woreda\": \"ET04-W01\"\n  },\n  {\n    \"assignments\": 5,\n    \"reassignments\": 1,\n    \"out_of_bounds\": 1,\n    \"superseded\": 1,\n    \"woreda\": \"ET04-W02\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Assignments KPI (empty range ungrouped)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/charts/assignments?from=2000-01-01&to=2000-01-31",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "da-services",
+                "charts",
+                "assignments"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2000-01-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2000-01-31"
+                }
+              ]
+            },
+            "description": "A range with no assignments still returns one zeroed KPI object, so dashboard tiles stay stable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Body is a JSON array\", function () {",
+                  "  pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test(\"Ungrouped returns one row with the KPI keys\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.lengthOf(1);",
+                  "  [\"assignments\",\"reassignments\",\"out_of_bounds\",\"superseded\"].forEach(function (k) { pm.expect(body[0]).to.have.property(k); });",
+                  "});",
+                  "pm.test(\"All counts are zero\", function () {",
+                  "  const row = pm.response.json()[0];",
+                  "  [\"assignments\",\"reassignments\",\"out_of_bounds\",\"superseded\"].forEach(function (k) { pm.expect(row[k]).to.eql(0); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Zeroed KPI",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/da-services/charts/assignments?from=2000-01-01&to=2000-01-31",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "da-services",
+                    "charts",
+                    "assignments"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2000-01-01"
+                    },
+                    {
+                      "key": "to",
+                      "value": "2000-01-31"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "[\n  {\n    \"assignments\": 0,\n    \"reassignments\": 0,\n    \"out_of_bounds\": 0,\n    \"superseded\": 0\n  }\n]"
             }
           ]
         }
