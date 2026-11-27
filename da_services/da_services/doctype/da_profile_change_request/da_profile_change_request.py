@@ -6,12 +6,9 @@
 The states and who may move a request between them are the Frappe Workflow of this DocType
 (see ``da_services/workflows/profile_change.py`` for the first version and the diagram);
 ``status`` is its state field. Applied and Registry failed have no transition: the system
-writes them after the DA Registry answers. A step is taken through
-``services/profile.py``, from the portal's API or from the Desk's Workflow buttons
-(``workflows/desk.py`` routes those to the same service), never by a plain save: see
-``_refuse_changes_outside_a_step``. Who sees a request is
-``workflows/profile_change.py`` ``query_conditions`` / ``has_permission``. Rows are history
-and are never deleted.
+writes them after the DA Registry answers. A step is taken through ``services/profile.py``
+(the portal's API), never by a plain save: see ``_refuse_changes_outside_a_step``. Who sees
+a request is role and User Permissions. Rows are history and are never deleted.
 """
 
 import frappe
@@ -69,14 +66,10 @@ class DAProfileChangeRequest(Document):
 	def _refuse_changes_outside_a_step(self):
 		"""A sent request changes through its steps only.
 
-		A step is more than a new state: it records who decided, tells the people concerned
-		and, at the last approval, sends the change to the DA Registry. Frappe checks the
-		state change of a plain save by role and condition but not "nobody decides their own
-		request", and it enforces neither read-only fields nor a state's "Only Allow Edit
-		For" on the server. So a step is taken by the service (``STEP_FLAG``; the portal's API
-		and the Desk's Workflow buttons both go through it), and its save changes the state
-		only. Any other save may change one thing: the note written in the Desk for the next
-		step. Everything else on a request the service writes directly.
+		A step is more than a new state: it records who decided and, at the last approval,
+		sends the change to the DA Registry with the approver's own sign-in. So a step is
+		taken by the service (``STEP_FLAG``) and its save changes the state only; no other
+		save changes a request. Everything else on it the service writes directly.
 		"""
 		if not self.get_doc_before_save():
 			return
@@ -88,7 +81,7 @@ class DAProfileChangeRequest(Document):
 		if self.has_value_changed("owner"):
 			changed.append("owner")  # who sent the request: the Workflow reads it
 		taking_a_step = frappe.flags.get(STEP_FLAG) == self.name
-		beyond = [f for f in changed if f != ("status" if taking_a_step else "step_note")]
+		beyond = [f for f in changed if not (taking_a_step and f == "status")]
 		if not beyond:
 			return
 		labels = ", ".join(self.meta.get_label(f) or f for f in beyond)
@@ -96,8 +89,8 @@ class DAProfileChangeRequest(Document):
 			frappe.throw(_("A step cannot change {0} of change request {1}.").format(labels, self.name))
 		frappe.throw(
 			_(
-				"Change request {0} changes through its steps only: use the Workflow action "
-				"(Approve, Reject, Cancel ...) in the Actions menu or in the DA portal. Not saved: {1}."
+				"Change request {0} changes through its steps only (Approve, Reject, Cancel ...), "
+				"taken in the DA portal. Not saved: {1}."
 			).format(self.name, labels)
 		)
 

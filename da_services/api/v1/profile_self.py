@@ -11,7 +11,6 @@ GET  /api/v1/da-services/profile/change-requests           ?status=a,b&woreda=a,
 GET  /api/v1/da-services/profile/change-requests/<id>      with its history
 GET  /api/v1/da-services/profile/change-requests/<id>/file the file a certificate / photo request carries
 POST /api/v1/da-services/profile/change-requests/action    {request_id | request_ids, action, note}
-GET  /api/v1/da-services/profile/change-logs               ?da_id=&section=&limit=&start= : every step, newest first
 
 A change request is about the caller's own record, or (``da_id``) sent by a Supervisor for a
 DA below them in DA Hierarchy. ``section`` says what is asked: Contact, Qualifications,
@@ -269,24 +268,6 @@ def act(**kwargs):
 		frappe.throw(_("request_id or request_ids is required."), frappe.ValidationError)
 	out = svc.act(str(b.get("request_id")), action=action, note=note)
 	return success_response(data=out, message=svc.decision_message(out))
-
-
-@route(
-	"/profile/change-logs",
-	methods=("GET",),
-	summary="The log of profile changes: every step of the requests I may see, newest first",
-)
-@frappe.whitelist()
-@handle_api_errors
-def change_logs(**kwargs):
-	require_permission("DA Profile Change Request", "read")
-	q = request_fields(kwargs, "da_id", "section", "limit", "start")
-	try:
-		limit, start = int(q.get("limit") or 50), int(q.get("start") or 0)
-	except ValueError:
-		frappe.throw(_("limit and start must be whole numbers."), frappe.ValidationError)
-	rows, total = svc.change_logs(da_id=q.get("da_id"), section=q.get("section"), limit=limit, start=start)
-	return success_response(data=rows, meta={"total": total, "limit": limit, "start": start})
 
 
 @route("/profile/change-requests/<request_id>", methods=("GET",), summary="One profile change request")

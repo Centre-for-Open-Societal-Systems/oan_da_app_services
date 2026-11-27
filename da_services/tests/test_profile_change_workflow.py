@@ -21,6 +21,9 @@ from da_services.workflows import profile_change as wf
 
 PCR = wf.DOCTYPE
 HIERARCHY = "DA Hierarchy"
+# Frappe refuses a step with a validation error (not a valid action, no self approval) or a
+# permission error (the caller cannot read or save the request).
+REFUSED = (frappe.ValidationError, frappe.PermissionError)
 DA = "pcw-da@da.local"
 DA_OTHER = "pcw-da2@da.local"  # a DA of Supervisor B
 DA_NO_NODE = "pcw-da3@da.local"  # a DA with no place in the hierarchy, so no User Permission
@@ -98,7 +101,13 @@ def _actions(name):
 
 
 def _act(name, action):
-	return wf.apply(frappe.get_doc(PCR, name), action)
+	"""Take a step as the service does: the Workflow's step, then who gave level 1."""
+	doc = frappe.get_doc(PCR, name)
+	level_1 = doc.status == states.PENDING_SUPERVISOR and action != wf.CANCEL
+	doc = wf.apply(doc, action)
+	if level_1:
+		doc.db_set("l1_by", frappe.session.user, update_modified=False)
+	return doc
 
 
 class TestProfileChangeWorkflow(IntegrationTestCase):
@@ -200,13 +209,13 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 			self.assertIn(wf.APPROVE, _actions(name))
 		with as_user(SUP_B), self.assertRaises(frappe.PermissionError):  # another team: not even visible
 			_actions(name)
-		with as_user(SUP_N), self.assertRaises(frappe.PermissionError):  # the role alone, no place
-			_actions(name)
+		with as_user(SUP_N):  # the role alone, no place in the hierarchy
+			self.assertEqual(_actions(name), [])
 		with as_user(ADMIN):  # level 2 does not skip level 1
 			self.assertEqual(_actions(name), [])
 		with as_user(DA):
 			self.assertEqual(_actions(name), [wf.CANCEL])
-			with self.assertRaises(frappe.PermissionError):
+			with self.assertRaises(REFUSED):
 				_act(name, wf.APPROVE)
 
 	def test_level_1_approve_reject_and_request_changes(self):
@@ -229,7 +238,7 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 			# sent by the Supervisor for a DA below them and left at level 1
 			sent = _request(role=C.ROLE_SUPERVISOR).name
 			self.assertEqual(_actions(sent), [wf.CANCEL, wf.SUBMIT_FOR_DA])
-			with self.assertRaises(frappe.PermissionError):
+			with self.assertRaises(REFUSED):
 				_act(sent, wf.APPROVE)
 			# about the Supervisor's own record: "above the DA" never means oneself
 			own = _request(section="Identity", user=SUP_A).name
@@ -245,7 +254,7 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 			_act(name, wf.SUBMIT_FOR_DA)
 		with as_user(ADMIN):
 			self.assertEqual(_actions(name), [])
-			with self.assertRaises(frappe.PermissionError):
+			with self.assertRaises(REFUSED):
 				_act(name, wf.APPROVE)
 		with as_user(SUP_ADMIN):  # another Administrator decides it
 			self.assertEqual(_actions(name), [wf.APPROVE, wf.REJECT])
@@ -276,7 +285,7 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 		with as_user(SUP_ADMIN):
 			_act(name, wf.APPROVE)  # level 1, as a Supervisor above the DA
 			self.assertEqual(_actions(name), [])  # and so no level 2 for the same person
-			with self.assertRaises(frappe.PermissionError):
+			with self.assertRaises(REFUSED):
 				_act(name, wf.APPROVE)
 		with as_user(SUP_A):
 			self.assertEqual(_actions(name), [])
@@ -371,29 +380,18 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 	# --- who sees a request
 
 	def test_a_request_is_seen_by_the_da_and_by_those_above(self):
-		name = self._at_level_2()  # l1_by now names the Supervisor
+		# Frappe's own rule: the request names the DA's User, and DA Hierarchy gives each person
+		# a User Permission on themselves and on everyone below them.
+		name = self._at_level_2()
 		with as_user(ADMIN):
-			_act(name, wf.APPROVE)  # and the registry fields are written by an Administrator
+			_act(name, wf.APPROVE)
 		for user, sees in ((DA, True), (SUP_A, True), (SUP_ADMIN, True), (ADMIN, True)):
 			with as_user(user):
 				self.assertEqual(name in frappe.get_list(PCR, pluck="name", limit=0), sees, user)
-		# another team, and people with no place in the hierarchy (no User Permission at all,
-		# which Frappe alone would take for "sees everything")
-		for user in (DA_OTHER, SUP_B, DA_NO_NODE, SUP_N):
+		for user in (DA_OTHER, SUP_B):  # another team
 			with as_user(user):
 				self.assertNotIn(name, frappe.get_list(PCR, pluck="name", limit=0), user)
 				self.assertFalse(frappe.has_permission(PCR, "read", frappe.get_doc(PCR, name)), user)
-
-	def test_a_request_with_no_user_is_not_open_to_everyone(self):
-		# Frappe lets an empty Link through: a request about a DA who has never signed in.
-		with as_user(SUP_A):
-			name = _request(role=C.ROLE_SUPERVISOR, user=None).name
-		for user, sees in ((SUP_A, True), (ADMIN, True), (DA, False), (SUP_B, False), (DA_NO_NODE, False)):
-			with as_user(user):
-				self.assertEqual(name in frappe.get_list(PCR, pluck="name", limit=0), sees, user)
-				self.assertEqual(
-					bool(frappe.has_permission(PCR, "read", frappe.get_doc(PCR, name))), sees, user
-				)
 
 	# --- a step is taken through the service, not by a save or the Desk's buttons
 
@@ -415,13 +413,13 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 		with as_user(SUP_ADMIN):
 			_act(name, wf.APPROVE)
 			for field, value in (
-				("decisions", "{}"),
+				("l1_by", None),  # the Workflow reads it: who gave level 1 does not give level 2
 				("uploaded_document_id", "doc-1"),
 				("l2_note", "x"),
 				("owner", SUP_ADMIN),  # the Workflow takes the owner for the requester
 			):
 				doc = frappe.get_doc(PCR, name)
-				doc.set(field, value)  # emptying the steps would let the same person decide again
+				doc.set(field, value)
 				with self.assertRaises(frappe.ValidationError, msg=field):
 					doc.save()
 			self.assertEqual(_actions(name), [])
@@ -451,7 +449,7 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 
 		with as_user(SUP_ADMIN):  # can retry, and sent this request
 			name = _request(role=C.ROLE_SUPERVISOR).name
-		# however the row got to Sent to registry (a Workflow the shape check never saw, say)
+		# however the row got to Sent to registry (a Workflow changed in the Desk, say)
 		frappe.get_doc(PCR, name).db_set("status", states.SENT_TO_REGISTRY)
 		with as_user(SUP_ADMIN), self.assertRaises(frappe.PermissionError) as ctx:
 			svc._send_to_registry(frappe.get_doc(PCR, name))
@@ -485,9 +483,6 @@ class TestProfileChangeWorkflow(IntegrationTestCase):
 			self.assertIn(name, frappe.get_list(PCR, pluck="name", limit=0))
 			with self.assertRaises(frappe.ValidationError):
 				_act(name, wf.APPROVE)
-		for user in (DA_OTHER, SUP_B, DA_NO_NODE, SUP_N):  # switching it off opens nothing up
-			with as_user(user):
-				self.assertNotIn(name, frappe.get_list(PCR, pluck="name", limit=0), user)
 
 	def test_every_step_is_in_the_history_frappe_keeps(self):
 		name = self._at_level_2()

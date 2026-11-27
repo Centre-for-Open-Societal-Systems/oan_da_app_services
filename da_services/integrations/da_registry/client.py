@@ -92,13 +92,6 @@ class DARegistryClient(ABC):
 	# once its approval stage is off; until then the answer stays PENDING.
 	change_request_settle_seconds: float = 0
 
-	def check_sign_in(self) -> None:  # noqa: B027 (nothing to check unless a backend says so)
-		"""Raise ``DARegistryAuthError`` when this caller has no sign-in the registry takes.
-
-		Asked before a step that cannot be taken back sends anything, so that the step is
-		refused whole instead of failing half way.
-		"""
-
 	@abstractmethod
 	def get_da(self, da_id: str) -> DAReference:
 		"""Fetch the DA reference. Raises DANotFound / DARegistryUnavailable."""

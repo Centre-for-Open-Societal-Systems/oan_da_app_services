@@ -16,13 +16,11 @@ from frappe.utils import today
 
 from da_services.api.v1 import profile_self as api
 from da_services.da_services.doctype.da_hierarchy.da_hierarchy import ensure_root
-from da_services.integrations.da_registry.client import DARegistryAuthError
 from da_services.integrations.da_registry.mock import MockDARegistryClient
 from da_services.services import constants as C
 from da_services.services import profile as svc
 from da_services.services import profile_fields
 from da_services.tests.fixtures import as_user, ensure_doctype_schema, ensure_geo_masters, set_da_registry_id
-from da_services.workflows import desk
 from da_services.workflows import profile_change as workflow
 
 
@@ -74,7 +72,6 @@ TEST_DAS = ("DA-000001", "DA-000002", "DA-000004")  # mock registry fixtures
 PCR = "DA Profile Change Request"
 # For the tests that change the Workflow as an administrator would in the Desk
 TEST_LEVEL = "PCR Test Level"
-SEND_BACK = "PCR Test Send Back"
 STATE_ROW = ("state", "doc_status", "allow_edit", "update_field", "update_value", "evaluate_as_expression")
 TRANSITION_ROW = ("state", "action", "next_state", "allowed", "allow_self_approval", "condition")
 WORKFLOW_BACKUP = "pcr_test_workflow_backup"
@@ -95,8 +92,7 @@ def _put_the_workflow_back():
 	frappe.db.delete("Custom DocPerm", {"parent": PCR})
 	for row in kept["permissions"]:
 		frappe.get_doc({**row, "doctype": "Custom DocPerm"}).db_insert()
-	for doctype, value in (("Workflow State", TEST_LEVEL), ("Workflow Action Master", SEND_BACK)):
-		frappe.delete_doc_if_exists(doctype, value, force=True)
+	frappe.delete_doc_if_exists("Workflow State", TEST_LEVEL, force=True)
 	frappe.db.set_global(WORKFLOW_BACKUP, None)
 	frappe.cache.hdel("workflow", PCR)
 	frappe.clear_cache(doctype=PCR)
@@ -379,10 +375,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			(row.status, row.user, row.owner, row.initiated_by_role, row.no_supervisor_found),
 			("Pending Supervisor", DA1, DA1, C.ROLE_DA, 0),
 		)
-		# those above the DA who can give level 1 are told; nobody else
-		self.assertTrue(self._notified(SUP, "profile_change_waiting"))
-		self.assertTrue(self._notified(SUP_ADMIN, "profile_change_waiting"))
-		self.assertFalse(self._notified(SUP_OTHER, "profile_change_waiting"))
 
 		for user in (DA1, SUP_OTHER, ADMIN1):  # own request; another team; level 2 does not skip level 1
 			self._error(self._decide(user, name), 403)
@@ -390,7 +382,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual((d["status"], d["l1_by"], d["approver"]), ("Pending Administrator", SUP, SUP))
 		self.assertTrue(d["l1_at"])
 		self.assertEqual(self.writers, [])  # nothing reaches the registry before level 2
-		self.assertTrue(self._notified(ADMIN1, "profile_change_waiting"))
 
 		self._error(self._decide(SUP, name), 403)  # level 2 is not the Supervisor's
 		self._error(self._decide(ADMIN1, name, workflow.REQUEST_CHANGES, "Please check the number"), 400)
@@ -423,7 +414,7 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			self.assertNotIn(SUP, out["message"], out)
 		self.assertEqual(frappe.db.get_value(PCR, name, "status"), "Pending Supervisor")
 
-	def test_a_da_with_no_user_falls_to_the_woreda_rule(self):
+	def test_a_supervisor_asks_for_a_da_who_has_never_signed_in(self):
 		# DA-000002 is posted in ET04-W01 and, here, has never signed in: no User, no place
 		# in the hierarchy. SUP holds a User Permission on that Woreda (their grant).
 		with patch.object(svc, "_user_of", return_value=None):
@@ -437,28 +428,10 @@ class TestProfileChangeRequest(IntegrationTestCase):
 			frappe.db.commit()  # nosemgrep
 			frappe.set_user(SUP_OTHER)
 			self._error(self._submit({"telegram": "+251911222444"}, da_id="DA-000002"), 403)
-		# a request from before requests named the DA's User, still waiting for level 1
-		frappe.set_user("Administrator")
-		old = frappe.get_doc(
-			{
-				"doctype": PCR,
-				"da_id": "DA-000002",
-				"section": "Contact",
-				"requested_by": DA1,
-				"initiated_by_role": C.ROLE_DA,
-				"changes": frappe.as_json({"email": {"from": None, "to": "old@moa.gov.et"}}),
-				"region": "ET04",
-				"zone": "ET04-Z01",
-				"woreda": "ET04-W01",
-			}
-		).insert(ignore_permissions=True)
-		frappe.db.commit()  # nosemgrep
-		for user, sees in ((SUP, True), (ADMIN1, True), (SUP_OTHER, False), (DA3, False)):
+		for user, sees in ((SUP, True), (ADMIN1, True), (SUP_OTHER, False), (DA3, False)):  # by Woreda
 			with as_user(user):
 				rows, _total = svc.list_change_requests(da_id="DA-000002")
-				self.assertEqual({r["name"] for r in rows} >= {old.name, sent["name"]}, sees, user)
-		self._error(self._decide(SUP_OTHER, old.name), 403)
-		self.assertEqual(self._decide(SUP, old.name)["data"]["status"], "Pending Administrator")
+				self.assertEqual(sent["name"] in {r["name"] for r in rows}, sees, user)
 
 	def test_input_of_the_wrong_kind_is_a_400(self):
 		frappe.set_user(DA1)
@@ -601,12 +574,8 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		)
 		frappe.db.commit()  # nosemgrep
 		self.addCleanup(_put_the_workflow_back)  # after tearDown has removed the requests
-		for doctype, field, value in (
-			("Workflow State", "workflow_state_name", TEST_LEVEL),
-			("Workflow Action Master", "workflow_action_name", SEND_BACK),
-		):
-			if not frappe.db.exists(doctype, value):
-				frappe.get_doc({"doctype": doctype, field: value}).insert()
+		if not frappe.db.exists("Workflow State", TEST_LEVEL):
+			frappe.get_doc({"doctype": "Workflow State", "workflow_state_name": TEST_LEVEL}).insert()
 		edit(w)
 		w.save()
 		if write_for:  # Role Permission Manager: taking a step is a save
@@ -655,9 +624,7 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		name = self._own_request()
 		d = self._decide(SUP, name, note="Checked with the DA")["data"]
 		self.assertEqual((d["status"], d["status_label"], d["l1_by"]), (TEST_LEVEL, TEST_LEVEL, SUP))
-		# the new level is told, the last one not yet; the DA hears where the request waits
-		self.assertTrue(self._notified(EXEC, "profile_change_waiting"))
-		self.assertFalse(self._notified(ADMIN1, "profile_change_waiting"))
+		# the DA hears where the request waits
 		self.assertTrue(any(TEST_LEVEL in t for t in self._notified(DA1)), self._notified(DA1))
 		# it is an open request like any other: its field is taken, and it can be listed by state
 		frappe.set_user(DA1)
@@ -677,15 +644,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual(self.writers, [])
 		d = self._decide(EXEC, name, note="Seen by the Executive")["data"]
 		self.assertEqual((d["status"], d["approver"]), ("Pending Administrator", EXEC))
-		self.assertTrue(self._notified(ADMIN1, "profile_change_waiting"))
-
-		# one person decides a request at one level: an Executive who is also an Administrator
-		frappe.set_user("Administrator")
-		frappe.get_doc("User", EXEC).add_roles(C.ROLE_ADMIN)
-		self.addCleanup(lambda: frappe.get_doc("User", EXEC).remove_roles(C.ROLE_ADMIN))
-		out = self._decide(EXEC, name)
-		self._error(out, 403)
-		self.assertIn("already decided", out["message"])
 
 		d = self._decide(ADMIN1, name, note="Approved for the registry")["data"]
 		self.assertEqual((d["status"], d["l2_by"]), ("Applied", ADMIN1))
@@ -712,7 +670,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self.assertEqual(out["data"]["status"], TEST_LEVEL)
 		self.assertIn(TEST_LEVEL, out["message"])
 		name = out["data"]["name"]
-		self.assertTrue(self._notified(EXEC, "profile_change_waiting"))
 		self.assertEqual(self._decide(EXEC, name)["data"]["status"], "Pending Administrator")
 		self.assertEqual(self._decide(ADMIN1, name)["data"]["status"], "Applied")
 
@@ -721,7 +678,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		name = self._own_request()
 		row = frappe.db.get_value(PCR, name, ["status", "no_supervisor_found"], as_dict=True)
 		self.assertEqual((row.status, row.no_supervisor_found), ("Pending Administrator", 0))
-		self.assertTrue(self._notified(ADMIN1, "profile_change_waiting"))
 		self._error(self._decide(SUP, name), 403)  # the Supervisor has no step in this Workflow
 		d = self._decide(ADMIN1, name)["data"]
 		self.assertEqual((d["status"], d["l2_by"]), ("Applied", ADMIN1))
@@ -762,10 +718,10 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self._change_the_workflow(only_the_supervisor)
 		name = self._own_request()
 		# giving the last approval does not open every request to the role: the hierarchy still decides
+		with as_user(SUP_OTHER):
+			rows, _total = svc.list_change_requests()
+			self.assertNotIn(name, [r["name"] for r in rows])
 		for user in (SUP_OTHER, SUP2):
-			with as_user(user):
-				rows, _total = svc.list_change_requests()
-				self.assertNotIn(name, [r["name"] for r in rows], user)
 			self._error(self._decide(user, name), 403)
 		d = self._decide(SUP, name)["data"]
 		self.assertEqual((d["status"], d["l1_by"]), ("Applied", SUP))
@@ -781,137 +737,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self._error(self._decide(SUP, asked), 403)
 		self.assertEqual(len(self.writers), 1)
 		self.assertEqual(self._decide(SUP_ADMIN, asked)["data"]["status"], "Applied")
-
-	def test_a_level_after_the_administrator_and_a_send_back(self):
-		def edit(w):
-			self._an_executive_level(w, after="Pending Administrator", before="Sent to registry")
-			w.append(
-				"transitions",
-				{
-					"state": TEST_LEVEL,
-					"action": SEND_BACK,
-					"next_state": "Pending Administrator",
-					"allowed": C.ROLE_EXECUTIVE,
-					"allow_self_approval": 0,
-				},
-			)
-
-		self._change_the_workflow(edit, write_for=C.ROLE_EXECUTIVE)
-		name = self._own_request()
-		self._decide(SUP, name)
-		self.assertEqual(self._decide(ADMIN1, name)["data"]["status"], TEST_LEVEL)
-		self.assertEqual(self.writers, [])  # the Administrator's is no longer the last approval
-		d = self._act(EXEC, name, SEND_BACK, "Please check the number again")["data"]
-		self.assertEqual((d["status"], d["allowed_actions"]), ("Pending Administrator", []))
-		self.assertTrue(any("Pending" in t or "Waiting" in t for t in self._notified(DA1)))
-		# back at their own level the Administrator decides again; the Executive still cannot there
-		frappe.set_user("Administrator")
-		frappe.get_doc("User", EXEC).add_roles(C.ROLE_ADMIN)
-		self.addCleanup(lambda: frappe.get_doc("User", EXEC).remove_roles(C.ROLE_ADMIN))
-		self._error(self._decide(EXEC, name), 403)
-		self.assertEqual(self._decide(ADMIN1, name)["data"]["status"], TEST_LEVEL)
-		d = self._decide(EXEC, name)["data"]
-		self.assertEqual(d["status"], "Applied")
-		self.assertEqual([w[0] for w in self.writers], [EXEC])
-		doc = frappe.get_doc(PCR, name)
-		self.assertEqual(svc._last_approver(doc), EXEC)  # not l2_by, who is the Administrator
-		self.assertEqual(doc.l2_by, ADMIN1)
-		self.assertEqual(
-			[(s["action"], s["to"]) for s in workflow.steps(doc)][-4:],
-			[
-				(SEND_BACK, "Pending Administrator"),
-				("Approve", TEST_LEVEL),
-				("Approve", "Sent to registry"),
-				(None, "Applied"),
-			],
-		)
-
-	def test_a_workflow_the_app_could_not_run_safely_is_refused_at_save(self):
-		frappe.set_user("Administrator")
-		name = frappe.db.get_value("Workflow", {"document_type": PCR, "is_active": 1}, "name")
-
-		def row(w, state, action):
-			return next(t for t in w.transitions if (t.state, t.action) == (state, action))
-
-		def tick_a_decision(w):  # what the Desk does by default on a new row
-			row(w, "Pending Administrator", workflow.APPROVE).allow_self_approval = 1
-
-		def untick_cancel(w):
-			row(w, "Pending Supervisor", workflow.CANCEL).allow_self_approval = 0
-
-		def a_button_to_applied(w):
-			row(w, "Pending Administrator", workflow.REJECT).next_state = "Applied"
-
-		def a_shortcut_to_the_registry(w):
-			row(w, "Pending Supervisor", workflow.SUBMIT_FOR_DA).next_state = "Sent to registry"
-
-		def no_last_approval(w):
-			row(w, "Pending Administrator", workflow.APPROVE).next_state = "Rejected"
-
-		def no_system_state(w):
-			w.set("states", [s for s in w.states if s.state != "Registry failed"])
-			w.set("transitions", [t for t in w.transitions if t.state != "Registry failed"])
-
-		def cancel_into_the_registry(w):
-			row(w, "Pending Supervisor", workflow.CANCEL).next_state = "Sent to registry"
-
-		def a_decision_for_everyone(w):
-			row(w, "Pending Administrator", workflow.REJECT).allowed = workflow.EVERYONE
-
-		def failures_for_a_hierarchy_role(w):
-			row(w, "Registry failed", workflow.CLOSE).allowed = C.ROLE_SUPERVISOR
-
-		def one_action_two_ways(w):
-			w.append(
-				"transitions",
-				{
-					"state": "Pending Administrator",
-					"action": workflow.REJECT,
-					"next_state": "Changes requested",
-					"allowed": C.ROLE_ADMIN,
-					"allow_self_approval": 0,
-				},
-			)
-
-		def drop_a_state_that_holds_requests(w):
-			self._drop(w, "Pending Supervisor")
-
-		def a_task_inside_a_step(w):
-			tasks = frappe.get_doc({"doctype": "Workflow Transition Tasks", "tasks": []})
-			tasks.insert(set_name="PCR test tasks")  # rolled back with the refused save
-			row(w, "Pending Administrator", workflow.APPROVE).transition_tasks = tasks.name
-
-		def a_state_that_says_who_decided(w):
-			next(row for row in w.states if row.state == "Pending Administrator").update(
-				{"update_field": "l2_by", "update_value": "frappe.session.user", "evaluate_as_expression": 1}
-			)
-
-		waiting = self._own_request()  # a request at Pending Supervisor
-		self.assertEqual(frappe.db.get_value(PCR, waiting, "status"), "Pending Supervisor")
-		frappe.set_user("Administrator")
-
-		for edit, said in (
-			(tick_a_decision, "untick Allow Self Approval"),
-			(untick_cancel, "tick Allow Self Approval"),
-			(a_button_to_applied, "written by the system"),
-			(a_shortcut_to_the_registry, "second person"),
-			(no_last_approval, "could never be approved"),
-			(no_system_state, "must stay"),
-			(cancel_into_the_registry, "requester's own step cannot lead"),
-			(a_decision_for_everyone, "role All is for the requester"),
-			(failures_for_a_hierarchy_role, "sees every request"),
-			(one_action_two_ways, "more than one state"),
-			(drop_a_state_that_holds_requests, "finish or move them"),
-			(a_state_that_says_who_decided, "clear Update Field"),
-			(a_task_inside_a_step, "clear Transition Tasks"),
-		):
-			w = frappe.get_doc("Workflow", name)
-			edit(w)
-			with self.assertRaises(frappe.ValidationError, msg=said) as ctx:
-				w.save()
-			self.assertIn(said, str(ctx.exception))
-			frappe.db.rollback()
-		workflow.validate_shape(frappe.get_doc(workflow.definition()))  # the app's own passes
 
 	# -- what is sent is what was approved; nothing stays half sent ---------------------------------
 
@@ -1167,141 +992,6 @@ class TestProfileChangeRequest(IntegrationTestCase):
 		self._error(self._submit(dict(CONTACT), reason="New SIM", da_id="DA-000001"), 403)
 		frappe.set_user(ADMIN1)
 		self.assertFalse(api.agent_profile("DA-000001")["data"]["can_request"])  # approves, never asks
-
-	# -- the Desk's buttons and the log ------------------------------------------------------
-
-	def _press(self, user, name, action):
-		"""The Desk form's Workflow button: Frappe's method, as hooks.py routes it."""
-		frappe.set_user(user)
-		frappe.db.commit()  # nosemgrep: a refused call rolls back what is not committed
-		return desk.apply_workflow(frappe.get_doc(PCR, name).as_json(), action)
-
-	def test_a_desk_button_takes_the_whole_step(self):
-		self.assertEqual(
-			frappe.get_hooks("override_whitelisted_methods")["frappe.model.workflow.apply_workflow"],
-			["da_services.workflows.desk.apply_workflow"],
-		)
-		name = self._own_request()
-		for user in (DA1, ADMIN1):  # own request; level 2 does not skip level 1
-			with self.assertRaises(frappe.PermissionError):
-				self._press(user, name, workflow.APPROVE)
-		self.assertEqual(self._press(SUP, name, workflow.APPROVE).status, "Pending Administrator")
-		self.assertTrue(self._notified(ADMIN1, "profile_change_waiting"))
-		self.assertEqual(self.writers, [])
-		doc = self._press(ADMIN1, name, workflow.APPROVE)
-		self.assertEqual((doc.status, doc.l2_by), ("Applied", ADMIN1))
-		self.assertEqual([w[0] for w in self.writers], [ADMIN1])  # the registry was written to
-		self.assertEqual(MockDARegistryClient.shared().get_da("DA-000001").phone, CONTACT["mobile"])
-		self.assertEqual(
-			self._history(name),
-			[("Pending Administrator", SUP), ("Sent to registry", ADMIN1), ("Applied", "DA Registry")],
-		)
-
-	def test_a_session_the_registry_would_not_know_cannot_send_to_it(self):
-		name = self._own_request()
-
-		def no_sign_in(client):
-			raise DARegistryAuthError("Sign in through the staff IAM to use the DA Registry")
-
-		with patch.object(MockDARegistryClient, "check_sign_in", no_sign_in):
-			self.assertEqual(self._press(SUP, name, workflow.APPROVE).status, "Pending Administrator")
-			with self.assertRaises(frappe.PermissionError):  # the Desk: nothing moves, nothing is sent
-				self._press(ADMIN1, name, workflow.APPROVE)
-			self._error(self._decide(ADMIN1, name), 403)  # the API with a sign-in of the wrong kind
-			self.assertEqual(frappe.db.get_value(PCR, name, "status"), "Pending Administrator")
-			self.assertEqual(self.writers, [])
-			doc = frappe.get_doc(PCR, name)
-			doc.step_note = "Sent back from the Desk"
-			doc.save()
-			self.assertEqual(
-				self._press(ADMIN1, name, workflow.REJECT).status, "Rejected"
-			)  # no registry call
-
-	def test_a_desk_step_takes_its_note_from_the_saved_form(self):
-		name = self._own_request()
-		with self.assertRaises(frappe.ValidationError):  # a rejection needs a note
-			self._press(SUP, name, workflow.REJECT)
-		frappe.set_user(DA1)
-		doc = frappe.get_doc(PCR, name)
-		doc.step_note = "Documents checked in person"
-		doc.save()
-		with self.assertRaises(frappe.ValidationError):  # a note the DA left is not the Supervisor's
-			self._press(SUP, name, workflow.REJECT)
-		frappe.set_user(SUP)
-		doc = frappe.get_doc(PCR, name)
-		doc.reason = "Not what the DA wrote"
-		with self.assertRaises(frappe.ValidationError):  # the form saves the note and nothing else
-			doc.save()
-		doc = frappe.get_doc(PCR, name)
-		doc.step_note = "The number is not the DA's"
-		doc.save()
-		form = frappe.get_doc(PCR, name).as_dict()
-		form["step_note"] = "Typed in the form and never saved"
-		frappe.db.commit()  # nosemgrep
-		doc = desk.apply_workflow(frappe.as_json(form), workflow.REJECT)
-		self.assertEqual((doc.status, doc.step_note), ("Rejected", None))
-		self.assertEqual(workflow.steps(doc)[-1]["note"], "The number is not the DA's")
-
-	def test_the_desk_list_takes_a_step_on_several_requests(self):
-		first, second = self._own_request(), self._own_request({"telegram": "+251911222333"})
-		frappe.set_user(SUP)
-		frappe.db.commit()  # nosemgrep
-		desk.bulk_workflow_approval(json_ids([first, second]), PCR, workflow.APPROVE)
-		self.assertEqual(
-			{frappe.db.get_value(PCR, n, "status") for n in (first, second)}, {"Pending Administrator"}
-		)
-		frappe.clear_messages()
-
-	def test_other_doctypes_keep_frappes_own_workflow_calls(self):
-		with (
-			patch("frappe.model.workflow.apply_workflow", return_value="single") as single,
-			patch("frappe.model.workflow.bulk_workflow_approval", return_value="bulk") as bulk,
-		):
-			self.assertEqual(desk.apply_workflow('{"doctype": "ToDo", "name": "x"}', "Approve"), "single")
-			self.assertEqual(desk.bulk_workflow_approval('["x"]', "ToDo", "Approve"), "bulk")
-		single.assert_called_once()
-		bulk.assert_called_once()
-
-	def test_the_log_lists_every_step_newest_first(self):
-		name = self._own_request(reason="New SIM")
-		self._decide(SUP, name)
-		self._decide(ADMIN1, name, note="Checked")
-		other = self._own_request({"telegram": "+251911222333"})
-		self._decide(SUP, other, workflow.REJECT, "Not yours")
-
-		frappe.set_user(ADMIN1)
-		out = api.change_logs(da_id="DA-000001")
-		self.assertEqual(out["status"], "success", out)
-		self.assertEqual(out["meta"]["total"], 2)
-		lines = out["data"]
-		self.assertEqual(lines, sorted(lines, key=lambda line: line["at"], reverse=True))
-		self.assertEqual(
-			[(x["state"], x["action"], x["by"], x["note"]) for x in reversed(lines) if x["request"] == name],
-			[
-				("Pending Supervisor", None, DA1, "New SIM"),
-				("Pending Administrator", workflow.APPROVE, SUP, None),
-				("Sent to registry", workflow.APPROVE, ADMIN1, "Checked"),
-				("Applied", None, None, None),
-			],
-		)
-		applied = next(x for x in lines if x["request"] == name and x["state"] == "Applied")
-		self.assertEqual((applied["by_name"], applied["section"]), ("DA Registry", "Contact"))
-		self.assertEqual(applied["changes"]["mobile"]["to"], CONTACT["mobile"])
-		rejected = next(x for x in lines if x["request"] == other and x["action"] == workflow.REJECT)
-		self.assertEqual(
-			(rejected["state"], rejected["by"], rejected["note"]), ("Rejected", SUP, "Not yours")
-		)
-
-		meta = api.change_logs(da_id="DA-000001", limit="1")["meta"]
-		self.assertEqual((meta["total"], meta["limit"], meta["start"]), (2, 1, 0))
-		self.assertEqual(
-			{x["request"] for x in api.change_logs(da_id="DA-000001", limit="1")["data"]}, {other}
-		)
-		self.assertEqual(api.change_logs(section="Education")["data"], [])
-		self._error(api.change_logs(limit="many"), 400)
-		for user, sees in ((DA1, {name, other}), (SUP, {name, other}), (DA3, set()), (SUP_OTHER, set())):
-			frappe.set_user(user)
-			self.assertEqual({x["request"] for x in api.change_logs()["data"]}, sees, user)
 
 	def test_ethiopian_year(self):
 		from datetime import date

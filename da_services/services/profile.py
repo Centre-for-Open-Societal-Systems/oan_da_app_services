@@ -35,7 +35,6 @@ from da_services.da_services.doctype.da_profile_change_request import (
 )
 from da_services.integrations.da_registry.client import (
 	DANotFound,
-	DARegistryAuthError,
 	DARegistryError,
 	DARegistryUnavailable,
 	get_client,
@@ -61,9 +60,6 @@ LEVELS = {states.PENDING_SUPERVISOR: 1, states.PENDING_ADMINISTRATOR: 2}
 SYNC_LOCAL = "Sync Local"
 NOTE_MIN_LENGTH = 5
 TEXT_MAX_LENGTH = 500  # a reason or a note: a sentence or two, shown in lists and notifications
-# Telling people that a request waits is done in the request that moved it: past this many
-# they are not told one by one (the request is still in their list).
-TELL_AT_MOST = 100
 # How long a sent request may be without the registry's change request id before it counts
 # as an attempt that died (the call itself times out well inside this).
 UNANSWERED_SECONDS = 300
@@ -486,90 +482,8 @@ def _may_request_for(ref: DAReference) -> bool:
 	user = _user_of(ref)
 	if user:
 		return _above(user)
-	team = workflow._permitted(frappe.session.user, "User") - {frappe.session.user}
-	return bool(team) and _supervises(ref.woreda)
-
-
-def _approvers(doc) -> list[str]:
-	"""Who can decide the request where it waits now, to tell them it is waiting.
-
-	The holders of a role the Workflow lets decide there, who may see the request; not the
-	person who sent it and not someone who decided it at another level. For a level that
-	follows DA Hierarchy only the people above the DA are looked at, never every holder of
-	the role. Anyone else is asked of Frappe one by one (role, User Permissions and this
-	DocType's own rule), which is why their number is bounded by the caller.
-	"""
-	roles = sorted(workflow.deciding_roles(doc.status) - {workflow.EVERYONE})
-	if not roles:
-		return []
-	above = frappe.get_all(
-		"User Permission",
-		filters={"allow": "User", "for_value": doc.user}
-		if doc.user
-		else {"allow": "DA Woreda", "for_value": doc.woreda or ""},
-		pluck="user",
-	)
-	holders: set[str] = set()
-	if above:
-		holders |= set(
-			frappe.get_all(
-				"Has Role",
-				filters={"parenttype": "User", "role": ("in", roles), "parent": ("in", above)},
-				pluck="parent",
-			)
-		)
-	if not workflow.bound_to_hierarchy(doc.status):
-		# a level not held to the hierarchy: the roles that see by Frappe's rules alone
-		free = sorted(workflow.roles_seen_by_frappe_alone() & set(roles))
-		if free:
-			holders |= set(
-				frappe.get_all(
-					"Has Role",
-					filters={"parenttype": "User", "role": ("in", free)},
-					pluck="parent",
-					limit=TELL_AT_MOST * 5,
-				)
-			)
-	holders -= {"Administrator", "Guest", doc.owner, doc.requested_by, doc.user} | workflow.decided_elsewhere(
-		doc
-	)
-	if not holders:
-		return []
-	enabled = frappe.get_all("User", filters={"name": ("in", sorted(holders)), "enabled": 1}, pluck="name")
-	return sorted(u for u in enabled if frappe.has_permission(DOCTYPE, "read", doc=doc, user=u))
-
-
-def _tell_approvers(doc) -> list[str]:
-	"""Tell those who can decide the request now that it waits for them; returns them.
-
-	``no_supervisor_found`` follows the request from level to level: set while nobody can
-	decide it where it waits (it is in no queue until someone gets the role or the place
-	in DA Hierarchy), cleared when somebody can.
-	"""
-	if not workflow.deciding_roles(doc.status):
-		return []  # not a state where someone decides (or the site has no active Workflow)
-	approvers = _approvers(doc)
-	if bool(doc.no_supervisor_found) == bool(approvers):
-		doc.db_set("no_supervisor_found", 0 if approvers else 1, update_modified=False)
-	if not approvers:
-		frappe.log_error(
-			title=f"{DOCTYPE} {doc.name}: nobody can decide it at {doc.status}",
-			message=f"No one who may see the request of DA {doc.da_id} holds a deciding role there; it waits.",
-		)
-		return []
-	if len(approvers) > TELL_AT_MOST:
-		frappe.logger("da_services").info(
-			"%s %s: %s people can decide it at %s; not told one by one",
-			DOCTYPE,
-			doc.name,
-			len(approvers),
-			doc.status,
-		)
-		return approvers
-	title = _("Profile change of DA {0} ({1}) waits for your approval").format(doc.da_id, doc.section)
-	for user in approvers:
-		_send(user, doc, title, event="profile_change_waiting")
-	return approvers
+	team = frappe.permissions.get_user_permissions(frappe.session.user).get("User", [])
+	return any(row.get("doc") != frappe.session.user for row in team) and _supervises(ref.woreda)
 
 
 # -- submit / cancel -----------------------------------------------------------------
@@ -1054,6 +968,7 @@ def _create_request(
 			"initiated_by_role": C.ROLE_SUPERVISOR if as_supervisor else C.ROLE_DA,
 			"requested_by": frappe.session.user,
 			"reason": (reason or "").strip() or None,
+			"no_supervisor_found": 0 if as_supervisor or _woreda_supervisors(ref.woreda) else 1,
 			"changes": frappe.as_json(diff),
 			"region": ref.region,
 			"zone": ref.zone,
@@ -1091,7 +1006,6 @@ def _create_request(
 
 	if as_supervisor:
 		_tell_da(doc, _("Your Supervisor asked for a change to your {0}").format(section.lower()))
-	_tell_approvers(doc)
 	return serialize(doc)
 
 
@@ -1233,29 +1147,27 @@ def get_change_request(name: str) -> dict:
 	return {**serialize(doc), "history": _history(doc)}
 
 
-def _steps(row) -> list[dict]:
-	"""The steps of a request, oldest first: {state, action, by, system, at, note}.
+def _history(doc) -> list[dict]:
+	"""A request's steps, oldest first: {state, action, by, by_name, at, note}.
 
 	The first is the sending; the others are the steps recorded on the request as they were
 	taken (``decisions``), each with its note, and the DA Registry's answer (``by`` is empty
-	there, ``system`` names it). Every level of the site's Workflow is here, however many it
-	has. A request from before steps were recorded shows the lines Frappe kept for it.
+	there, ``by_name`` names it). A request from before steps were recorded shows the lines
+	Frappe kept for it.
 	"""
 	rows = [
 		{
 			"state": workflow.first_state(),
 			"action": None,
-			"by": row.get("requested_by"),
+			"by": doc.requested_by,
 			"system": None,
-			"at": row.get("creation"),
-			"note": row.get("reason"),
+			"at": doc.creation,
+			"note": doc.reason,
 		}
 	]
-	recorded = workflow.steps(row)
-	if not recorded and row.get("status") == workflow.first_state():
-		return rows  # sent and not touched yet
+	recorded = workflow.steps(doc)
 	if recorded:
-		return rows + [
+		rows += [
 			{
 				"state": step.get("to"),
 				"action": step.get("action"),
@@ -1266,31 +1178,27 @@ def _steps(row) -> list[dict]:
 			}
 			for step in recorded
 		]
-	return rows + [
-		{
-			"state": line.content,
-			"action": None,
-			"by": None if line.comment_by else line.comment_email,
-			"system": line.comment_by,
-			"at": line.creation,
-			"note": None,
-		}
-		for line in frappe.get_all(
-			"Comment",
-			filters={
-				"reference_doctype": DOCTYPE,
-				"reference_name": row.get("name"),
-				"comment_type": "Workflow",
-			},
-			fields=["content", "comment_email", "comment_by", "creation"],
-			order_by="creation asc, name asc",
-		)
-	]
-
-
-def _history(doc) -> list[dict]:
-	"""A request's steps as its detail shows them: {state, action, by, by_name, at, note}."""
-	rows = _steps(doc)
+	else:
+		rows += [
+			{
+				"state": line.content,
+				"action": None,
+				"by": None if line.comment_by else line.comment_email,
+				"system": line.comment_by,
+				"at": line.creation,
+				"note": None,
+			}
+			for line in frappe.get_all(
+				"Comment",
+				filters={
+					"reference_doctype": DOCTYPE,
+					"reference_name": doc.name,
+					"comment_type": "Workflow",
+				},
+				fields=["content", "comment_email", "comment_by", "creation"],
+				order_by="creation asc, name asc",
+			)
+		]
 	names = _full_names([{"requested_by": r["by"]} for r in rows])
 	return [
 		{
@@ -1303,81 +1211,6 @@ def _history(doc) -> list[dict]:
 		}
 		for r in rows
 	]
-
-
-LOG_FIELDS = (
-	"name",
-	"da_id",
-	"da_name",
-	"section",
-	"status",
-	"changes",
-	"reason",
-	"requested_by",
-	"creation",
-	"decisions",
-)
-
-
-def change_logs(
-	*,
-	da_id: str | None = None,
-	section: str | None = None,
-	limit: int = 50,
-	start: int = 0,
-) -> tuple[list[dict], int]:
-	"""The log of profile changes: who did what to which request, and when, newest first.
-
-	One line per step of each change request the caller may see (their own, those of the
-	people below them, every one for an Administrator), ``da_id`` and ``section`` narrowing
-	it. Each line carries the request, what it asks for (``changes``: field, from, to), the
-	step and the state it led to, who took it and its note. ``limit`` and ``start`` page
-	over requests (newest first); the count is of requests.
-	"""
-	require_permission(DOCTYPE, "read")
-	filters: dict = {}
-	if da_id:
-		filters["da_id"] = da_id
-	if section:
-		filters["section"] = section
-	limit = max(1, min(int(limit), 200))
-	start = max(0, int(start))
-	requests = frappe.get_list(
-		DOCTYPE,
-		filters=filters,
-		fields=list(LOG_FIELDS),
-		order_by="creation desc",
-		limit_page_length=limit,
-		limit_start=start,
-	)
-	total = len(frappe.get_list(DOCTYPE, filters=filters, pluck="name", limit_page_length=0))
-	lines = []
-	for request in requests:
-		changes = request.get("changes")
-		changes = frappe.parse_json(changes) if isinstance(changes, str) else (changes or {})
-		for step in _steps(request):
-			lines.append(
-				{
-					"request": request.name,
-					"da_id": request.da_id,
-					"da_name": request.da_name,
-					"section": request.section,
-					"changes": changes,
-					"state": step["state"],
-					"state_label": _label(step["state"]),
-					"action": step["action"],
-					"by": step["by"],
-					"system": step["system"],
-					"at": get_datetime(step["at"]),
-					"note": step["note"] or None,
-				}
-			)
-	names = _full_names([{"requested_by": line["by"]} for line in lines])
-	lines.sort(key=lambda line: line["at"], reverse=True)
-	for line in lines:
-		line["by_name"] = line.pop("system") or names.get(line["by"])
-		line["at"] = line["at"].isoformat()
-	return lines, total
 
 
 # -- decide --------------------------------------------------------------------------
@@ -1394,42 +1227,9 @@ def _why_not(doc, action: str) -> Exception:
 		return AlreadyDecided(_("Change request {0} is already decided: {1}.").format(name, _label(status)))
 	if user in (doc.owner, doc.requested_by):
 		return frappe.PermissionError(_("You cannot decide your own change request."))
-	if doc.user and doc.user == user:
-		return frappe.PermissionError(_("You cannot decide a change request about your own record."))
-	if user in workflow.decided_elsewhere(doc):
-		return frappe.PermissionError(
-			_("You already decided change request {0}; another person must give the next approval.").format(
-				name
-			)
-		)
-	if workflow.bound_to_hierarchy(status):
-		return frappe.PermissionError(
-			_("Only someone above DA {0} can decide {1} where it waits now.").format(doc.da_id, name)
-		)
 	return frappe.PermissionError(
 		_("Change request {0} waits for another person's decision: {1}.").format(name, _label(status))
 	)
-
-
-def _needs_a_registry_sign_in(doc, action: str) -> None:
-	"""Refuse a step that sends to the DA Registry when this session could not send it.
-
-	Where the registry takes each person's own staff IAM sign-in, a Desk session (or a
-	password sign-in) has none. Refused here, before the Workflow moves, the request stays
-	where it waits; let through, it would be approved and then fail at the registry.
-	"""
-	if states.SENT_TO_REGISTRY not in workflow.leads_to(doc.status, action):
-		return
-	try:
-		get_client().check_sign_in()
-	except DARegistryAuthError as exc:
-		frappe.throw(
-			_(
-				"{0} sends this change to the DA Registry with your own staff sign-in, which this "
-				"session does not have. Take this step in the DA portal. ({1})"
-			).format(action, exc),
-			frappe.PermissionError,
-		)
 
 
 @_in_own_transaction
@@ -1459,7 +1259,6 @@ def decide(
 	doc = _for_a_step(name)
 	if action not in workflow.actions(doc):
 		raise _why_not(doc, action)
-	_needs_a_registry_sign_in(doc, action)
 	# 1 or 2 for the two levels this app records by name; a level an administrator added to
 	# the Workflow in the Desk has no fields of its own: its decision is kept in the common
 	# ones and in the history.
@@ -1483,8 +1282,6 @@ def decide(
 	if doc.status == states.SENT_TO_REGISTRY:
 		_send_to_registry(doc, wait=wait_for_registry)
 		doc.reload()
-	elif doc.status in workflow.waiting_states():
-		_tell_approvers(doc)  # the next level
 	_tell_da_outcome(doc)
 	doc.reload()
 	return serialize(doc)
@@ -1526,7 +1323,6 @@ def _take_workflow_step(name: str, action: str, note: str | None = None) -> dict
 			_("{0} is not a step you can take on change request {1} now.").format(action or "(none)", name),
 			frappe.ValidationError,
 		)
-	_needs_a_registry_sign_in(doc, action)
 	doc = workflow.apply(doc, action, note)
 	doc.db_set(
 		{"approver": frappe.session.user, "decided_at": now_datetime(), "decision_note": note or None},
@@ -1541,8 +1337,6 @@ def _take_workflow_step(name: str, action: str, note: str | None = None) -> dict
 	if doc.status == states.SENT_TO_REGISTRY:
 		_send_to_registry(doc)
 		doc.reload()
-	else:
-		_tell_approvers(doc)
 	_tell_da_outcome(doc)
 	doc.reload()
 	return serialize(doc)
@@ -1786,7 +1580,6 @@ def retry_registry_push(name: str) -> dict:
 		)
 	if workflow.RETRY not in workflow.actions(doc):
 		frappe.throw(_("You cannot retry change request {0}.").format(name), frappe.PermissionError)
-	_needs_a_registry_sign_in(doc, workflow.RETRY)
 	doc = workflow.apply(doc, workflow.RETRY)
 	audit.record(
 		"profile_change_retried",
