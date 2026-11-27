@@ -647,6 +647,19 @@ class TestMyTeamAPI(IntegrationTestCase):
 		data = self._team(self.DA3)
 		self.assertEqual((data["areas"], data["ids"]), (["ET04-W01-K07"], {"DA-000002"}))
 
+	def test_filter_by_specialisation(self):
+		data = self._team(ADMIN, specialisation="Crop production,Livestock")
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000004"})
+		facets = {f["value"]: f["count"] for f in self._team(SUP_W02)["facets"]["specialisation"]}
+		self.assertEqual(facets, {"Natural resources": 1, "Crop production": 1})
+
+	def test_reports_to_is_the_callers_boss(self):
+		self.assertEqual(self._team(DA1)["reports_to"]["user"], SUP_W01)
+		self.assertEqual(self._team(SUP_W01)["reports_to"]["user"], EXEC_ET04)
+		self.assertIsNone(self._team(SUP_W02)["reports_to"])  # straight under the root
+		self.assertIsNone(self._team(ADMIN)["reports_to"])
+		self.assertIsNone(self._team(self.NOBODY)["reports_to"])
+
 	def test_no_node_gets_empty_team(self):
 		data = self._team(self.NOBODY)
 		self.assertEqual((data["team"], data["root"], data["total"]), ("none", None, 0))
@@ -663,7 +676,7 @@ class TestMyTeamAPI(IntegrationTestCase):
 	# ========== Filters / facets / search / paging on the team ==========
 
 	def test_filters_narrow_the_team(self):
-		self.assertEqual(self._team(SUP_W01, active_status="On-leave")["ids"], {"DA-000002"})
+		self.assertEqual(self._team(SUP_W01, kebele="ET04-W01-K07")["ids"], {"DA-000002"})
 		self.assertEqual(self._team(SUP_W02, kebele="unassigned")["ids"], {"DA-000003"})
 
 	def test_filters_cannot_widen_the_team(self):
@@ -685,8 +698,17 @@ class TestMyTeamAPI(IntegrationTestCase):
 
 	def test_invalid_filter_value(self):
 		frappe.set_user(SUP_W01)
-		response = frappe.call(self.METHOD, education_tier="Bogus")
+		response = frappe.call(self.METHOD, fayda_status="Bogus")
 		self.assertEqual(response["status"], "error")
+
+	def test_hidden_fields_left_out(self):
+		"""active_status, education_tier and approval_status: not on agents, not in facets, not filters."""
+		hidden = {"active_status", "education_tier", "approval_status"}
+		data = self._team(ADMIN, active_status="Separated", education_tier="Bogus")
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000003", "DA-000004"})
+		self.assertFalse(hidden & set(data["facets"]))
+		for agent in data["agents"]:
+			self.assertFalse(hidden & set(agent), agent)
 
 	# ========== Tree ==========
 
