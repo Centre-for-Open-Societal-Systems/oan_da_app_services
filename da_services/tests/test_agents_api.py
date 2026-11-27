@@ -647,6 +647,19 @@ class TestMyTeamAPI(IntegrationTestCase):
 		data = self._team(self.DA3)
 		self.assertEqual((data["areas"], data["ids"]), (["ET04-W01-K07"], {"DA-000002"}))
 
+	def test_filter_by_specialisation(self):
+		data = self._team(ADMIN, specialisation="Crop production,Livestock")
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000004"})
+		facets = {f["value"]: f["count"] for f in self._team(SUP_W02)["facets"]["specialisation"]}
+		self.assertEqual(facets, {"Natural resources": 1, "Crop production": 1})
+
+	def test_reports_to_is_the_callers_boss(self):
+		self.assertEqual(self._team(DA1)["reports_to"]["user"], SUP_W01)
+		self.assertEqual(self._team(SUP_W01)["reports_to"]["user"], EXEC_ET04)
+		self.assertIsNone(self._team(SUP_W02)["reports_to"])  # straight under the root
+		self.assertIsNone(self._team(ADMIN)["reports_to"])
+		self.assertIsNone(self._team(self.NOBODY)["reports_to"])
+
 	def test_no_node_gets_empty_team(self):
 		data = self._team(self.NOBODY)
 		self.assertEqual((data["team"], data["root"], data["total"]), ("none", None, 0))

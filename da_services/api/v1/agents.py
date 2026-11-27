@@ -89,6 +89,7 @@ def list_agents(
 	active_status=None,
 	education_tier=None,
 	approval_status=None,
+	specialisation=None,
 	search=None,
 	limit=None,
 	start=None,
@@ -107,6 +108,7 @@ def list_agents(
 	- active_status: Filter by active status (Active, On-leave, Separated)
 	- education_tier: Filter by education tier (Diploma, Degree, Certificate, MSc, PhD)
 	- approval_status: Filter by registry approval status (e.g. Published)
+	- specialisation: Filter by specialisation (e.g. Crop production)
 	- search: Search by DA-ID or full name (case-insensitive partial match)
 	- limit: Page size (default 50, max 500)
 	- start: Offset for pagination (default 0)
@@ -161,6 +163,7 @@ def list_agents(
 			"active_status": active_status,
 			"education_tier": education_tier,
 			"approval_status": approval_status,
+			"specialisation": specialisation,
 		}
 	)
 	search = search or frappe.form_dict.get("search")
@@ -192,6 +195,7 @@ def list_my_team(
 	active_status=None,
 	education_tier=None,
 	approval_status=None,
+	specialisation=None,
 	search=None,
 	limit=None,
 	start=None,
@@ -216,6 +220,7 @@ def list_my_team(
 	- education_tier: Filter by education tier (Diploma, Degree, Certificate, MSc, PhD)
 	- fayda_status: Filter by Fayda status (Verified, Pending, Mismatch)
 	- approval_status: Filter by registry approval status (e.g. Published)
+	- specialisation: Filter by specialisation (e.g. Crop production)
 	- search: Search by DA-ID or full name (case-insensitive partial match)
 	- limit: Page size (default 50, max 500)
 	- start: Offset for pagination (default 0)
@@ -250,7 +255,8 @@ def list_my_team(
 
 	root is the DA Hierarchy node the team hangs from (the caller, or the root); for "kebele" it
 	is the DA's own node; null for "none". areas: the Woreda codes for "woreda", the Kebele code
-	for "kebele", else [].
+	for "kebele", else []. reports_to is the caller's boss (their parent DA Hierarchy node, same
+	shape as root); null at the top of the tree or with no node.
 
 	Errors:
 	- 401: Not signed in
@@ -267,6 +273,7 @@ def list_my_team(
 			"active_status": active_status,
 			"education_tier": education_tier,
 			"approval_status": approval_status,
+			"specialisation": specialisation,
 		}
 	)
 	search = search or frappe.form_dict.get("search")
@@ -280,6 +287,7 @@ def list_my_team(
 			"team": result["team"],
 			"root": result["root"],
 			"areas": result["areas"],
+			"reports_to": result["reports_to"],
 			"agents": result["agents"],
 			"total": result["total"],
 			"page": {"limit": limit, "start": start},

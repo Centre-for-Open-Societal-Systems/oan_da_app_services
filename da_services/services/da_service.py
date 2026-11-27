@@ -25,6 +25,7 @@ FILTER_FIELDS = (
 	"education_tier",
 	"fayda_status",
 	"approval_status",
+	"specialisation",
 )
 # The value a filter and a facet use for a DA with no area of that level (e.g. no Kebele posting).
 UNASSIGNED = "unassigned"
@@ -278,6 +279,7 @@ def list_my_team(
 	    {"team": "all" | "woreda" | "reports" | "kebele" | "none", "root": {node} | None,
 	     "areas": [codes], "agents": [...], "total": int, "facets": {...}}
 	    areas: the Woreda codes for "woreda", the Kebele code for "kebele", else [].
+	    reports_to: the caller's boss in the DA Hierarchy (their parent node), None at the top.
 
 	Example:
 	    >>> team = list_my_team(limit=20)
@@ -319,8 +321,17 @@ def list_my_team(
 		"team": team,
 		"root": _node_summary(root),
 		"areas": areas,
+		"reports_to": _node_summary(_boss_of(user)),
 		**_query(team_das, filters, search=search, limit=limit, start=start),
 	}
+
+
+def _boss_of(user: str) -> dict | None:
+	"""The node the user reports to in the DA Hierarchy; None with no node or straight under the root."""
+	parent = frappe.db.get_value(HIERARCHY, {"user": user}, "parent_da_hierarchy")
+	if not parent or parent == ROOT:
+		return None
+	return frappe.db.get_value(HIERARCHY, parent, _NODE_FIELDS, as_dict=True)
 
 
 def _own_node(user: str) -> dict | None:
