@@ -676,7 +676,7 @@ class TestMyTeamAPI(IntegrationTestCase):
 	# ========== Filters / facets / search / paging on the team ==========
 
 	def test_filters_narrow_the_team(self):
-		self.assertEqual(self._team(SUP_W01, active_status="On-leave")["ids"], {"DA-000002"})
+		self.assertEqual(self._team(SUP_W01, kebele="ET04-W01-K07")["ids"], {"DA-000002"})
 		self.assertEqual(self._team(SUP_W02, kebele="unassigned")["ids"], {"DA-000003"})
 
 	def test_filters_cannot_widen_the_team(self):
@@ -698,8 +698,17 @@ class TestMyTeamAPI(IntegrationTestCase):
 
 	def test_invalid_filter_value(self):
 		frappe.set_user(SUP_W01)
-		response = frappe.call(self.METHOD, education_tier="Bogus")
+		response = frappe.call(self.METHOD, fayda_status="Bogus")
 		self.assertEqual(response["status"], "error")
+
+	def test_hidden_fields_left_out(self):
+		"""active_status, education_tier and approval_status: not on agents, not in facets, not filters."""
+		hidden = {"active_status", "education_tier", "approval_status"}
+		data = self._team(ADMIN, active_status="Separated", education_tier="Bogus")
+		self.assertEqual(data["ids"], {"DA-000001", "DA-000002", "DA-000003", "DA-000004"})
+		self.assertFalse(hidden & set(data["facets"]))
+		for agent in data["agents"]:
+			self.assertFalse(hidden & set(agent), agent)
 
 	# ========== Tree ==========
 

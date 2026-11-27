@@ -36,14 +36,21 @@ ENUM_FILTERS = {
 	"education_tier": VALID_EDUCATION_TIERS,
 }
 
+# Left out of the My Team list (GET /agents/my-team): not filters there, not on each agent, not in the facets.
+MY_TEAM_HIDDEN_FIELDS = ("active_status", "education_tier", "approval_status")
 
-def _parse_filters(given: dict) -> dict:
+
+def _parse_filters(given: dict, skip: tuple[str, ...] = ()) -> dict:
 	"""The list filters from the call or the query string, each one value or several (comma-separated).
+
+	Fields in skip are ignored, even when given in the query string.
 
 	Raises ValidationError for a value outside an enum filter's set.
 	"""
 	filters = {}
 	for field in da_service.FILTER_FIELDS:
+		if field in skip:
+			continue
 		value = given.get(field) or frappe.form_dict.get(field)
 		values = da_service.split_values(value)
 		valid = ENUM_FILTERS.get(field)
@@ -192,9 +199,6 @@ def list_my_team(
 	kebele=None,
 	region=None,
 	fayda_status=None,
-	active_status=None,
-	education_tier=None,
-	approval_status=None,
 	specialisation=None,
 	search=None,
 	limit=None,
@@ -216,10 +220,7 @@ def list_my_team(
 
 	Query parameters (each filter: one value or several, comma-separated; a DA matches any of them):
 	- region / woreda / kebele: Narrow within the team (codes; "unassigned" = no area at that level)
-	- active_status: Filter by active status (Active, On-leave, Separated)
-	- education_tier: Filter by education tier (Diploma, Degree, Certificate, MSc, PhD)
 	- fayda_status: Filter by Fayda status (Verified, Pending, Mismatch)
-	- approval_status: Filter by registry approval status (e.g. Published)
 	- specialisation: Filter by specialisation (e.g. Crop production)
 	- search: Search by DA-ID or full name (case-insensitive partial match)
 	- limit: Page size (default 50, max 500)
@@ -237,7 +238,6 @@ def list_my_team(
 	                {
 	                    "da_id": "DA-000001",
 	                    "full_name": "Abebe Kebede",
-	                    "active_status": "Active",
 	                    "woreda": "ET04-W01",
 	                    "kebele": "ET04-W01-K03",
 	                    ...
@@ -247,8 +247,7 @@ def list_my_team(
 	            "page": {"limit": 50, "start": 0},
 	            "facets": {
 	                "region": [{"value": "ET04", "label": "Oromia", "count": 2}],
-	                "woreda": [...], "kebele": [...], "active_status": [...],
-	                "education_tier": [...], "fayda_status": [...], "approval_status": [...]
+	                "woreda": [...], "kebele": [...], "fayda_status": [...], "specialisation": [...]
 	            }
 	        }
 	    }
@@ -257,6 +256,9 @@ def list_my_team(
 	is the DA's own node; null for "none". areas: the Woreda codes for "woreda", the Kebele code
 	for "kebele", else []. reports_to is the caller's boss (their parent DA Hierarchy node, same
 	shape as root); null at the top of the tree or with no node.
+
+	active_status, education_tier and approval_status are left out of this list: not on each agent,
+	not in the facets, and not accepted as filters (GET /agents still has them).
 
 	Errors:
 	- 401: Not signed in
@@ -270,17 +272,17 @@ def list_my_team(
 			"kebele": kebele,
 			"region": region,
 			"fayda_status": fayda_status,
-			"active_status": active_status,
-			"education_tier": education_tier,
-			"approval_status": approval_status,
 			"specialisation": specialisation,
-		}
+		},
+		skip=MY_TEAM_HIDDEN_FIELDS,
 	)
 	search = search or frappe.form_dict.get("search")
 	limit, start = _parse_page(limit, start)
 
 	# Call service layer
 	result = da_service.list_my_team(search=search, limit=limit, start=start, **filters)
+	agents = [{k: v for k, v in a.items() if k not in MY_TEAM_HIDDEN_FIELDS} for a in result["agents"]]
+	facets = {k: v for k, v in result["facets"].items() if k not in MY_TEAM_HIDDEN_FIELDS}
 
 	return success_response(
 		data={
@@ -288,10 +290,10 @@ def list_my_team(
 			"root": result["root"],
 			"areas": result["areas"],
 			"reports_to": result["reports_to"],
-			"agents": result["agents"],
+			"agents": agents,
 			"total": result["total"],
 			"page": {"limit": limit, "start": start},
-			"facets": result["facets"],
+			"facets": facets,
 		}
 	)
 
