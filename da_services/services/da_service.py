@@ -27,6 +27,8 @@ FILTER_FIELDS = (
 	"approval_status",
 	"specialisation",
 )
+# Filters of the My Team list: no active status, education tier or approval status there.
+TEAM_FILTER_FIELDS = ("region", "woreda", "kebele", "fayda_status", "specialisation")
 # The value a filter and a facet use for a DA with no area of that level (e.g. no Kebele posting).
 UNASSIGNED = "unassigned"
 # Geo levels cascade: a Woreda facet counts only the chosen Regions, a Kebele facet only the chosen Woredas.
@@ -98,9 +100,22 @@ def search_agents(*, search: str | None = None, limit: int = 50, start: int = 0,
 	return _query(all_das, filters, search=search, limit=limit, start=start)
 
 
-def _query(das, filters: dict, *, search: str | None, limit: int, start: int) -> dict:
-	"""Filter, search, sort and page a list of DAReference, and count the facets."""
-	wanted = {field: split_values(filters.get(field)) for field in FILTER_FIELDS}
+def _query(
+	das,
+	filters: dict,
+	*,
+	search: str | None,
+	limit: int,
+	start: int,
+	fields: tuple[str, ...] = FILTER_FIELDS,
+	to_dict=None,
+) -> dict:
+	"""Filter, search, sort and page a list of DAReference, and count the facets.
+
+	fields: the filters (and facets) this list has; to_dict: how each DA is returned.
+	"""
+	to_dict = to_dict or _da_reference_to_list_dict
+	wanted = {field: split_values(filters.get(field)) for field in fields}
 
 	# Step 2: Apply search (DA-ID or name)
 	if search:
@@ -123,7 +138,7 @@ def _query(das, filters: dict, *, search: str | None, limit: int, start: int) ->
 	paginated_das = filtered_das[start : start + limit]
 
 	# Step 8: Convert to dicts for API response
-	agents = [_da_reference_to_list_dict(da) for da in paginated_das]
+	agents = [to_dict(da) for da in paginated_das]
 
 	return {"agents": agents, "total": total, "facets": facets}
 
@@ -145,7 +160,7 @@ def _facets(das, wanted: dict[str, list[str]]) -> dict[str, list[dict]]:
 	"""
 	facets = {}
 	scope = das
-	for field in FILTER_FIELDS:
+	for field in wanted:
 		counts: dict[str, int] = {}
 		labels: dict[str, str] = {}
 		for da in scope if field in _GEO_FIELDS else das:
@@ -265,7 +280,10 @@ def list_my_team(
 	    limit: Page size (default 50, max 500)
 	    start: Offset for pagination (default 0)
 	    user: The caller; defaults to the session user
-	    **filters: Any of FILTER_FIELDS; one value or several (comma-separated)
+	    **filters: Any of TEAM_FILTER_FIELDS; one value or several (comma-separated)
+
+	Each agent has the _da_reference_to_team_dict fields: no active status, education tier or
+	approval status.
 
 	Two roles get an area instead of a subtree:
 	- a Supervisor: every Development Agent posted to their Woreda (team "woreda"); the Woreda is
@@ -322,7 +340,15 @@ def list_my_team(
 		"root": _node_summary(root),
 		"areas": areas,
 		"reports_to": _node_summary(_boss_of(user)),
-		**_query(team_das, filters, search=search, limit=limit, start=start),
+		**_query(
+			team_das,
+			filters,
+			search=search,
+			limit=limit,
+			start=start,
+			fields=TEAM_FILTER_FIELDS,
+			to_dict=_da_reference_to_team_dict,
+		),
 	}
 
 
@@ -408,17 +434,24 @@ def _node_summary(node: dict | None) -> dict | None:
 
 
 def _da_reference_to_list_dict(da_ref) -> dict:
-	"""Convert DAReference to list item dict for API response."""
+	"""Convert DAReference to list item dict for API response (GET /agents)."""
+	return {
+		**_da_reference_to_team_dict(da_ref),
+		"active_status": da_ref.active_status,
+		"approval_status": da_ref.approval_status,
+		"education_tier": da_ref.education_tier,
+	}
+
+
+def _da_reference_to_team_dict(da_ref) -> dict:
+	"""A DAReference as a My Team list item: no active status, education tier or approval status."""
 	return {
 		"da_id": da_ref.da_id,
 		"full_name": da_ref.full_name,
-		"active_status": da_ref.active_status,
-		"approval_status": da_ref.approval_status,
 		"region": da_ref.region,
 		"zone": da_ref.zone,
 		"woreda": da_ref.woreda,
 		"kebele": da_ref.kebele,
-		"education_tier": da_ref.education_tier,
 		"fayda_status": da_ref.fayda_status,
 		"phone": da_ref.phone,
 		"specialisation": da_ref.specialisation,

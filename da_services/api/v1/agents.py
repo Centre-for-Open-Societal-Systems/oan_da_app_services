@@ -36,21 +36,15 @@ ENUM_FILTERS = {
 	"education_tier": VALID_EDUCATION_TIERS,
 }
 
-# Left out of the My Team list (GET /agents/my-team): not filters there, not on each agent, not in the facets.
-MY_TEAM_HIDDEN_FIELDS = ("active_status", "education_tier", "approval_status")
 
-
-def _parse_filters(given: dict, skip: tuple[str, ...] = ()) -> dict:
-	"""The list filters from the call or the query string, each one value or several (comma-separated).
-
-	Fields in skip are ignored, even when given in the query string.
+def _parse_filters(given: dict, fields: tuple[str, ...] = da_service.FILTER_FIELDS) -> dict:
+	"""The list filters (of fields) from the call or the query string, each one value or several
+	(comma-separated).
 
 	Raises ValidationError for a value outside an enum filter's set.
 	"""
 	filters = {}
-	for field in da_service.FILTER_FIELDS:
-		if field in skip:
-			continue
+	for field in fields:
 		value = given.get(field) or frappe.form_dict.get(field)
 		values = da_service.split_values(value)
 		valid = ENUM_FILTERS.get(field)
@@ -274,15 +268,13 @@ def list_my_team(
 			"fayda_status": fayda_status,
 			"specialisation": specialisation,
 		},
-		skip=MY_TEAM_HIDDEN_FIELDS,
+		fields=da_service.TEAM_FILTER_FIELDS,
 	)
 	search = search or frappe.form_dict.get("search")
 	limit, start = _parse_page(limit, start)
 
 	# Call service layer
 	result = da_service.list_my_team(search=search, limit=limit, start=start, **filters)
-	agents = [{k: v for k, v in a.items() if k not in MY_TEAM_HIDDEN_FIELDS} for a in result["agents"]]
-	facets = {k: v for k, v in result["facets"].items() if k not in MY_TEAM_HIDDEN_FIELDS}
 
 	return success_response(
 		data={
@@ -290,10 +282,10 @@ def list_my_team(
 			"root": result["root"],
 			"areas": result["areas"],
 			"reports_to": result["reports_to"],
-			"agents": agents,
+			"agents": result["agents"],
 			"total": result["total"],
 			"page": {"limit": limit, "start": start},
-			"facets": facets,
+			"facets": result["facets"],
 		}
 	)
 
