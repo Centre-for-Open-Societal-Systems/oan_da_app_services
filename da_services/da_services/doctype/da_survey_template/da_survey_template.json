@@ -85,6 +85,7 @@
   },
   {
    "fieldname": "created_by_user",
+   "ignore_user_permissions": 1,
    "fieldtype": "Link",
    "label": "Created By",
    "options": "User",

@@ -103,6 +103,22 @@ class TestAgentsAPI(IntegrationTestCase):
 		# Admin sees all 4 fixture DAs
 		self.assertEqual(total, 4)
 
+	def test_each_agent_has_its_portal_user(self):
+		"""user: the portal User bound to the DA record, null for a DA with none (survey assignees)."""
+		set_da_registry_id(DA1, "DA-000001")
+		frappe.db.set_value("User", {"da_registry_id": "DA-000003"}, "da_registry_id", None)
+		frappe.db.commit()
+		try:
+			frappe.set_user(ADMIN)
+			agents = frappe.call("da_services.api.v1.agents.list_agents")["data"]["agents"]
+			users = {a["da_id"]: a["user"] for a in agents}
+			self.assertEqual(users["DA-000001"], DA1)
+			self.assertIsNone(users["DA-000003"])
+		finally:
+			frappe.set_user("Administrator")
+			frappe.db.set_value("User", DA1, "da_registry_id", None)
+			frappe.db.commit()
+
 	def test_unrestricted_wins_over_development_agent_role(self):
 		"""Administrator also holds Development Agent, and must still see every DA."""
 		_user(ADMIN, [C.ROLE_DA])

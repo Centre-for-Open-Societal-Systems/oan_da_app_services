@@ -114,6 +114,9 @@ def list_agents(
 	- limit: Page size (default 50, max 500)
 	- start: Offset for pagination (default 0)
 
+	Each agent has "user": the portal User bound to the DA record (User.da_registry_id), or null.
+	Survey templates in Selected mode take these as assignedUsers.
+
 	Every filter takes one value or several, comma-separated ("ET04-W01,ET03-W02"); a DA matches
 	any of them. "unassigned" matches a DA with no area at that level (e.g. no Kebele).
 
@@ -136,7 +139,8 @@ def list_agents(
 	                    "phone": "+251911000001",
 	                    "specialisation": "Crop production",
 	                    "joined_at": "2019-09-01",
-	                    "farmer_count": 128
+	                    "farmer_count": 128,
+	                    "user": "da@example.com"
 	                }
 	            ],
 	            "total": 42,
