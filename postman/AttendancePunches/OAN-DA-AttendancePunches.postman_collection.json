@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "oan-da-attendance-punches",
     "name": "OAN DA Attendance Punches",
-    "description": "Punch-in / punch-out for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET always returns {next_action, id, punched_date, punched_time}\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
+    "description": "Punch-in / punch-out and daily attendance list for DA, Supervisor, and Executive.\n\nBase path: /api/v1/da-services\n\n## Run order\n1. SSO Login\n2. GET today → use data.next_action for the button\n3. POST punch with action, punched_date, punched_time; optional geo Links and lat/lng\n4. GET list → daily rows with user_name, kebele, check_in/out, hours_logged (kebele display name is FE)\n\n## Auth\nSSO Login → Bearer. Native DocType — no staff CSRF.\nAccess = Role DocPerm + User Permissions on DA Attendance Punch (no require_roles in handlers).\n\n## Notes\n- user stamped from session; da_id via fetch_from User.da_registry_id\n- region / zone / woreda / kebele all optional Links\n- lat / lng optional → gps_lat / gps_lng (punch time is capture time)\n- GET today always returns {next_action, id, punched_date, punched_time}\n- GET list returns one row per user per punched_date (punch-derived only); date filter is from_date+to_date only\n- POST returns message only (no punch payload)\n- No punch-sequence enforcement on POST",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -29,6 +29,10 @@
     { "key": "lng", "value": "38.7469" },
     { "key": "punched_date", "value": "" },
     { "key": "punched_time", "value": "" },
+    { "key": "from_date", "value": "" },
+    { "key": "to_date", "value": "" },
+    { "key": "da_id", "value": "" },
+    { "key": "user", "value": "" },
     { "key": "punch_id", "value": "" },
     { "key": "next_action", "value": "" }
   ],
@@ -47,7 +51,9 @@
                   "pm.test(\"SSO Login returns 200\", function () { pm.response.to.have.status(200); });",
                   "const data = (pm.response.json() || {}).data || {};",
                   "if (data.access_token) { pm.collectionVariables.set(\"access_token\", data.access_token); pm.environment.set(\"access_token\", data.access_token); }",
-                  "if (data.csrf_token) { pm.collectionVariables.set(\"csrf_token\", data.csrf_token); pm.environment.set(\"csrf_token\", data.csrf_token); }"
+                  "if (data.csrf_token) { pm.collectionVariables.set(\"csrf_token\", data.csrf_token); pm.environment.set(\"csrf_token\", data.csrf_token); }",
+                  "const sessionUser = (data.user || {}).user;",
+                  "if (sessionUser) { pm.collectionVariables.set(\"user\", sessionUser); pm.environment.set(\"user\", sessionUser); }"
                 ]
               }
             }
@@ -65,7 +71,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": "{{base_url}}/api/v1/da-services/sso/login",
-            "description": "Stores access_token for subsequent punch calls."
+            "description": "Stores access_token and session user (required for list) for subsequent calls."
           }
         }
       ]
@@ -104,7 +110,136 @@
       ]
     },
     {
-      "name": "2. Create punch",
+      "name": "2. List attendance",
+      "item": [
+        {
+          "name": "GET list today",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = new Date();",
+                  "const pad = (n) => String(n).padStart(2, \"0\");",
+                  "const date = d.getFullYear() + \"-\" + pad(d.getMonth() + 1) + \"-\" + pad(d.getDate());",
+                  "pm.collectionVariables.set(\"from_date\", date);",
+                  "pm.collectionVariables.set(\"to_date\", date);",
+                  "pm.environment.set(\"from_date\", date);",
+                  "pm.environment.set(\"to_date\", date);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"GET list returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"data is array\", function () { pm.expect(body.data).to.be.an(\"array\"); });",
+                  "pm.test(\"meta has total limit start\", function () {",
+                  "  pm.expect(body.meta).to.include.keys([\"total\", \"limit\", \"start\"]);",
+                  "});",
+                  "if ((body.data || []).length) {",
+                  "  const row = body.data[0];",
+                  "  pm.test(\"row has user_name and hours fields\", function () {",
+                  "    pm.expect(row).to.include.keys([\"user\", \"user_name\", \"kebele\", \"status\", \"check_in\", \"check_out\", \"hours_logged\", \"punched_date\"]);",
+                  "    pm.expect(row).to.not.have.property(\"kebele_name\");",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from_date={{from_date}}&to_date={{to_date}}&limit=50&start=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "attendance-punches"],
+              "query": [
+                { "key": "user", "value": "{{user}}" },
+                { "key": "from_date", "value": "{{from_date}}" },
+                { "key": "to_date", "value": "{{to_date}}" },
+                { "key": "limit", "value": "50" },
+                { "key": "start", "value": "0" },
+                { "key": "da_id", "value": "", "disabled": true },
+                { "key": "region", "value": "{{region}}", "disabled": true },
+                { "key": "zone", "value": "{{zone}}", "disabled": true },
+                { "key": "woreda", "value": "{{woreda}}", "disabled": true },
+                { "key": "kebele", "value": "{{kebele}}", "disabled": true }
+              ]
+            },
+            "description": "Daily attendance for required user. Date filter: from_date+to_date only (same day for a single day). Optional: da_id, region, zone, woreda, kebele, limit, start."
+          }
+        },
+        {
+          "name": "GET list by kebele",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"GET list by kebele returns 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from_date={{from_date}}&to_date={{to_date}}&kebele={{kebele}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "attendance-punches"],
+              "query": [
+                { "key": "user", "value": "{{user}}" },
+                { "key": "from_date", "value": "{{from_date}}" },
+                { "key": "to_date", "value": "{{to_date}}" },
+                { "key": "kebele", "value": "{{kebele}}" }
+              ]
+            },
+            "description": "Required user + from_date/to_date + kebele get_list filter."
+          }
+        },
+        {
+          "name": "GET list date range",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"GET list date range returns 200\", function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json() || {};",
+                  "pm.test(\"data is array\", function () { pm.expect(body.data).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/da-services/attendance-punches?user={{user}}&from_date={{from_date}}&to_date={{to_date}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "da-services", "attendance-punches"],
+              "query": [
+                { "key": "user", "value": "{{user}}" },
+                { "key": "from_date", "value": "{{from_date}}" },
+                { "key": "to_date", "value": "{{to_date}}" }
+              ]
+            },
+            "description": "Required user + from_date/to_date range (both required)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Create punch",
       "item": [
         {
           "name": "POST Punch In",

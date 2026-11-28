@@ -8,6 +8,7 @@ _SCHEMA_DOCTYPES = (
 	("da_profile_change_request", "DA Profile Change Request"),
 	("da_integration_event", "DA Integration Event"),
 	("da_survey_parameter", "DA Survey Parameter"),
+	("da_task", "DA Task"),
 )
 
 
@@ -213,6 +214,18 @@ def stamp_visit_geo(name: str, geo: dict) -> None:
 	)
 
 
+def stamp_task_geo(name: str, geo: dict) -> None:
+	"""Overwrite task posting codes with live master links (no registry geo fill)."""
+	values = {
+		"region": geo["region"],
+		"zone": geo["zone"],
+		"woreda": geo["woreda"],
+	}
+	if "kebele" in geo and geo["kebele"] is not None:
+		values["kebele"] = geo["kebele"]
+	frappe.db.set_value("DA Task", name, values, update_modified=False)
+
+
 def ensure_kebele_assignment(da_id: str, kebele: str, *, mode: str = "Automatic") -> None:
 	"""Replace this DA's assignments with one Effective posting for `kebele`.
 
@@ -311,6 +324,28 @@ def cleanup_test_rows(
 
 
 from contextlib import contextmanager
+
+
+@contextmanager
+def da_registry_settings(domain: str | None, register_id: str | None, tab_id: str | None = "da_details_tab"):
+	"""Name the DA Registry in DA Services Settings for the block (the only place the HTTP
+	client reads its host, register id and tab id from; all three are required); what was
+	there comes back after."""
+	fields = ("da_registry_domain", "da_registry_form_register_id", "da_registry_tab_id")
+
+	def save(values):
+		doc = frappe.get_single("DA Services Settings")
+		for field, value in zip(fields, values, strict=True):
+			doc.set(field, value)
+		doc.save(ignore_permissions=True)
+
+	settings = frappe.get_single("DA Services Settings")
+	before = tuple(settings.get(field) for field in fields)
+	save((domain, register_id, tab_id))
+	try:
+		yield
+	finally:
+		save(before)
 
 
 @contextmanager

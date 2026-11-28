@@ -16,6 +16,7 @@ import re
 from datetime import timedelta
 
 import frappe
+from frappe import _
 from frappe.utils import get_datetime, getdate, today
 
 from da_services.da_services.doctype.da_administrative_area.da_administrative_area import ancestors_of
@@ -64,37 +65,6 @@ EXPORT_BASE_COLUMNS = (
 	"Zone",
 	"Woreda",
 	"Kebele",
-)
-
-# Consent, Farmer ID and Kebele open every survey.
-STANDARD_PARAMS = (
-	{
-		"parameter_id": "p1",
-		"sort_order": 1,
-		"prompt": (
-			"The farmer consents to take part in this survey and understands responses "
-			"are used to improve extension services."
-		),
-		"response_type": "consent",
-		"required": 1,
-		"helper": "A declined consent ends the response.",
-	},
-	{
-		"parameter_id": "p2",
-		"sort_order": 2,
-		"prompt": "Farmer ID",
-		"response_type": "auto",
-		"required": 1,
-		"prefill": "Farmer Registry",
-	},
-	{
-		"parameter_id": "p3",
-		"sort_order": 3,
-		"prompt": "Kebele",
-		"response_type": "auto",
-		"required": 1,
-		"prefill": "DA assignment",
-	},
 )
 
 
@@ -186,7 +156,8 @@ def _response_counts(survey_id: str, collector_da_id: str | None = None) -> dict
 
 def serialize_survey(doc, *, include_parameters: bool = True, collector_da_id: str | None = None) -> dict:
 	counts = _response_counts(doc.name, collector_da_id)
-	assigned = _assigned_da_ids(doc.name)
+	assigned_users = _assigned_users(doc.name)
+	assigned_da_ids = _assigned_da_ids(doc.name)
 	out = {
 		"id": doc.name,
 		"name": doc.title,
@@ -209,10 +180,11 @@ def serialize_survey(doc, *, include_parameters: bool = True, collector_da_id: s
 		"zone": doc.zone,
 		"woreda": doc.woreda,
 		"created_by_user": doc.created_by_user,
-		"assignmentMode": "Selected" if assigned else "Woreda",
+		"assignmentMode": "Selected" if assigned_users else "Woreda",
 	}
 	if collector_da_id is None:
-		out["assignedDaIds"] = assigned
+		out["assignedUsers"] = assigned_users
+		out["assignedDaIds"] = assigned_da_ids
 	if include_parameters:
 		out["parameters"] = [serialize_parameter(r) for r in doc.parameters]
 	return out
@@ -272,6 +244,15 @@ def _assignment_rule(survey_id: str) -> str:
 	return f"{ASSIGNMENT_RULE_PREFIX}{survey_id}"
 
 
+def _assigned_users(survey_id: str) -> list[str]:
+	rows = frappe.get_all(
+		"DA Task",
+		filters={"generated_by_rule": _assignment_rule(survey_id), "status": ("!=", "Cancelled")},
+		pluck="user",
+	)
+	return sorted({u for u in rows if u})
+
+
 def _assigned_da_ids(survey_id: str) -> list[str]:
 	rows = frappe.get_all(
 		"DA Task",
@@ -281,27 +262,31 @@ def _assigned_da_ids(survey_id: str) -> list[str]:
 	return sorted({d for d in rows if d})
 
 
-def _sync_assignments(doc, da_ids) -> None:
-	"""Open a DA Task for each newly assigned DA and cancel the ones taken off."""
-	wanted = {str(d).strip() for d in (da_ids or []) if str(d).strip()}
+def _sync_assignments(doc, users) -> None:
+	"""Open a DA Task for each newly assigned User and cancel the ones taken off.
+
+	``users`` must come from the FE (User Link emails). ``da_id`` is optional on the
+	marker Task and is filled by DocType ``fetch_from: user.da_registry_id`` when set.
+	"""
+	wanted = {str(u).strip() for u in (users or []) if str(u).strip()}
 	rule = _assignment_rule(doc.name)
 	for task in frappe.get_all(
 		"DA Task",
 		filters={"generated_by_rule": rule, "status": ("!=", "Cancelled")},
-		fields=["name", "da_id"],
+		fields=["name", "user"],
 	):
-		if task.da_id in wanted:
-			wanted.discard(task.da_id)
+		if task.user in wanted:
+			wanted.discard(task.user)
 			continue
 		marker = frappe.get_doc("DA Task", task.name)
 		marker.flags.ignore_permissions = True
 		marker.cancel_task("Survey assignment removed.")
-	for da_id in sorted(wanted):
+	for user in sorted(wanted):
 		# A system marker that follows the template write the caller was allowed to make.
 		frappe.get_doc(
 			{
 				"doctype": "DA Task",
-				"da_id": da_id,
+				"user": user,
 				"task_type": "Survey due",
 				"title": f"Complete survey: {doc.title}",
 				"description": f"Survey {doc.name} is assigned to you.",
@@ -317,9 +302,13 @@ def _sync_assignments(doc, da_ids) -> None:
 
 
 def _parameter_rows(questions) -> list[dict]:
-	"""The standard p1-p3 rows, then one row per question the Supervisor wrote."""
-	rows = [dict(p) for p in STANDARD_PARAMS]
-	for i, q in enumerate(questions or [], start=len(STANDARD_PARAMS) + 1):
+	"""One row per question the Supervisor wrote, p1 first.
+
+	Consent, Farmer ID and Kebele are not questions: the response holds them (consent,
+	farmer_id, kebele), taken by the capture form before the questions.
+	"""
+	rows = []
+	for i, q in enumerate(questions or [], start=1):
 		qtype = (q.get("type") or "").strip() or None
 		row = {
 			"parameter_id": f"p{i}",
@@ -351,7 +340,7 @@ def create_template(
 	questions=None,
 	woreda=None,
 	assignmentMode=None,
-	assignedDaIds=None,
+	assignedUsers=None,
 	client_op_id=None,
 ) -> str:
 	"""Insert one template (create = publish). Returns its id."""
@@ -378,9 +367,43 @@ def create_template(
 			"parameters": params,
 		}
 	).insert()
+	users = None
 	if assignmentMode == "Selected":
-		_sync_assignments(doc, assignedDaIds)
+		users = [str(u).strip() for u in (assignedUsers or []) if str(u).strip()]
+		if not users:
+			frappe.throw(
+				_("assignedUsers is required when assignmentMode is Selected."), frappe.ValidationError
+			)
+		_sync_assignments(doc, users)
+	_notify_published(doc, users)
 	return doc.name
+
+
+def _notify_published(doc, users: list[str] | None) -> int:
+	"""Tell the DAs a new survey is open: the selected DAs, else every DA of the Woreda.
+
+	Returns how many were notified.
+	"""
+	from da_services.services import notifications
+
+	recipients = sorted(set(users)) if users else notifications._broadcast_recipients("woreda", doc.woreda)
+	for user in recipients:
+		notifications.notify(
+			user,
+			kind="Task",
+			title=f"New survey: {doc.title}",
+			body=(
+				f"{doc.survey_type} survey, open {format_survey_date(doc.window_open)} to "
+				f"{format_survey_date(doc.window_close)}. Capture responses from your farmers."
+			),
+			href=f"/surveys/{doc.name}",
+			event="survey.published",
+			reference_doctype=TEMPLATE_DOCTYPE,
+			reference_name=doc.name,
+			da_id=frappe.db.get_value("User", user, "da_registry_id"),
+			source="Surveys",
+		)
+	return len(recipients)
 
 
 def patch_template(survey_id: str, body: dict) -> str:
@@ -418,8 +441,13 @@ def patch_template(survey_id: str, body: dict) -> str:
 
 	if body.get("assignmentMode") == "Woreda":
 		_sync_assignments(doc, [])
-	elif body.get("assignedDaIds") is not None:
-		_sync_assignments(doc, body["assignedDaIds"])
+	elif body.get("assignedUsers") is not None:
+		users = [str(u).strip() for u in (body.get("assignedUsers") or []) if str(u).strip()]
+		if body.get("assignmentMode") == "Selected" and not users:
+			frappe.throw(
+				_("assignedUsers is required when assignmentMode is Selected."), frappe.ValidationError
+			)
+		_sync_assignments(doc, users)
 	return target.name
 
 
@@ -466,6 +494,8 @@ def list_surveys(
 	names = frappe.get_list(TEMPLATE_DOCTYPE, filters=filters, pluck="name", order_by="modified desc")
 	rows = []
 	for n in names:
+		if not _assigned_to_caller(n):
+			continue
 		item = serialize_survey(frappe.get_doc(TEMPLATE_DOCTYPE, n), include_parameters=False)
 		if _matches(item, status=status, language=language, q=q):
 			rows.append(item)
@@ -475,7 +505,29 @@ def list_surveys(
 def get_survey(survey_id: str) -> dict:
 	doc = frappe.get_doc(TEMPLATE_DOCTYPE, survey_id)
 	doc.check_permission("read")
+	_require_assigned_to_caller(survey_id)
 	return serialize_survey(doc)
+
+
+# Roles that see every survey of their area, Selected or not.
+_MANAGER_ROLES = frozenset(
+	{C.ROLE_SUPERVISOR, C.ROLE_EXECUTIVE, C.ROLE_ADMIN, C.ROLE_COMMS, "System Manager", "Administrator"}
+)
+
+
+def _assigned_to_caller(survey_id: str, user: str | None = None) -> bool:
+	"""A Selected survey is for its assigned DAs only; a Woreda-wide one for every DA of the
+	Woreda. Supervisors and above see every survey their area allows."""
+	user = user or frappe.session.user
+	if _MANAGER_ROLES & set(frappe.get_roles(user)):
+		return True
+	assigned = _assigned_users(survey_id)
+	return not assigned or user in assigned
+
+
+def _require_assigned_to_caller(survey_id: str) -> None:
+	if not _assigned_to_caller(survey_id):
+		frappe.throw(_("This survey is assigned to other DAs."), frappe.PermissionError)
 
 
 # -- responses -------------------------------------------------------------------------------
@@ -517,8 +569,11 @@ def create_response(
 	da_id=None,
 	kebele=None,
 ) -> None:
-	"""Insert one response for the survey, collected by ``da_id``."""
+	"""Insert one response for the survey, collected by ``da_id``: when not sent, the caller's
+	own DA-ID (User.da_registry_id), so a DA does not have to name themselves."""
 	survey = frappe.get_doc(TEMPLATE_DOCTYPE, survey_id)
+	_require_assigned_to_caller(survey_id)
+	da_id = (da_id or "").strip() or frappe.db.get_value("User", frappe.session.user, "da_registry_id")
 	frappe.get_doc(
 		{
 			"doctype": RESPONSE_DOCTYPE,

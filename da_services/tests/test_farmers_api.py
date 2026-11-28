@@ -214,6 +214,7 @@ class TestFarmersAPI(IntegrationTestCase):
 		doc = frappe.get_doc(
 			{
 				"doctype": "DA Task",
+				"user": ensure_da_user(da_id),
 				"da_id": da_id,
 				"farmer_id": farmer_id,
 				"title": "Test task",

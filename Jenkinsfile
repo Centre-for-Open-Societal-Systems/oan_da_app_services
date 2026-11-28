@@ -57,13 +57,16 @@ pipeline {
                     env.GIT_SHA = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
                     env.IMAGE_TAG_BUILD = "${env.TARGET_ENV}-${env.BUILD_NUMBER}-${env.GIT_SHA.substring(0, 7)}"
                     env.FULL_IMAGE      = "${env.IMAGE_REPO}:${env.IMAGE_TAG_BUILD}"
-                    // develop only: the oan_dev image, eoan/oan-da-services/da-services:<__version__>-develop.<build>,
-                    // which is also the chart version (ci/package_chart.py version)
-                    if (env.BRANCH_NAME == 'develop') {
+                    // The Helm chart version, also the image tag in eoan/oan-da-services/da-services (ci/package_chart.py version):
+                    //   develop <__version__>-develop.<build>, pushed by "Push image" (HELM_IMAGE);
+                    //   staging <__version__>-staging.<build>: the develop image of the same source tree, tagged again
+                    //   by "Package chart" (promote). Nothing is rebuilt for the QA cluster.
+                    env.HELM_IMAGE = ''
+                    if (env.BRANCH_NAME == 'develop' || env.BRANCH_NAME == 'staging') {
                         env.IMMUTABLE_TAG = sh(returnStdout: true, script: 'python3 ci/package_chart.py version').trim()
+                    }
+                    if (env.BRANCH_NAME == 'develop') {
                         env.HELM_IMAGE    = "${env.IMAGE_REGISTRY}/${env.ECR_REPO}:${env.IMMUTABLE_TAG}"
-                    } else {
-                        env.HELM_IMAGE    = ''
                     }
                     echo "Branch ${env.BRANCH_NAME} -> deploy=${env.DEPLOY}, namespace ${env.K8S_NAMESPACE}, image ${env.FULL_IMAGE}"
                 }
@@ -249,35 +252,40 @@ ENDSSH
         // Flow (develop): Checkout (version) -> Build image -> Push image -> Package chart -> deploy -> Publish chart.
         // helm/oan-da-services is zipped with this build's image before the oan_dev deploy; the deploy installs
         // that archive, and the same archive is published to oan-helm afterwards.
+        // staging: `promote` instead of `package` (as oan_a2c): the chart develop built from this source tree, its image
+        // tagged <__version__>-staging.<build> in ECR. Fails if develop never built this tree: merge develop into staging.
         stage('Package chart') {
-            when { branch 'develop' }
+            when { anyOf { branch 'develop'; branch 'staging' } }
             steps {
                 script {
                     env.IMAGE_TAG = env.IMMUTABLE_TAG
                     env.SOURCE_COMMIT = env.GIT_SHA
                     env.COMMIT_SUBJECT = sh(returnStdout: true, script: 'git log -1 --pretty=%s').trim()
                     env.IMAGE_REPOSITORY = "${env.IMAGE_REGISTRY}/${env.ECR_REPO}"
+                    if (env.BRANCH_NAME == 'staging') {
+                        // The workspace holds the staging branch only; promote needs the develop commits the chart index names.
+                        withCredentials([gitUsernamePassword(credentialsId: scm.userRemoteConfigs[0].credentialsId, gitToolName: 'Default')]) {
+                            sh 'git fetch --quiet --no-tags origin +refs/heads/develop:refs/remotes/origin/develop'
+                        }
+                    }
                 }
-                sh 'python3 ci/package_chart.py package'
+                // promote tags the image in ECR (batch-get-image + put-image) with the same credential as "Push image".
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-ecr-creds'
+                ]]) {
+                    sh "python3 ci/package_chart.py ${env.BRANCH_NAME == 'staging' ? 'promote' : 'package'}"
+                }
                 // The deploy stages run on the VPN deploy agent, which gets the archive from here.
                 stash name: 'built-chart', includes: 'built-chart/**'
             }
         }
 
-        // The routes chart (apisix/k8s) is packaged and published like the app chart, but only for a build that
-        // changed the routes or the gateway values: those are the builds that install it.
+        // The routes chart (apisix/k8s) is packaged on every develop and staging build: "develop → gateway (apisix)"
+        // decides at deploy time whether to install it (gateway files changed, or the release is missing), so its
+        // unstash must always find the archive. Packaging only copies apisix/k8s; publishing stays conditional.
         stage('Package gateway chart') {
-            when {
-                beforeAgent true
-                allOf {
-                    branch 'develop'
-                    anyOf {
-                        changeset 'apisix/**'
-                        changeset 'da_services/api/**'
-                        changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
-                    }
-                }
-            }
+            when { anyOf { branch 'develop'; branch 'staging' } }
             steps {
                 sh 'python3 ci/package_chart.py gateway-package'
                 stash name: 'built-gateway-chart', includes: 'built-gateway-chart/**'
@@ -349,11 +357,43 @@ ENDSSH
             }
         }
 
+        // ---- staging -> Helm release `da-services` on the QA cluster (qa.oanstaging.com), as oan_a2c ----
+        // Runs after the DA node staging deploy above, so a problem here never blocks it. Installs the promoted
+        // archive with helm/environments/staging; the kubeconfig is the jenkins-qa-deployer ServiceAccount
+        // (oan-helm docs/qa-cluster.md), whose oan-cluster-access lists namespace da-app.
+        stage('staging → QA cluster (helm)') {
+            when { beforeAgent true; branch 'staging' }
+            agent { label 'oan-ci-deploy' }   // VPN agent with helm and kubectl; must reach the QA API
+            options { timeout(time: 45, unit: 'MINUTES') }
+            steps {
+                checkout scm
+                unstash 'built-chart'
+                withCredentials([file(credentialsId: 'oan-qa-kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh 'DEPLOY_ENV=staging bash ci/deploy-helm-dev.sh'
+                }
+            }
+        }
+
+        // staging -> APISIX routes on the QA cluster, every staging build (the first installs them).
+        stage('staging → QA cluster (apisix)') {
+            when { beforeAgent true; branch 'staging' }
+            agent { label 'oan-ci-deploy' }
+            options { timeout(time: 15, unit: 'MINUTES') }
+            steps {
+                checkout scm
+                sh 'rm -rf built-gateway-chart'
+                unstash 'built-gateway-chart'
+                withCredentials([file(credentialsId: 'oan-qa-kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh 'GATEWAY_VALUES=helm/environments/staging/oan-da-services-gateway.yaml bash ci/deploy-gateway.sh'
+                }
+            }
+        }
+
         // ---- Helm chart publish ----
-        // Adds the archive built by 'Package chart' to repository/develop/ of oan-helm, only after
-        // the oan_dev deploy and its verify succeeded.
+        // Adds the archive built by 'Package chart' to repository/<branch>/ of oan-helm (develop or staging), only
+        // after the oan_dev / QA deploy succeeded.
         stage('Publish chart') {
-            when { branch 'develop' }
+            when { anyOf { branch 'develop'; branch 'staging' } }
             steps {
                 // UNSTABLE, not failed: the image is already deployed.
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
@@ -367,12 +407,15 @@ ENDSSH
         stage('Publish gateway chart') {
             when {
                 beforeAgent true
-                allOf {
-                    branch 'develop'
-                    anyOf {
-                        changeset 'apisix/**'
-                        changeset 'da_services/api/**'
-                        changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
+                anyOf {
+                    branch 'staging'
+                    allOf {
+                        branch 'develop'
+                        anyOf {
+                            changeset 'apisix/**'
+                            changeset 'da_services/api/**'
+                            changeset 'helm/environments/dev/oan-da-services-gateway.yaml'
+                        }
                     }
                 }
             }

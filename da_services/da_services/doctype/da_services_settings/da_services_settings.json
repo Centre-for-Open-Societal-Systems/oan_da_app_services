@@ -8,9 +8,12 @@
   "master_data_domain",
   "farmer_registry_domain",
   "farmer_registry_form_register_id",
+  "crop_registry_domain",
+  "crop_registry_form_register_id",
   "column_break_cciq",
   "da_registry_domain",
   "da_registry_form_register_id",
+  "da_registry_tab_id",
   "grievance_base_url",
   "sec_master_sync",
   "master_sync_username",
@@ -69,6 +72,12 @@
    "label": "DA Registry Form Register ID"
   },
   {
+   "description": "Tab of the DA register that holds a DA's record with its education records and family members (the tab_id of register-data/get_tab_records), e.g. da_details_tab.",
+   "fieldname": "da_registry_tab_id",
+   "fieldtype": "Data",
+   "label": "DA Registry Tab ID"
+  },
+  {
    "description": "Grievance APISIX gateway host only (e.g. https://grievance-service.development.oanstaging.com). Public paths are /v1/... rewritten to /api/v1/... . Do not use the Desk hostname and do not append /api.",
    "fieldname": "grievance_base_url",
    "fieldtype": "Data",
@@ -108,6 +117,18 @@
    "fieldname": "charts_auth_audience",
    "fieldtype": "Data",
    "label": "Charts Auth Audience"
+  },
+  {
+   "description": "Crop Sown staff host (e.g. staff-crop.development.oanstaging.com). Required.",
+   "fieldname": "crop_registry_domain",
+   "fieldtype": "Data",
+   "label": "Crop Registry Domain"
+  },
+  {
+   "description": "CropSown register UUID (register_id). Required; no get_all_registers discovery.",
+   "fieldname": "crop_registry_form_register_id",
+   "fieldtype": "Data",
+   "label": "Crop Registry Form Register ID"
   }
  ],
  "grid_page_length": 50,

@@ -15,9 +15,12 @@ Select the backend per site in ``site_config.json`` (full example in
 
     "da_registry_backend": "mock" | "http",
     "da_registry_auth": "user" | "service",
-    "da_registry_base_url": "https://staff-da-registry...",
     "da_registry_timeout_seconds": 10,
     "da_registry_keycloak": {"token_url": "...", "client_id": "...", "client_secret": "..."}
+
+The registry's host, the DA register id and the tab id are not in site_config.json: they
+come from DA Services Settings ("DA Registry Domain", "DA Registry Form Register ID", "DA
+Registry Tab ID", e.g. ``da_details_tab``). All three are required.
 """
 
 from __future__ import annotations
@@ -47,6 +50,18 @@ class DANotFound(DARegistryError):
 
 class DARegistryUnavailable(DARegistryError):
 	"""Transient: timeout, connection error, 5xx. Callers may retry."""
+
+
+class DARegistryNotConfigured(DARegistryError):
+	"""DA Services Settings does not name the registry yet.
+
+	``missing`` holds the labels of the settings that are empty ("DA Registry Domain",
+	"DA Registry Form Register ID", "DA Registry Tab ID").
+	"""
+
+	def __init__(self, missing: list[str]):
+		super().__init__(f"DA Services Settings: set {', '.join(missing)}")
+		self.missing = list(missing)
 
 
 class DARegistryContractPending(DARegistryError):
@@ -80,6 +95,14 @@ class DARegistryClient(ABC):
 	@abstractmethod
 	def get_da(self, da_id: str) -> DAReference:
 		"""Fetch the DA reference. Raises DANotFound / DARegistryUnavailable."""
+
+	@abstractmethod
+	def get_da_by_record_id(self, record_id: str) -> DAReference:
+		"""The DA whose registry record has this id (the registry's own id of the record,
+		which IAM gives a signed-in DA as ``da_id`` and User.da_registry_id holds).
+
+		Raises DANotFound / DARegistryUnavailable.
+		"""
 
 	def validate_da_id(self, da_id: str) -> bool:
 		try:

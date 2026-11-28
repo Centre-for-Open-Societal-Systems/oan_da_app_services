@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from da_services.services import constants as C
 
 from .client import DANotFound, DARegistryClient
-from .mapper import to_da_reference
+from .mapper import mock_record_id, to_da_reference
 from .schemas import DAReference, IntegrationResult, LifecycleOutcome, ProfileUpdate, SectionChange
 
 FIXTURE_DAS: dict[str, dict] = {
@@ -234,6 +234,12 @@ class MockDARegistryClient(DARegistryClient):
 		if not payload:
 			raise DANotFound(da_id)
 		return to_da_reference(payload)
+
+	def get_da_by_record_id(self, record_id: str) -> DAReference:
+		for da_id, payload in self._records.items():
+			if (payload.get("record_id") or mock_record_id(da_id)) == record_id:
+				return to_da_reference(payload)
+		raise DANotFound(record_id)
 
 	def list_das(self, *, woreda: str | None = None, region: str | None = None) -> list[DAReference]:
 		rows = []

@@ -1,8 +1,8 @@
 """HTTP client for the verified Crop Sown Staff read calls.
 
-Staff calls are POST with the OpenG2P envelope. Auth, CSRF, and the token
-cache come from the shared staff helper. Register discovery, search, and
-field mapping stay in this module.
+Staff calls are POST with the OpenG2P envelope. Auth is the caller's SSO
+bearer and CSRF (or a test token provider). ``register_id`` comes from
+DA Services Settings via the factory; search and field mapping stay here.
 """
 
 from __future__ import annotations
@@ -12,13 +12,11 @@ from datetime import UTC, datetime
 import frappe
 import requests
 
-from da_services.integrations.staff_api.auth import apply_bearer_and_csrf, auth_and_csrf_headers
 from da_services.integrations.staff_api.transport import http_failure, staff_envelope
 
 from .client import (
 	CropRegistryClient,
 	CropRegistryClientError,
-	CropRegistryError,
 	CropRegistryServerError,
 )
 from .intake import describe_form, form_selector, section_index, submit_with_metadata
@@ -26,8 +24,9 @@ from .mapper import submission_to_crop
 from .schemas import CropSubmission
 
 _MAX_SEARCH_PAGES = 20
-_IAM_KEYS = ("iam_base_url", "kc_realm_url", "username", "password")
-_CC_KEYS = ("token_url", "client_id", "client_secret")
+_DEFAULT_SENDER_APP = "OAN_REGISTRY_API_TEST"
+_DEFAULT_FORM_NAME_CONTAINS = "Planning"
+_DEFAULT_TIMEOUT = 30
 
 
 def _row_matches_farmer(row: dict, farmer_id: str) -> bool:
@@ -51,99 +50,57 @@ def _page_count(pagination: dict) -> int:
 
 
 def _log(title: str, message: str) -> None:
-	try:
-		import frappe
-	except ImportError:
-		return
 	frappe.log_error(title=title, message=message)
 
 
 class HTTPCropRegistryClient(CropRegistryClient):
-	"""Live read client. Discovery results are cached on the instance."""
+	"""Live read client. Intake-form metadata is cached on the instance."""
 
 	def __init__(
 		self,
 		*,
 		staff_url: str,
-		keycloak: dict | None = None,
-		api_key: str | None = None,
-		register_mnemonic: str = "CropSown",
-		register_id: str | None = None,
-		form_name_contains: str = "Planning",
-		sender_app: str = "OAN_REGISTRY_API_TEST",
-		registry_client_id: str = "cropsown-registry-staff-portal",
-		timeout: int = 30,
+		register_id: str,
+		form_name_contains: str = _DEFAULT_FORM_NAME_CONTAINS,
+		sender_app: str = _DEFAULT_SENDER_APP,
+		timeout: int = _DEFAULT_TIMEOUT,
 		tokens=None,
 		master_data_url: str | None = None,
 	):
 		self.staff_url = staff_url.rstrip("/")
-		self.keycloak = keycloak or {}
-		self.api_key = api_key
-		self.register_mnemonic = register_mnemonic
 		self.form_name_contains = form_name_contains
 		self.sender_app = sender_app
-		self.registry_client_id = registry_client_id
 		self.timeout = timeout
 		self.headers = {"Content-Type": "application/json", "Accept": "application/json"}
-		if api_key:
-			self.headers["Authorization"] = f"Bearer {api_key}"
 		self._tokens = tokens
 		self.master_data_url = master_data_url.rstrip("/") if master_data_url else None
-		self._register_id: str | None = (register_id or "").strip() or None
+		self._register_id = register_id.strip()
 		self._form_id: str | None = None
 		self._form: dict | None = None
 		self._forms: dict[str, dict] = {}
 		self._intake_form_rows: list[dict] | None = None
 		self._fields: dict[str, list[dict]] = {}
-		self._validate_config()
-
-	def _has_staff_login(self) -> bool:
-		return all(self.keycloak.get(key) for key in _IAM_KEYS)
-
-	def _validate_config(self) -> None:
-		problems = []
-		if not self.staff_url.startswith(("http://", "https://")):
-			problems.append("crop_registry_staff_url must be an http(s) URL")
-		cc_set = [key for key in _CC_KEYS if self.keycloak.get(key)]
-		if cc_set and len(cc_set) != len(_CC_KEYS) and not self._has_staff_login():
-			problems.append(
-				"crop_registry_keycloak needs token_url, client_id and client_secret "
-				f"(found only: {', '.join(cc_set)})"
-			)
-		if not self._has_staff_login() and not cc_set and not self.api_key and self._tokens is None:
-			problems.append(
-				"set the staff username and password on crop_registry_keycloak "
-				"(or farmer_registry_keycloak), or a client-credentials block, or crop_registry_api_key"
-			)
-		if not self.register_mnemonic:
-			problems.append("crop_registry_register_mnemonic is required")
-		if problems:
-			raise CropRegistryError("Crop Sown HTTP client misconfigured: " + "; ".join(problems))
 
 	def _auth_and_csrf_headers(self) -> tuple[dict[str, str], dict[str, str]]:
 		"""Headers + cookies for a staff POST.
 
-		If a test token provider is set, use it (bearer + matching CSRF pair).
-		Otherwise forward the Authorization and X-CSRF-Token headers from the
-		current request. Raises CropRegistryClientError if there is no active
-		request or either header is missing.
+		CSRF always comes from the FE request ``X-CSRF-Token`` (staff rejects a
+		self-generated value). A test token provider may override the bearer;
+		otherwise Authorization is also forwarded from the request.
 		"""
 		headers = dict(self.headers)
-
-		if self._tokens is not None:
-			return apply_bearer_and_csrf(headers, self._tokens.get_token())
-
-		token = frappe.get_request_header("Authorization")
 		csrf = frappe.get_request_header("X-CSRF-Token")
-		if not token or not csrf:
+		if self._tokens is not None:
+			auth = f"Bearer {self._tokens.get_token()}"
+		else:
+			auth = frappe.get_request_header("Authorization")
+		if not auth or not csrf:
 			raise CropRegistryClientError("Missing Authorization or X-CSRF-Token header", status_code=401)
 
 		headers.setdefault("Content-Type", "application/json")
 		headers.setdefault("Accept", "application/json")
-		headers["Authorization"] = token
+		headers["Authorization"] = auth
 		headers["X-CSRF-Token"] = csrf
-
-		# Confirm the cookie name the Staff API actually validates
 		return headers, {"X-CSRF-Token": csrf}
 
 	def _envelope(
@@ -246,36 +203,20 @@ class HTTPCropRegistryClient(CropRegistryClient):
 			status_code=code,
 		)
 
-	def _discover_register_id(self) -> str:
-		if self._register_id:
-			return self._register_id
-
-		payload = self._post("/register-metadata/get_all_registers", {}, action="discover crop register")
-		matches = [
-			row
-			for row in (payload or [])
-			if isinstance(row, dict) and row.get("register_mnemonic") == self.register_mnemonic
-		]
-		if len(matches) != 1 or not matches[0].get("register_id"):
-			raise CropRegistryClientError("Selected Crop Sown register is missing or ambiguous")
-		self._register_id = str(matches[0]["register_id"])
-		return self._register_id
-
 	def _intake_forms(self) -> list[dict]:
 		"""Every intake form on the CropSown register. One staff call per client."""
 		if self._intake_form_rows is not None:
 			return self._intake_form_rows
-		register_id = self._discover_register_id()
 		forms_payload = self._post(
 			"/intake-form-metadata/get_all_intake_forms",
-			{"register_id": register_id},
+			{"register_id": self._register_id},
 			action="discover crop intake form",
 		)
 		rows = []
 		for form in forms_payload or []:
 			if (
 				not isinstance(form, dict)
-				or form.get("register_id") != register_id
+				or form.get("register_id") != self._register_id
 				or not form.get("form_id")
 			):
 				continue
@@ -347,7 +288,6 @@ class HTTPCropRegistryClient(CropRegistryClient):
 		"""
 		if not farmer_id:
 			raise CropRegistryClientError("farmer_id is required")
-		register_id = self._discover_register_id()
 		submission_text = (reg_id or "").strip() or farmer_id
 		owned = {farmer_id, submission_text}
 		# Known staff search paths only; unknown source fails here.
@@ -368,7 +308,7 @@ class HTTPCropRegistryClient(CropRegistryClient):
 		found: list[dict] = []
 		seen: set[str] = set()
 		for row in self._search_pages(
-			path, {"register_id": register_id}, action=action, search_text=search_text
+			path, {"register_id": self._register_id}, action=action, search_text=search_text
 		):
 			if not any(_row_matches_farmer(row, candidate) for candidate in owned):
 				continue
@@ -388,11 +328,10 @@ class HTTPCropRegistryClient(CropRegistryClient):
 			raise CropRegistryClientError("internal_record_id is required")
 		if not wanted_tab:
 			raise CropRegistryClientError("tab_id is required")
-		register_id = self._discover_register_id()
 		records = self._post(
 			"/register-data/get_tab_records",
 			{
-				"subject_register_id": register_id,
+				"subject_register_id": self._register_id,
 				"subject_record_id": record_id,
 				"tab_id": wanted_tab,
 			},
@@ -402,7 +341,7 @@ class HTTPCropRegistryClient(CropRegistryClient):
 			raise CropRegistryClientError("Crop Sown register tab records were not a list")
 		return {
 			"internal_record_id": record_id,
-			"register_id": register_id,
+			"register_id": self._register_id,
 			"tab_id": wanted_tab,
 			"tabs": [{"tab_id": wanted_tab, "records": records}],
 		}
@@ -440,7 +379,7 @@ class HTTPCropRegistryClient(CropRegistryClient):
 			raise CropRegistryClientError("section_payload must be a non-empty list of records")
 		if any(not isinstance(row, dict) for row in section_payload):
 			raise CropRegistryClientError("section_payload must be a list of records")
-		resolved_register = register_id or self._discover_register_id()
+		resolved_register = register_id or self._register_id
 		resolved_form = form_id or self._form_id
 		if not resolved_form:
 			self._rendered_form()

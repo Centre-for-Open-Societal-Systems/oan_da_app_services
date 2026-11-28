@@ -1,11 +1,15 @@
 """v1: DA Attendance Punch (punch-in / punch-out).
 
 GET  /api/v1/da-services/attendance-punches/today
+GET  /api/v1/da-services/attendance-punches
 POST /api/v1/da-services/attendance-punches
 
-Thin: parse body, call service, wrap envelope. Access and field rules come from
+Thin: parse query/body, call service, wrap envelope. Access and field rules come from
 DA Attendance Punch Role DocPerm + meta (``get_list`` / ``insert``).
 No ``require_roles`` / ScopeContext.
+
+Register POST before GET on the shared path so the router keeps both methods
+(same order as visits / gatherings).
 """
 
 from __future__ import annotations
@@ -59,3 +63,40 @@ def create(**kwargs):
 		lng=body.get("lng"),
 	)
 	return success_response(message="Attendance punch recorded")
+
+
+@route("/attendance-punches", methods=("GET",), summary="Attendance the caller may see")
+@frappe.whitelist()
+@handle_api_errors
+def list_attendance(**kwargs):
+	"""Daily attendance for one user (required). Optional from_date/to_date + geo filters via get_list."""
+	q = {
+		n: (frappe.form_dict or {}).get(n, kwargs.get(n))
+		for n in (
+			"from_date",
+			"to_date",
+			"da_id",
+			"user",
+			"region",
+			"zone",
+			"woreda",
+			"kebele",
+			"limit",
+			"start",
+		)
+	}
+	limit = int(q.get("limit") or 50)
+	start = int(q.get("start") or 0)
+	rows, total = svc.list_attendance(
+		user=(q.get("user") or "").strip(),
+		from_date=q.get("from_date"),
+		to_date=q.get("to_date"),
+		da_id=q.get("da_id"),
+		region=q.get("region"),
+		zone=q.get("zone"),
+		woreda=q.get("woreda"),
+		kebele=q.get("kebele"),
+		limit=limit,
+		start=start,
+	)
+	return success_response(data=rows, meta={"total": total, "limit": limit, "start": start})

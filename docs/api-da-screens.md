@@ -151,7 +151,7 @@ The API returns the Farmer Registry's own state and the UI maps it.
 |---|---|---|---|
 | Header + stats | `Farmer` | `GET /farmers/{id}` | Farmer Registry via projection |
 | Holdings | `Plot {code, crop, areaHa, soil, zone, lat, lng, tenure}` | `GET /farmers/{id}/plots` | Farmer Registry (Land Registry later) |
-| Crop history | Crop Sown rows (`source` split); GPS in section/tabs when staff returns it | `GET /farmers/{id}/crops?source=submission\|register` (required); `?submission_id=` for one draft; `?internal_record_id=&tab_id=` for one register tab; intake via `GET /crop-sown/intake-form?form=` (required) | Crop Sown staff |
+| Crop history | Crop Sown rows (`source` split); GPS in section/tabs when staff returns it | `GET /farmers/{id}/crops?source=submission\|register` (required; one staff search each); `?submission_id=` for one draft; `?internal_record_id=&tab_id=` for one register tab (one `get_tab_records`); intake via `GET /crop-sown/intake-form?form=` (required). Staff host + CropSown `register_id` from DA Services Settings (`crop_registry_domain`, `crop_registry_form_register_id`) | Crop Sown staff |
 | Visit history | `Visit {title, summary, date, time}` | `GET /visits?farmer_id=&status=Completed` | ours: DA Visit |
 | Advisory (questions and answers) | one row per question `{question, answer, creation, modified}`, newest first | `GET /farmers/{id}/advisory?limit&start` (all of the farmer's Advisory Q&A, no permission filter; saved by `POST /visits`, answered by `POST /visits/{id}/submit`) | ours: DA Visit + `DA Visit Advisory QA` |
 | Documents | `FarmerDocument {name, uploadedAt, size}` + download | `GET /farmers/{id}/documents`, file URL | Farmer Registry (files) |
@@ -416,25 +416,25 @@ Backend contract: [surveys-integration.md](surveys-integration.md). Frontend wir
 
 `SurveyTask {id, name, templateVersion, type (Satisfaction | Service quality | Needs assessment), window {open,
 close}, languages[], targetFarmers, collected, queued, status (Open | Closing soon | Closed), estMinutes,
-assignmentMode (Woreda | Selected), assignedDaIds[], parameters[], answered[] farmer ids}`; `Parameter {id, order,
+assignmentMode (Woreda | Selected), assignedUsers[], assignedDaIds[], parameters[], answered[] farmer ids}`; `Parameter {id, order,
 prompt, type (consent | auto | lookup | rating | single | multi | text), required, options?, helper?, prefill?
 (Farmer Registry | DA assignment), translations? {Amharic?, Afaan Oromoo?}, condition? {parameterId, equals}}`.
 Capture: pick farmer (one response per farmer per survey), consent first (declined ends the response), then submit
 directly → `Synced | Queued`. Only `Queued` and `Synced` are client-settable; `Draft` is rejected with 400.
 `Declined` is forced when consent is declined, and `Rejected` / `Conflict` are server-only. Supervisor/Admin create
 template `TemplateInput {name, type, open, close, languages[], targetFarmers, questions[] {prompt, type, options,
-required, translations?}, assignmentMode?, assignedDaIds?, woreda?, region?, zone?, client_op_id?}`.
+required, translations?}, assignmentMode?, assignedUsers?, woreda?, region?, zone?, client_op_id?}`.
 The Woreda is resolved from `DA Administrative Area`, its Zone/Region are derived, and the target is checked
 against the creator's live RBAC assignment; supplied Region/Zone are consistency checks only. Deployments are
-Woreda-wide by default; `Selected` restricts visibility/capture to the listed DAs in that Woreda.
+Woreda-wide by default; `Selected` opens assignment marker Tasks for the listed User Links (FE supplies `assignedUsers`).
 
 | Element | API | Source |
 |---|---|---|
-| Assigned surveys | `GET /surveys?status&type&language&woreda&q` → tasks with my `collected`, `queued`, `answered[]`; `Selected` surveys hidden from unassigned DAs | ours: DA Survey Template + DA Survey Response (data-model §7) |
-| Capture | `GET /surveys/{id}` (parameters; unassigned DA → 403 in `Selected` mode); `POST /surveys/{id}/responses {farmer_id, da_id?, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}`. `da_id` is required when a Supervisor or Admin collects on behalf of a DA. Farmer must be in the collector DA's assigned Kebele and the survey Woreda: unknown → 404, out of scope → 403, duplicate farmer/template → 409 (across all DAs). Before `window_open` / after close, invalid timestamps, or an invalid client `sync_state` (including `Draft`) → 400. Response stores the farmer's location, not the DA's | ours |
-| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey into the authoritative Woreda. The Woreda → Zone → Region hierarchy is resolved from master data; forged, unknown, inactive or mismatched areas are rejected and the target must be inside the caller's active assignment. `assignmentMode=Selected` requires non-empty `assignedDaIds` from the same Woreda | ours |
+| Assigned surveys | `GET /surveys?status&type&language&woreda&q` → tasks with my `collected`, `queued`, `answered[]`; scope is DocPerm + User Permissions | ours: DA Survey Template + DA Survey Response (data-model §7) |
+| Capture | `GET /surveys/{id}` (parameters); `POST /surveys/{id}/responses {farmer_id, da_id?, consent: granted/declined, answers {param_id: value}, started_at, completed_at, sync_state?, client_op_id}`. `da_id` is required when a Supervisor or Admin collects on behalf of a DA. Farmer must be in the collector DA's assigned Kebele and the survey Woreda: unknown → 404, out of scope → 403, duplicate farmer/template → 409 (across all DAs). Before `window_open` / after close, invalid timestamps, or an invalid client `sync_state` (including `Draft`) → 400. Response stores the farmer's location, not the DA's | ours |
+| Create template | `POST /surveys/templates` (Supervisor/Admin) → publishes an Open survey into the authoritative Woreda. The Woreda → Zone → Region hierarchy is resolved from master data; forged, unknown, inactive or mismatched areas are rejected and the target must be inside the caller's active assignment. `assignmentMode=Selected` requires non-empty `assignedUsers` (Frappe User Links from FE) | ours |
 | Template list / detail | `GET /surveys/templates?status&type&woreda&q`, `GET /surveys/templates/{id}` (Supervisor/Admin/Executive). Search and derived status filters apply before pagination; `meta.total` is the filtered count and `Closed` includes expired Open templates | ours |
-| Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed, assignmentMode/assignedDaIds; question edits with no collected responses update the template and bump its version, while edits after responses exist create a new template version with the submitted questions and zero responses (original template/questions/responses unchanged); invalid questions → 400 | ours |
+| Patch template | `PATCH /surveys/templates/{id}` — window, targetFarmers, languages, status Closed, assignmentMode/assignedUsers; question edits with no collected responses update the template and bump its version, while edits after responses exist create a new template version with the submitted questions and zero responses (original template/questions/responses unchanged); invalid questions → 400 | ours |
 | Responses list | `GET /surveys/{id}/responses?farmer_id&da_id&region&zone&woreda&kebele` — DA own rows; a DA + Supervisor/Executive with a **live** officer assignment uses the officer scope. An expired officer grant falls back to DA rows. Explicit area/DA selections are validated; unauthorized values are 403, not silently ignored | ours |
 | Excel export | `GET /surveys/{id}/responses/export` → complete XLSX download (all base columns + every parameter; Supervisor/Executive/Admin with a live assignment, survey in scope) | ours |
 | Results | `GET /surveys/{id}/results` — counts, rating averages, choice histograms (basic; Part 2 analytics later) | ours |
@@ -477,14 +477,14 @@ Taken), message}`, request `{type, from, to, reason, coverage}` (working days co
 
 | Element | API | Source |
 |---|---|---|
-| Header, stats, learning summary | `GET /profile/me` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
-| Photo, Education & Professional records (certificates), family members | `GET /profile/me` (`photo`, `qualifications[]`, `dependents[]`); a certificate: `GET /profile/documents/{document_id}` | DA Registry (#66) |
+| Header, stats, learning summary | `GET /profile/my_profile` | Registry projection + ours (certificates, kebeles) + Agrilearn mirror |
+| Photo, Education & Professional records (certificates), family members | `GET /profile/my_profile` (`photo`, `qualifications[]` with the `name` and `document_id` of each certificate, `family_members[]`); the link to a certificate, when the DA opens it: `GET /profile/documents/{document_id}` | DA Registry (#66) |
 | Change photo, education records, certificates, family members | `POST /profile/photo`, `/profile/photo/remove`, `/profile/qualifications`, `/profile/certificates`, `/profile/certificates/remove`, `/profile/family-members`; pending and verified certificates: `GET /profile/certificates` → same two approvals → DA Registry | ours: DA Profile Change Request, DA Certificate |
-| Edit profile (Contact incl. home address, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`) | ours: DA Profile Change Request (data-model 4.4) |
+| Edit profile (Contact incl. home address, Qualifications, Identity, Location) | `POST /profile/change-requests {changes, reason}` → Woreda Supervisor, then OAN Administrator → DA Registry (`docs/da-registry-integration.md`). | ours: DA Profile Change Request (data-model 4.4) |
 | Dependents | `GET /profile/dependents`, `POST /profile/dependents {name, relationship, date_of_birth}` → Pending approval | ours: `DA Dependent` (new, §3) |
 | Certificates | `GET /profile/certificates`, `POST /profile/certificates` (multipart) → `pending`; Agrilearn ones arrive by sync | ours: DA Certificate (data-model 6.5) + Agrilearn |
 | Leave | `GET /profile/leave` → balances + history; `POST /profile/leave-requests {leave_type, from_date, to_date, reason, coverage}` | ours: DA Leave Balance, DA Leave Request (6.3) |
-| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only | ours: DA Attendance Punch |
+| Attendance punch | `GET /attendance-punches/today` → `{next_action, id, punched_date, punched_time}`; `POST /attendance-punches {action, punched_date, punched_time, region?, zone?, woreda?, kebele?, lat?, lng?}` message-only; `GET /attendance-punches?user=&from_date=&to_date=` → daily rows with `user_name`, `kebele`, `check_in`/`check_out`, `hours_logged` | ours: DA Attendance Punch |
 
 Supervisor-side approvals for all of the above are the `ApprovalRequest` queue (`/approvals`): `kind
 (Onboarding | Profile change | Assignment | Specialization)`, `data[] {label, value, verified}`, `trail[]`,
@@ -495,7 +495,8 @@ workflow pattern (data-model 6.1).
 ### Attendance punches
 
 DA / Supervisor / Executive punch-in and punch-out. One `DA Attendance Punch` row per action.
-GET returns `next_action` for the button; POST does not enforce alternation (message-only response).
+GET today returns `next_action` for the button; POST does not enforce alternation (message-only response).
+GET list returns one daily row per user with punches (`user_name` + hours; kebele id only); no zero-punch roster.
 Contract: [attendance-punches-integration.md](attendance-punches-integration.md),
 [attendance-punches-frontend.md](attendance-punches-frontend.md).
 Postman: `postman/AttendancePunches/`.
@@ -504,6 +505,7 @@ Postman: `postman/AttendancePunches/`.
 |---|---|---|
 | Today status / button | `GET /attendance-punches/today` → `next_action` | ours |
 | Punch In / Punch Out | `POST /attendance-punches {action, punched_date, punched_time, geo?, lat?, lng?}` | ours |
+| Team / self attendance list | `GET /attendance-punches?user=` (required) + `from_date`+`to_date` (omit both → today) + optional geo/`da_id` → `{user_name, kebele, status, check_in, check_out, hours_logged}` | ours |
 
 ### 2.19 Notifications
 
@@ -543,7 +545,7 @@ two types.
   enum (Low, Medium, High, Critical); status values mirror the Grievance Service list above.
 - **DA Beneficiary Classification**: statuses Enrolled / Pending verification / Removed map to
   `active` + `review_state` + `previously_removed`; no change, document the mapping.
-- **Surveys**: parameter `type` enum, `translations`, `prefill`; one-response-per-farmer is enforced by a unique canonical `duplicate_guard_key` (cross-DA, 409). Declined responses do not reserve the farmer; new drafts are rejected (historical Draft rows remain readable/exported). Template scope comes from the `DA Administrative Area` hierarchy and a live RBAC assignment; client `region` / `zone` values are only consistency checks. Woreda-wide is the default; `Selected` restricts the survey to the listed DA-IDs.
+- **Surveys**: parameter `type` enum, `translations`, `prefill`; one-response-per-farmer is enforced by a unique canonical `duplicate_guard_key` (cross-DA, 409). Declined responses do not reserve the farmer; new drafts are rejected (historical Draft rows remain readable/exported). Template scope comes from the `DA Administrative Area` hierarchy and a live RBAC assignment; client `region` / `zone` values are only consistency checks. Woreda-wide is the default; `Selected` opens marker Tasks for FE-supplied `assignedUsers`.
 - **KPI**: `DA KPI Record` fields per `ManualForm`; tier thresholds as a single settings doc.
 
 ## 4. Consolidated endpoint list (DA screens)
@@ -570,7 +572,7 @@ two types.
 | 18 | `GET /performance/me`, goals, `GET /performance/agents`, tiers, KPI records + import | performance | Nikky |
 | 19 | `GET /surveys`, `GET /surveys/{id}`, `POST /surveys/{id}/responses`, `GET /surveys/{id}/responses`, `GET /surveys/{id}/results`, `POST/GET/PATCH /surveys/templates` | surveys | Nikky |
 | 20 | `POST /sync/operations`, `/attachments`, `GET /sync/status`, `/operations`, `/conflicts/{id}`, `POST /conflicts/{id}/resolve`, `POST /operations/{id}/retry` | sync | Pushkar |
-| 21 | `GET /profile/me`, change-requests, dependents, certificates, leave, leave-requests | profile | Nikky |
+| 21 | `GET /profile/my_profile`, change-requests, dependents, certificates, leave, leave-requests | profile | Nikky |
 | 22 | `GET /approvals`, `POST /approvals/{id}/decide` | supervisor approvals | Nikky |
 | 23 | `POST /files` | uploads | Frappe built-in |
 

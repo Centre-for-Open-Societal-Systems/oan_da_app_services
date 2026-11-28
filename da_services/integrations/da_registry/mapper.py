@@ -262,6 +262,11 @@ def registry_record_to_da_reference(record: dict, labels: dict[str, dict] | None
 		photo_document_id=record.get("record_image_document_id") or None,
 		qualifications=qualification_rows(record.get("_qualifications"), labels),
 		dependents=dependent_rows(record.get("_dependents"), labels),
+		record_id=record.get("internal_record_id") or None,
+		record_status=record.get("record_status") or None,
+		last_approved_at=record.get("last_approved_at") or None,
+		last_approved_by=record.get("last_approved_by") or None,
+		source=record.get("source") or None,
 		source_version=record.get("last_approved_at"),
 		fetched_at=datetime.now(UTC),
 	)
@@ -289,6 +294,11 @@ def profile_changes_to_change_request(changes: dict) -> tuple[str, dict]:
 			value = int(value)
 		fields[field] = value
 	return section, fields
+
+
+def mock_record_id(da_id: str) -> str:
+	"""The record id the mock registry gives a fixture DA that names none."""
+	return f"rec-{da_id}"
 
 
 def to_da_reference(payload: dict) -> DAReference:
@@ -329,6 +339,12 @@ def to_da_reference(payload: dict) -> DAReference:
 		position_code=payload.get("position_code"),
 		reports_to=payload.get("reports_to"),
 		passout_year=_int(payload.get("passout_year")),
+		record_id=payload.get("record_id") or mock_record_id(str(payload["da_id"])),
+		record_status=payload.get("record_status")
+		or ("ACTIVE" if payload.get("active_status") == C.ACTIVE_STATUS_ACTIVE else "INACTIVE"),
+		last_approved_at=payload.get("last_approved_at"),
+		last_approved_by=payload.get("last_approved_by"),
+		source=payload.get("source"),
 		source_version=str(payload["version"]) if payload.get("version") is not None else None,
 		fetched_at=datetime.now(UTC),
 	)

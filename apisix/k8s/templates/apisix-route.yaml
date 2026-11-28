@@ -764,6 +764,7 @@ spec:
       - /v1/da-services/assignments
       - /v1/da-services/assignments/coverage
       - /v1/da-services/assignments/me
+      - /v1/da-services/attendance-punches
       - /v1/da-services/attendance-punches/today
       - /v1/da-services/beneficiary-segments
       - /v1/da-services/crop-sown/geo-level-values

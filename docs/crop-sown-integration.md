@@ -8,15 +8,15 @@ The planning form was read from Postman run `58813371-a25cffbb-4cc0-4ab5-8376-0f
 
 ## Hosts
 
-| Config key | Development value |
-| --- | --- |
-| `crop_registry_staff_url` | `https://staff-crop.development.oanstaging.com` |
-| `crop_registry_master_data_url` | `https://master-data.development.oanstaging.com` |
-| `crop_registry_backend` | `http` on the site that serves the Crop Report. `mock` is the local default. |
+| Where | Key | Development value |
+| --- | --- | --- |
+| **DA Services Settings** | `crop_registry_domain` | `staff-crop.development.oanstaging.com` (or full `https://…` URL). Required. |
+| **DA Services Settings** | `crop_registry_form_register_id` | CropSown `register_id` UUID. Required. |
+| **DA Services Settings** | `master_data_domain` | Master-data host for catalogs (optional; empty → `catalog_loaded: false`). |
+
+Desk **DA Services Settings** owns staff host, register id, and master-data host (same pattern as Farmer / Grievance). There is no `get_all_registers` discovery. Missing crop domain or register id fails closed. Auth is the caller's SSO bearer and CSRF.
 
 `source` and register `tab_id` are caller-supplied. DA requires them when the mode needs them, then forwards to staff; unknown values are rejected by the registry (or by the client when `source` is not a known staff path). They are not Desk allowlists.
-
-`config.example.json` keeps `crop_registry_backend` as `mock`. A copied example does not log in to staff. The serving site must set `http`, the staff URL, the staff username and password, and the master-data URL. An empty master-data URL leaves `catalog_loaded: false` and refuses the geography route.
 
 Login is once per worker, through `da_services/integrations/staff_api`. Later calls reuse the bearer and the matching `X-CSRF-Token` cookie. The envelope sender is `OAN_REGISTRY_API_TEST`. Page size is 100.
 
@@ -32,7 +32,7 @@ The Crop Report page has five tabs. The staff register has four intake forms.
 | Sowing, including infestation when that form contains it | Crop sowing intake | `sowing` |
 | Harvesting | Crop harvesting intake | `harvesting` |
 
-`GET /crop-sown/intake-form` requires query `form`. There is no Planning fallback. Identity and location are sections of the planning form, verified on the planning run. They are not a fifth form. `crop_registry_form_name_contains` still defaults other client paths that omit `form_name` (for example save without body `form`).
+`GET /crop-sown/intake-form` requires query `form`. There is no Planning fallback. Identity and location are sections of the planning form, verified on the planning run. They are not a fifth form. Save paths that omit body `form` default to the planning form.
 
 ## Calls for one open form
 
@@ -46,8 +46,7 @@ sequenceDiagram
 
   Agent->>DA: GET /crop-sown/intake-form?form=planning
   DA->>Crop: describe_intake_form
-  Crop->>Staff: get_all_registers
-  Staff-->>Crop: CropSown
+  Note over Crop: register_id from DA Services Settings
   Crop->>Staff: get_all_intake_forms
   Staff-->>Crop: four intake forms
   Crop->>Staff: render_intake_form
@@ -75,7 +74,7 @@ Prefix: `/api/v1/da-services`
 
 | Route | Staff or master-data call |
 | --- | --- |
-| `GET /crop-sown/intake-form?form=` | Required `form`. Discover CropSown, render that form only, `get_register_fields`, then every catalog page for that form |
+| `GET /crop-sown/intake-form?form=` | Required `form`. Configured CropSown `register_id`, then `get_all_intake_forms`, render that form only, `get_register_fields`, then every catalog page for that form |
 | `GET /farmers/{id}/crops?source=submission` | One staff search: `search_in_intake_form_submissions`; response includes `source` |
 | `GET /farmers/{id}/crops?source=register` | One staff search: `search_in_a_register`; rows use `internal_record_id` |
 | `GET /farmers/{id}/crops?submission_id=` | `get_intake_form_submission` and submission `get_tab_records` |

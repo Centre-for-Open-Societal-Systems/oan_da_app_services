@@ -1,11 +1,20 @@
-"""Farmer Registry register search, called with the signed-in user's bearer token and CSRF token.
+"""Farmer Registry reads, called with the signed-in user's bearer token and CSRF token.
 
-``POST {farmer_registry_domain}/register-data/search_in_a_register`` with the
-``request_payload.register_id`` of ``farmer_registry_form_register_id`` (DA Services Settings).
-The caller's ``pagination_request`` (``current_page``, ``page_size``, ``filter_by``,
-``search_text``) is sent as given. Each row of the answer's ``response_payload`` has its
-``display_fields`` list turned into plain keys (``field_name`` -> ``value``); the
-``pagination_response`` is returned unchanged.
+The domain is ``farmer_registry_domain`` and the register ``farmer_registry_form_register_id``
+of DA Services Settings.
+
+- ``search_in_a_register``: ``POST /register-data/search_in_a_register`` with
+  ``request_payload.register_id``. The caller's ``pagination_request`` (``current_page``,
+  ``page_size``, ``filter_by``, ``search_text``) is sent as given.
+- ``get_subject_record``: ``POST /register-data/get_subject_record`` with the register and
+  the farmer's ``internal_record_id``: the farmer's record.
+- ``get_tab_records``: ``POST /register-data/get_tab_records`` with the register, the
+  farmer's ``internal_record_id`` and a tab id: the records of that tab (``LAND_TAB_ID``
+  for the farmer's land).
+
+A ``display_fields`` list in the answer's ``response_payload`` is turned into plain keys
+(``field_name`` -> ``value``); the rest of the payload and the ``pagination_response`` are
+returned unchanged.
 """
 
 from __future__ import annotations
@@ -20,6 +29,10 @@ from .errors import FarmerRegistryError
 
 SETTINGS = "DA Services Settings"
 SEARCH_PATH = "/register-data/search_in_a_register"
+SUBJECT_RECORD_PATH = "/register-data/get_subject_record"
+TAB_RECORDS_PATH = "/register-data/get_tab_records"
+# The Lands tab of the Farmer register.
+LAND_TAB_ID = "farmer_land_tab"
 DEFAULT_SENDER_APP = "OAN_REGISTRY_API_TEST"
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 1000
@@ -71,6 +84,23 @@ def flatten_display_fields(row):
 	return out
 
 
+def _plain_keys(payload):
+	"""``payload`` with ``display_fields`` turned into keys, on the record or on each row."""
+	if isinstance(payload, list):
+		return [flatten_display_fields(row) for row in payload]
+	return flatten_display_fields(payload)
+
+
+# pagination_request of a read by id: the registry wants one, with nothing to search or filter.
+_BY_ID = {
+	"current_page": 1,
+	"page_size": DEFAULT_PAGE_SIZE,
+	"search_text": "",
+	"sort_by": "",
+	"filter_by": "",
+}
+
+
 class FarmerRegistryClient:
 	def __init__(
 		self,
@@ -98,30 +128,48 @@ class FarmerRegistryClient:
 		search_text: str = "",
 	) -> tuple[object, dict]:
 		"""One page of the register; returns ``(response_payload, pagination_response)``."""
-		envelope = {
+		envelope = self._envelope(
+			{"register_id": self.register_id},
+			{
+				"current_page": current_page,
+				"page_size": page_size,
+				"filter_by": filter_by or {},
+				"search_text": search_text or "",
+			},
+		)
+		payload, pagination = self._send(SEARCH_PATH, envelope, action="search the register")
+		return _plain_keys(payload), pagination
+
+	def get_subject_record(self, internal_id: str) -> object:
+		"""The farmer's record, by ``internal_record_id``; returns the ``response_payload``."""
+		envelope = self._envelope(
+			{"subject_register_id": self.register_id, "subject_record_id": internal_id}, dict(_BY_ID)
+		)
+		payload, _pagination = self._send(SUBJECT_RECORD_PATH, envelope, action="get the farmer")
+		return _plain_keys(payload)
+
+	def get_tab_records(self, internal_id: str, tab_id: str) -> tuple[object, dict]:
+		"""The records of one tab of a farmer; returns ``(response_payload, pagination_response)``."""
+		envelope = self._envelope(
+			{"subject_register_id": self.register_id, "subject_record_id": internal_id, "tab_id": tab_id},
+			dict(_BY_ID),
+		)
+		payload, pagination = self._send(TAB_RECORDS_PATH, envelope, action="get the farmer's tab")
+		return _plain_keys(payload), pagination
+
+	def _envelope(self, request_payload: dict, pagination_request: dict) -> dict:
+		return {
 			"request_header": {
 				"sender_app_mnemonic": self.sender_app,
 				"sender_app_url": "",
 				"request_id": str(uuid.uuid4()),
 				"request_timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
 			},
-			"request_body": {
-				"request_payload": {"register_id": self.register_id},
-				"pagination_request": {
-					"current_page": current_page,
-					"page_size": page_size,
-					"filter_by": filter_by or {},
-					"search_text": search_text or "",
-				},
-			},
+			"request_body": {"request_payload": request_payload, "pagination_request": pagination_request},
 		}
-		payload, pagination = self._send(self.base_url + SEARCH_PATH, envelope)
-		if isinstance(payload, list):
-			payload = [flatten_display_fields(row) for row in payload]
-		return payload, pagination
 
-	def _send(self, url: str, envelope: dict) -> tuple[object, dict]:
-		action = "search the register"
+	def _send(self, path: str, envelope: dict, *, action: str) -> tuple[object, dict]:
+		url = self.base_url + path
 		# Double submit: a server-to-server call has no browser cookie, so the CSRF value
 		# goes in the header and, with the same value, in the cookie.
 		try:

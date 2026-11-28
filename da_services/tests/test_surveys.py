@@ -15,7 +15,7 @@ from openpyxl import load_workbook
 from da_services.api.v1 import surveys as api
 from da_services.services import constants as C
 from da_services.services import surveys as svc
-from da_services.tests.fixtures import create_administrative_areas, ensure_doctype_schema
+from da_services.tests.fixtures import create_administrative_areas, ensure_doctype_schema, set_da_registry_id
 
 DA1 = "srv-da1@da.local"  # DA-000001, ET04-W01
 DA2 = "srv-da2@da.local"  # DA-000002, ET04-W01
@@ -61,7 +61,7 @@ QUESTIONS = [
 	{"prompt": "Did you apply it?", "type": "single", "options": ["Yes, fully", "Partly", "No"]},
 	{"prompt": "Which crops?", "type": "multi", "options": "Teff, Maize, Wheat", "required": False},
 ]
-ANSWERS = {"p4": "4", "p5": "Yes, fully", "p6": ["Teff", "Maize"]}
+ANSWERS = {"p1": "4", "p2": "Yes, fully", "p3": ["Teff", "Maize"]}
 
 
 class TestSurveys(IntegrationTestCase):
@@ -82,6 +82,9 @@ class TestSurveys(IntegrationTestCase):
 		_grant(SUP, C.ROLE_SUPERVISOR, region_scope="ET04", woreda_scope="ET04-W01")
 		_grant(SUP_OTHER, C.ROLE_SUPERVISOR, region_scope="ET03", woreda_scope="ET03-W02")
 		_grant(EXEC, C.ROLE_EXECUTIVE, region_scope="ET04")
+		set_da_registry_id(DA1, "DA-000001")
+		set_da_registry_id(DA2, "DA-000002")
+		set_da_registry_id(DA3, "DA-000004")
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -90,6 +93,7 @@ class TestSurveys(IntegrationTestCase):
 	def _clean(self):
 		frappe.db.delete("DA Survey Response")
 		frappe.db.delete("DA Survey Template")
+		frappe.db.delete("DA Notification", {"event": "survey.published"})
 		frappe.db.delete("DA Task", {"generated_by_rule": ("like", f"{svc.ASSIGNMENT_RULE_PREFIX}%")})
 		frappe.db.delete("DA RBAC Assignment", {"user": ("in", ALL_USERS)})
 
@@ -124,7 +128,7 @@ class TestSurveys(IntegrationTestCase):
 
 	# -- POST /surveys/templates ---------------------------------------------------
 
-	def test_create_saves_template_with_standard_questions_and_area(self):
+	def test_create_saves_only_the_written_questions_and_area(self):
 		survey_id = self._create()
 		doc = frappe.get_doc("DA Survey Template", survey_id)
 		self.assertEqual(doc.status, "Open")
@@ -132,9 +136,11 @@ class TestSurveys(IntegrationTestCase):
 		self.assertEqual(doc.created_by_user, SUP)
 		# The Supervisor's only Woreda is used, Region and Zone come from it.
 		self.assertEqual((doc.region, doc.zone, doc.woreda), ("ET04", "ET04-Z01", "ET04-W01"))
-		self.assertEqual([p.parameter_id for p in doc.parameters], ["p1", "p2", "p3", "p4", "p5", "p6"])
+		# Only the Supervisor's questions: no consent, Farmer ID or Kebele rows.
+		self.assertEqual([p.parameter_id for p in doc.parameters], ["p1", "p2", "p3"])
+		self.assertEqual([p.response_type for p in doc.parameters], ["rating", "single", "multi"])
 		self.assertEqual(doc.language, "English, Amharic")
-		multi = doc.parameters[5]
+		multi = doc.parameters[2]
 		self.assertEqual([multi.option_1, multi.option_2, multi.option_3], ["Teff", "Maize", "Wheat"])
 
 	def test_create_outside_own_woreda_or_by_a_da_is_denied(self):
@@ -143,12 +149,35 @@ class TestSurveys(IntegrationTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			self._create(user=DA1, woreda="ET04-W01")
 
-	def test_create_with_selected_das_assigns_them(self):
-		survey_id = self._create(assignmentMode="Selected", assignedDaIds=["DA-000002"])
+	def test_create_with_selected_users_assigns_them(self):
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
 		with _as(SUP):
 			out = svc.get_template(survey_id)
 		self.assertEqual(out["assignmentMode"], "Selected")
+		self.assertEqual(out["assignedUsers"], [DA2])
 		self.assertEqual(out["assignedDaIds"], ["DA-000002"])
+
+	def _notified(self, survey_id) -> set[str]:
+		return set(
+			frappe.get_all(
+				"DA Notification",
+				filters={"event": "survey.published", "reference_name": survey_id},
+				pluck="user",
+			)
+		)
+
+	def test_publish_to_woreda_notifies_every_da_of_the_woreda(self):
+		survey_id = self._create()
+		notified = self._notified(survey_id)
+		self.assertTrue({DA1, DA2} <= notified, notified)
+		self.assertNotIn(DA3, notified)  # ET03-W02
+		row = frappe.get_last_doc("DA Notification", filters={"user": DA1, "reference_name": survey_id})
+		self.assertEqual((row.kind, row.href, row.da_id), ("Task", f"/surveys/{survey_id}", "DA-000001"))
+		self.assertIn("New survey", row.title)
+
+	def test_publish_to_selected_das_notifies_only_them(self):
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
+		self.assertEqual(self._notified(survey_id), {DA2})
 
 	def test_create_api_returns_the_new_id(self):
 		with _as(SUP):
@@ -180,7 +209,7 @@ class TestSurveys(IntegrationTestCase):
 			saved = svc.patch_template(survey_id, {"questions": QUESTIONS[:1]})
 		doc = frappe.get_doc("DA Survey Template", saved)
 		self.assertEqual(saved, survey_id)
-		self.assertEqual(len(doc.parameters), 4)
+		self.assertEqual(len(doc.parameters), 1)
 		self.assertNotEqual(doc.template_version, version)
 
 	def test_patch_questions_after_responses_creates_a_new_version(self):
@@ -189,11 +218,11 @@ class TestSurveys(IntegrationTestCase):
 		with _as(SUP):
 			saved = svc.patch_template(survey_id, {"questions": QUESTIONS[:1]})
 		self.assertNotEqual(saved, survey_id)
-		self.assertEqual(len(frappe.get_doc("DA Survey Template", survey_id).parameters), 6)
-		self.assertEqual(len(frappe.get_doc("DA Survey Template", saved).parameters), 4)
+		self.assertEqual(len(frappe.get_doc("DA Survey Template", survey_id).parameters), 3)
+		self.assertEqual(len(frappe.get_doc("DA Survey Template", saved).parameters), 1)
 
 	def test_patch_assignment_mode_switches(self):
-		survey_id = self._create(assignmentMode="Selected", assignedDaIds=["DA-000002"])
+		survey_id = self._create(assignmentMode="Selected", assignedUsers=[DA2])
 		with _as(SUP):
 			svc.patch_template(survey_id, {"assignmentMode": "Woreda"})
 			self.assertEqual(svc.get_template(survey_id)["assignmentMode"], "Woreda")
@@ -228,20 +257,47 @@ class TestSurveys(IntegrationTestCase):
 
 	# -- GET /surveys[/<id>] (DA) ---------------------------------------------------
 
-	def test_da_lists_every_survey_of_their_woreda(self):
-		# No caller DA-ID: assignment to selected DAs no longer narrows the list.
+	def test_selected_survey_is_listed_for_its_das_only(self):
 		woreda_wide = self._create(name="Woreda wide")
-		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedDaIds=["DA-000002"])
-		for user in (DA1, DA2):
+		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedUsers=[DA2])
+		expected = {DA1: {woreda_wide}, DA2: {woreda_wide, for_da2}, SUP: {woreda_wide, for_da2}}
+		for user, ids in expected.items():
 			with _as(user):
 				rows, _total = svc.list_surveys()
-			self.assertEqual({r["id"] for r in rows}, {woreda_wide, for_da2}, user)
+			self.assertEqual({r["id"] for r in rows}, ids, user)
+
+	def test_da_response_without_da_id_is_collected_by_the_caller(self):
+		survey_id = self._create()
+		row = self._respond(survey_id, user=DA1, da_id=None)
+		self.assertEqual(row.da_id, "DA-000001")
+
+	def test_da_not_selected_cannot_open_or_answer_the_survey(self):
+		for_da2 = self._create(name="Only DA2", assignmentMode="Selected", assignedUsers=[DA2])
+		with _as(DA1), self.assertRaises(frappe.PermissionError):
+			svc.get_survey(for_da2)
+		with self.assertRaises(frappe.PermissionError):
+			self._respond(for_da2, user=DA1)
+
+	def test_da_with_hierarchy_user_permission_sees_the_supervisors_survey(self):
+		"""A DA Hierarchy node gives a DA a User Permission on User for themselves only; the
+		template's Created By (the Supervisor) must not hide it."""
+		survey_id = self._create()
+		perm = frappe.get_doc(
+			{"doctype": "User Permission", "user": DA1, "allow": "User", "for_value": DA1}
+		).insert(ignore_permissions=True)
+		try:
+			with _as(DA1):
+				rows, _total = svc.list_surveys()
+				self.assertIn(survey_id, {r["id"] for r in rows})
+				self.assertEqual(svc.get_survey(survey_id)["id"], survey_id)
+		finally:
+			frappe.delete_doc("User Permission", perm.name, ignore_permissions=True, force=True)
 
 	def test_get_survey_returns_parameters_and_denies_other_woreda(self):
 		survey_id = self._create()
 		with _as(DA1):
 			out = svc.get_survey(survey_id)
-		self.assertEqual(len(out["parameters"]), 6)
+		self.assertEqual(len(out["parameters"]), 3)
 		with _as(DA3), self.assertRaises(frappe.PermissionError):
 			svc.get_survey(survey_id)
 
@@ -256,7 +312,7 @@ class TestSurveys(IntegrationTestCase):
 		)
 		self.assertEqual(
 			[(a.parameter_id, a.answer_text, a.answer_rating) for a in row.answers],
-			[("p4", "4", 4), ("p5", "Yes, fully", 0), ("p6", "Teff", 0), ("p6", "Maize", 0)],
+			[("p1", "4", 4), ("p2", "Yes, fully", 0), ("p3", "Teff", 0), ("p3", "Maize", 0)],
 		)
 
 	def test_da_saves_within_their_woreda_only(self):
@@ -309,7 +365,7 @@ class TestSurveys(IntegrationTestCase):
 	def test_results_aggregate_answers(self):
 		survey_id = self._create()
 		self._respond(survey_id, user=DA1, farmer_id="FR-000101")
-		self._respond(survey_id, user=DA2, farmer_id="FR-000102", answers={"p4": "2", "p5": "No"})
+		self._respond(survey_id, user=DA2, farmer_id="FR-000102", answers={"p1": "2", "p2": "No"})
 		self._respond(
 			survey_id, user=DA2, farmer_id="FR-000103", consent="declined", answers={}, sync_state="Declined"
 		)

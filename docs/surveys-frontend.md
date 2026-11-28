@@ -56,9 +56,9 @@ Results analysis copy on the page (“Part 2 preview”) stays a UI note. Basic 
 | Question prompt / type / choices / required | `questions[{ prompt, type, options, required }]` — `options` may stay comma-separated string |
 | Translations (Amharic / Afaan Oromoo) | `questions[].translations` — e.g. `{ "Amharic": "...", "Afaan Oromoo": "..." }`; English stays in `prompt` |
 | Assignment mode | `assignmentMode`: `Woreda` (default, every DA in the Woreda) or `Selected` |
-| Selected DAs | `assignedDaIds: string[]` — required when `assignmentMode = Selected`; every DA must belong to the Woreda |
+| Selected DAs | `assignedUsers: string[]` — required when `assignmentMode = Selected`; Frappe User Link emails from FE |
 
-Do not send consent / Farmer ID / Kebele questions. The API prepends them as `p1`–`p3`. Only custom question prompts accept `translations`; language keys are normalised to `Amharic` / `Afaan Oromoo` (aliases such as `am` / `om` are accepted). English is not duplicated in `translations`.
+Do not send consent / Farmer ID / Kebele questions: the template holds only the written questions (`p1`, `p2`, …). The capture form takes consent as its own first step and sends it as the response's `consent`; Farmer ID and Kebele come from the picked farmer. Only custom question prompts accept `translations`; language keys are normalised to `Amharic` / `Afaan Oromoo` (aliases such as `am` / `om` are accepted). English is not duplicated in `translations`.
 
 Client validation in `templateErrors` matches the API. On success, drop Zustand; append or refetch `GET /surveys`.
 
@@ -82,10 +82,11 @@ The list and detail payloads use the same camelCase names the UI already types:
 | `status` | `Open` \| `Closing soon` \| `Closed` |
 | `estMinutes` | `estMinutes` |
 | `assignmentMode` | `Woreda` \| `Selected` |
-| `assignedDaIds` | Active DA-IDs; present on template list/detail and create/patch responses |
+| `assignedUsers` | Active User Links from assignment marker Tasks; present on template list/detail |
+| `assignedDaIds` | Echo of marker Task `da_id` when `fetch_from: user.da_registry_id` filled it (may be empty) |
 | `parameters[]` | `id`, `order`, `prompt`, `type`, `required`, `options?`, `helper?`, `prefill?`, `translations?`, `condition?`. `translations` maps `Amharic` / `Afaan Oromoo` to text; `prompt` is English. |
 
-Filters on the list: `status`, `type`, `language`, `woreda`, `q`. A DA only receives `Selected` surveys where their DA-ID is actively assigned; an unassigned DA gets 403 on detail/capture.
+Filters on the list: `status`, `type`, `language`, `woreda`, `q`. List/detail scope is Role DocPerm + User Permissions (Woreda); a DA sees a Selected-mode survey only when they are one of its `assignedUsers` (Supervisors and above see all). Agent rows (`GET /agents`, `GET /agents/my-team`) carry `user`, the DA's portal User, to send as `assignedUsers`.
 
 ## Farmer picker and prefill
 
@@ -202,7 +203,7 @@ sequenceDiagram
 | Edit window / close survey | `PATCH /surveys/templates/{id}` |
 | Change questions with no collected responses | `PATCH` with `questions`; updates the existing template and bumps its version |
 | Change questions after responses exist | `PATCH` with `questions`; creates a new template version with the submitted questions and zero responses. The original template, its questions and existing responses remain unchanged |
-| Change Woreda-wide / selected-DA assignment | `PATCH` with `assignmentMode` / `assignedDaIds` |
+| Change Woreda-wide / selected-DA assignment | `PATCH` with `assignmentMode` / `assignedUsers` |
 | Response list | `GET /surveys/{id}/responses?farmer_id&da_id&region&zone&woreda&kebele` |
 | Basic results | `GET /surveys/{id}/results` |
 

@@ -1,15 +1,8 @@
-"""DA Task use-cases behind the dashboard and the task APIs (data-model 5.5).
+"""DA Task use-cases behind the dashboard, surveys, and visit follow-ups (data-model 5.5).
 
-Who may do what (FSD Appendix D, enforced here, not in the UI):
-
-- Development Agent: create and complete tasks for their own DA-ID only.
-- Supervisor: create and complete tasks for DAs in their Woreda.
-- Executive: read only.
-
-Which rows a list returns: Role permissions, then the user's User Permissions on
-DA Region / Zone / Woreda (the `region` / `zone` / `woreda` Link fields), applied by
-frappe.get_list.
-- Communications Officer: nothing.
+Visibility and create/write access are Frappe DocType Role permissions + User
+Permissions only (no custom Task permission hooks). These services apply request
+filters and product rules only — there is no dedicated Task HTTP API in this change.
 """
 
 from __future__ import annotations
@@ -18,12 +11,9 @@ import frappe
 from frappe import _
 from frappe.utils import get_datetime, getdate, now_datetime
 
-from da_services.services import constants as C
-from da_services.services.da_lookup import get_da_reference
-from da_services.utils.permissions import require_permission
-
 FIELDS = [
 	"name",
+	"user",
 	"da_id",
 	"task_type",
 	"title",
@@ -36,7 +26,9 @@ FIELDS = [
 	"completed_at",
 	"generated_by_rule",
 	"region",
+	"zone",
 	"woreda",
+	"kebele",
 	"client_op_id",
 	"modified",
 ]
@@ -50,21 +42,10 @@ def serialize(doc) -> dict:
 	return out
 
 
-def _resolve_da_for_write(da_id: str | None) -> str:
-	"""The DA-ID a caller may create / change tasks for.
-
-	The DA's registry posting must be inside the caller's scope; get_da_reference
-	applies that rule and audits a refusal.
-	"""
-	if not da_id:
-		frappe.throw(_("da_id is required."), frappe.ValidationError)
-	get_da_reference(da_id)  # raises PermissionError when out of scope
-	return da_id
-
-
 def create_task(
 	*,
 	title: str,
+	user: str | None = None,
 	da_id: str | None = None,
 	task_type: str = "Custom",
 	description: str | None = None,
@@ -74,11 +55,27 @@ def create_task(
 	visit: str | None = None,
 	generated_by_rule: str | None = None,
 	client_op_id: str | None = None,
+	region: str | None = None,
+	zone: str | None = None,
+	woreda: str | None = None,
+	kebele: str | None = None,
 ) -> dict:
-	require_permission("DA Task", "create")
+	"""Create one task. ``user`` is required from the FE.
+
+	No role / scope / permission helpers here — Frappe DocType Role permissions + User Permissions own access.
+	``da_id`` is optional (DocType ``fetch_from: user.da_registry_id`` when present). Body ``da_id`` is
+	legacy/envelope only. Optional geo stamps come from the caller / masters / tests.
+	"""
 	if not (title or "").strip():
 		frappe.throw(_("title is required."), frappe.ValidationError)
-	da_id = _resolve_da_for_write(da_id)
+	user = (user or "").strip()
+	if not user:
+		frappe.throw(_("user is required."), frappe.ValidationError)
+	# ``da_id`` kept for API/envelope compatibility; optional on the row.
+	# Do not require / stamp from User.da_registry_id — DocType fetch_from fills when set.
+	# registry_da = frappe.db.get_value("User", user, "da_registry_id")
+	# if not registry_da:
+	# 	frappe.throw(_("user has no DA Registry ID."), frappe.ValidationError)
 
 	if client_op_id:
 		existing = frappe.db.get_value("DA Task", {"client_op_id": client_op_id}, "name")
@@ -89,7 +86,9 @@ def create_task(
 	doc = frappe.get_doc(
 		{
 			"doctype": "DA Task",
-			"da_id": da_id,
+			"user": user,
+			# Optional: DocType fetch_from fills when User.da_registry_id is set.
+			# "da_id": registry_da,
 			"task_type": task_type or "Custom",
 			"title": title.strip(),
 			"description": description,
@@ -100,36 +99,28 @@ def create_task(
 			"visit": visit,
 			"generated_by_rule": generated_by_rule,
 			"client_op_id": client_op_id,
+			"region": region,
+			"zone": zone,
+			"woreda": woreda,
+			"kebele": kebele,
 		}
 	)
-	doc.insert(ignore_permissions=True)  # scope was checked above; DocPerms stay for Desk
+	doc.insert()
 	return serialize(doc)
 
 
-def _load_in_scope(name: str, ptype: str = "read"):
-	"""The task, when the caller's role and User Permissions allow `ptype` on it."""
-	doc = frappe.get_doc("DA Task", name)
-	require_permission("DA Task", ptype, doc=doc, user=frappe.session.user)
-	return doc
-
-
 def get_task(name: str) -> dict:
-	require_permission("DA Task", "read")
-	return serialize(_load_in_scope(name))
+	return serialize(frappe.get_doc("DA Task", name))
 
 
 def complete_task(name: str) -> dict:
-	require_permission("DA Task", "write")
-	doc = _load_in_scope(name, "write")
-	doc.flags.ignore_permissions = True
+	doc = frappe.get_doc("DA Task", name)
 	doc.mark_done()
 	return serialize(doc)
 
 
 def cancel_task(name: str, reason: str | None = None) -> dict:
-	# No permission check: any signed-in user may cancel a task.
 	doc = frappe.get_doc("DA Task", name)
-	doc.flags.ignore_permissions = True
 	doc.cancel_task(reason)
 	return serialize(doc)
 
@@ -138,20 +129,34 @@ def list_tasks(
 	*,
 	status: str | None = None,
 	due: str | None = None,
+	user: str | None = None,
 	da_id: str | None = None,
+	region: str | None = None,
+	zone: str | None = None,
+	woreda: str | None = None,
+	kebele: str | None = None,
 	limit: int = 50,
 	start: int = 0,
 ) -> tuple[list[dict], int]:
-	"""Tasks the caller may see. Scope comes from the caller's User Permissions via frappe.get_list.
+	"""Tasks visible via Role DocPerm + User Permissions. Optional query args narrow that set.
 
 	`due`: "today" (due today), "overdue" (open and past due), or an ISO date.
 	"""
-	require_permission("DA Task", "read")
 	filters: dict = {}
 	if status:
 		filters["status"] = status
+	if user:
+		filters["user"] = user
 	if da_id:
 		filters["da_id"] = da_id
+	if region:
+		filters["region"] = region
+	if zone:
+		filters["zone"] = zone
+	if woreda:
+		filters["woreda"] = woreda
+	if kebele:
+		filters["kebele"] = kebele
 	if due == "today":
 		d = getdate()
 		filters["due_at"] = ("between", [f"{d} 00:00:00", f"{d} 23:59:59"])
@@ -172,13 +177,11 @@ def list_tasks(
 		limit_page_length=limit,
 		limit_start=start,
 	)
-	# Scoped total: frappe.get_list applies User Permissions; frappe.db.count would not.
-	total = len(frappe.get_list("DA Task", filters=filters, pluck="name", limit_page_length=0))
-	return [serialize(frappe._dict(r)) for r in rows], total
+	return rows, len(rows)
 
 
 def dashboard_counts(da_id: str, from_date=None, to_date=None) -> dict:
-	"""The Tasks tile: open / done in the range, urgent open, due today (data-model 5.5)."""
+	"""Tasks tile counts for ``GET /dashboard/summary`` (data-model 5.5)."""
 	base = {"da_id": da_id}
 	rng = {}
 	if from_date and to_date:

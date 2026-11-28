@@ -1,4 +1,4 @@
-"""Crop Sown read client: mock fixtures, mapper, staff auth, and Staff reads.
+"""Crop Sown HTTP client: mapper, staff auth, and Staff reads.
 
 HTTP calls are stubbed. Nothing in this module contacts the live registry.
 """
@@ -12,10 +12,11 @@ from unittest.mock import Mock, patch
 import frappe
 
 from da_services.api.v1.crop_sown import crop_sown_payload
+from da_services.integrations.crop_registry import get_crop_registry_client
 from da_services.integrations.crop_registry.client import (
 	CropRegistryClientError,
-	CropRegistryError,
 	CropRegistryServerError,
+	_staff_url_and_register_id,
 )
 from da_services.integrations.crop_registry.http import HTTPCropRegistryClient
 from da_services.integrations.crop_registry.intake import (
@@ -27,14 +28,9 @@ from da_services.integrations.crop_registry.intake import (
 	submit_with_metadata,
 )
 from da_services.integrations.crop_registry.mapper import submission_to_crop
-from da_services.integrations.crop_registry.mock import FIXTURE_SUBMISSION_ID, MockCropRegistryClient
 from da_services.integrations.crop_registry.schemas import CropSection, CropSubmission
-from da_services.integrations.staff_api.auth import (
-	_CC_TOKEN_CACHE,
-	_cookie_value,
-	apply_bearer_and_csrf,
-	client_credentials_token,
-)
+from da_services.integrations.staff_api.auth import _cookie_value
+from da_services.services.utils import StaffAPIError
 
 
 def _envelope(payload, *, status="SUCCESS", error=""):
@@ -64,78 +60,16 @@ class _Resp:
 
 
 class TestStaffAuth(unittest.TestCase):
-	def test_client_credentials_and_matching_csrf(self):
-		seen = {}
-
-		def post(url, **kwargs):
-			seen["url"] = url
-			seen["data"] = kwargs["data"]
-			return _Resp(200, {"access_token": "staff-token", "expires_in": 300})
-
-		_CC_TOKEN_CACHE.clear()
-		with patch("da_services.integrations.staff_api.auth.requests.post", post):
-			token = client_credentials_token(
-				{
-					"token_url": "https://keycloak.test/token",
-					"client_id": "da-services",
-					"client_secret": "secret",
-				},
-				5,
-				client_error=CropRegistryClientError,
-				server_error=CropRegistryServerError,
-				log_title="Crop Sown Registry Auth Error",
-			)
-
-		self.assertEqual(token, "staff-token")
-		self.assertEqual(seen["url"], "https://keycloak.test/token")
-		self.assertEqual(seen["data"]["grant_type"], "client_credentials")
-		self.assertEqual(seen["data"]["client_id"], "da-services")
-		headers, cookies = apply_bearer_and_csrf({}, token)
-		self.assertEqual(headers["Authorization"], "Bearer staff-token")
-		self.assertEqual(headers["X-CSRF-Token"], cookies["X-CSRF-Token"])
-
-	def test_keycloak_rejection_is_not_retried_as_success(self):
-		def post(url, **kwargs):
-			return _Resp(401, text="denied")
-
-		_CC_TOKEN_CACHE.clear()
-		with patch("da_services.integrations.staff_api.auth.requests.post", post):
-			with self.assertRaises(CropRegistryClientError) as caught:
-				client_credentials_token(
-					{
-						"token_url": "https://keycloak.test/token",
-						"client_id": "da-services",
-						"client_secret": "secret",
-					},
-					5,
-					client_error=CropRegistryClientError,
-					server_error=CropRegistryServerError,
-					log_title="Crop Sown Registry Auth Error",
-				)
-		self.assertEqual(caught.exception.status_code, 401)
-
 	def test_crop_client_forwards_the_sso_authorization_and_csrf(self):
 		"""Without a token provider the caller's SSO headers are sent as-is."""
 		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
-		client = HTTPCropRegistryClient(
-			staff_url="https://staff-crop.test",
-			keycloak={
-				"token_url": "https://keycloak.test/token",
-				"client_id": "staff-portal",
-				"client_secret": "secret",
-			},
-		)
-		keycloak_post = Mock()
-		with (
-			patch(
-				"da_services.integrations.crop_registry.http.frappe.get_request_header",
-				side_effect=request_headers.get,
-			),
-			patch("da_services.integrations.staff_api.auth.requests.post", keycloak_post),
+		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", register_id="reg-1")
+		with patch(
+			"da_services.integrations.crop_registry.http.frappe.get_request_header",
+			side_effect=request_headers.get,
 		):
 			headers, cookies = client._auth_and_csrf_headers()
 
-		keycloak_post.assert_not_called()
 		self.assertEqual(headers["Authorization"], "Bearer sso-token")
 		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
 		self.assertEqual(headers["Content-Type"], "application/json")
@@ -152,7 +86,7 @@ class TestStaffAuth(unittest.TestCase):
 			seen["cookies"] = kwargs["cookies"]
 			return _Resp(200, _envelope({"submission_id": "sub-1", "draft_status": "FINAL"}))
 
-		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", api_key="unused-key")
+		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", register_id="reg-1")
 		with (
 			patch(
 				"da_services.integrations.crop_registry.http.frappe.get_request_header",
@@ -167,7 +101,7 @@ class TestStaffAuth(unittest.TestCase):
 		self.assertEqual(seen["cookies"], {"X-CSRF-Token": "sso-csrf"})
 
 	def test_missing_sso_header_is_a_401_client_error(self):
-		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", api_key="unused-key")
+		client = HTTPCropRegistryClient(staff_url="https://staff-crop.test", register_id="reg-1")
 		for request_headers in (
 			{"Authorization": "Bearer sso-token"},
 			{"X-CSRF-Token": "sso-csrf"},
@@ -187,25 +121,17 @@ class TestStaffAuth(unittest.TestCase):
 				self.assertEqual(caught.exception.status_code, 401)
 				post.assert_not_called()
 
-	def test_token_provider_takes_precedence_over_request_headers(self):
-		get_header = Mock(return_value="Bearer sso-token")
-		with patch("da_services.integrations.crop_registry.http.frappe.get_request_header", get_header):
+	def test_token_provider_overrides_bearer_but_keeps_fe_csrf(self):
+		request_headers = {"Authorization": "Bearer sso-token", "X-CSRF-Token": "sso-csrf"}
+		with patch(
+			"da_services.integrations.crop_registry.http.frappe.get_request_header",
+			side_effect=request_headers.get,
+		):
 			headers, cookies = _client()._auth_and_csrf_headers()
 
-		get_header.assert_not_called()
 		self.assertEqual(headers["Authorization"], "Bearer cached-token")
-		self.assertEqual(headers["X-CSRF-Token"], cookies["X-CSRF-Token"])
-
-	def test_misconfigured_client_is_rejected(self):
-		with self.assertRaises(CropRegistryError):
-			HTTPCropRegistryClient(staff_url="staff-crop.test", api_key="key")
-		with self.assertRaises(CropRegistryError):
-			HTTPCropRegistryClient(staff_url="https://staff-crop.test")
-		with self.assertRaises(CropRegistryError):
-			HTTPCropRegistryClient(
-				staff_url="https://staff-crop.test",
-				keycloak={"token_url": "https://keycloak.test/token"},
-			)
+		self.assertEqual(headers["X-CSRF-Token"], "sso-csrf")
+		self.assertEqual(cookies, {"X-CSRF-Token": "sso-csrf"})
 
 	def test_cleared_access_cookie_is_ignored(self):
 		class _Headers:
@@ -223,10 +149,24 @@ class TestStaffAuth(unittest.TestCase):
 		self.assertEqual(_cookie_value(response, "X-Access-Token"), "aaa.bbb.ccc")
 
 
-def _client():
-	return HTTPCropRegistryClient(
-		staff_url="https://staff-crop.test",
-		tokens=type("Tokens", (), {"get_token": lambda self: "cached-token"})(),
+_TEST_SSO = {"Authorization": "Bearer unused", "X-CSRF-Token": "test-csrf"}
+
+
+def _client(**overrides):
+	kwargs = {
+		"staff_url": "https://staff-crop.test",
+		"tokens": type("Tokens", (), {"get_token": lambda self: "cached-token"})(),
+		"register_id": "reg-1",
+	}
+	kwargs.update(overrides)
+	return HTTPCropRegistryClient(**kwargs)
+
+
+def _patch_sso(extra_headers: dict | None = None):
+	headers = {**_TEST_SSO, **(extra_headers or {})}
+	return patch(
+		"da_services.integrations.crop_registry.http.frappe.get_request_header",
+		side_effect=headers.get,
 	)
 
 
@@ -515,41 +455,6 @@ class TestCropSownPayload(unittest.TestCase):
 		self.assertEqual(len(result["data"]["intake_forms"]), 1)
 
 
-class TestMockCropRegistry(unittest.TestCase):
-	def test_fixture_submission_and_tabs(self):
-		client = MockCropRegistryClient()
-		crop = client.get_submission(FIXTURE_SUBMISSION_ID)
-
-		self.assertEqual(crop.submission_id, FIXTURE_SUBMISSION_ID)
-		self.assertEqual(crop.draft_status, "FINAL")
-		self.assertEqual(crop.approval_status, "PENDING")
-		self.assertEqual(crop.sections[0].section_register_id, "crop-section-1")
-		self.assertEqual(crop.sections[0].records[0]["local_name"], "Synthetic maize")
-		tabs = client.get_tabs(FIXTURE_SUBMISSION_ID)
-		self.assertEqual(tabs[0]["tab_id"], "crop-tab-1")
-
-	def test_unknown_submission_is_absent(self):
-		client = MockCropRegistryClient()
-		self.assertIsNone(client.get_submission("missing"))
-		self.assertEqual(client.get_tabs("missing"), [])
-
-	def test_list_for_farmer_returns_the_linked_fixture(self):
-		rows = MockCropRegistryClient().list_for_farmer("farmer-1", source="register")
-		self.assertEqual(rows[0]["link_internal_record_id"], "farmer-1")
-		self.assertEqual(rows[0]["record_name"], "Synthetic maize")
-		self.assertNotIn("location", rows[0])
-
-	def test_mock_register_tab_returns_tabs(self):
-		from da_services.integrations.crop_registry.mock import FIXTURE_INTERNAL_RECORD_ID
-
-		detail = MockCropRegistryClient().get_register_tab(
-			FIXTURE_INTERNAL_RECORD_ID, "cropsown_cropsown_tab"
-		)
-		self.assertEqual(detail["tab_id"], "cropsown_cropsown_tab")
-		self.assertNotIn("location", detail)
-		self.assertEqual(detail["tabs"][0]["tab_id"], "cropsown_cropsown_tab")
-
-
 class TestCropMapper(unittest.TestCase):
 	def test_maps_verified_read_fields_and_skips_bad_sections(self):
 		crop = submission_to_crop(
@@ -572,6 +477,11 @@ class TestCropMapper(unittest.TestCase):
 
 
 class TestHttpReadPath(unittest.TestCase):
+	def setUp(self):
+		self._sso = _patch_sso()
+		self._sso.start()
+		self.addCleanup(self._sso.stop)
+
 	def test_get_submission_posts_the_verified_envelope(self):
 		seen = {}
 
@@ -603,7 +513,8 @@ class TestHttpReadPath(unittest.TestCase):
 		self.assertEqual(body["request_body"]["request_payload"], {"submission_id": "sub-1"})
 		self.assertEqual(body["request_body"]["pagination_request"]["filter_by"], {})
 		self.assertEqual(seen["headers"]["Authorization"], "Bearer cached-token")
-		self.assertEqual(seen["cookies"]["X-CSRF-Token"], seen["headers"]["X-CSRF-Token"])
+		self.assertEqual(seen["headers"]["X-CSRF-Token"], "test-csrf")
+		self.assertEqual(seen["cookies"], {"X-CSRF-Token": "test-csrf"})
 		self.assertEqual(crop.draft_status, "FINAL")
 		self.assertEqual(crop.sections[0].records[0]["local_name"], "Teff")
 
@@ -677,14 +588,12 @@ class TestHttpReadPath(unittest.TestCase):
 			with self.assertRaises(CropRegistryServerError):
 				_client().get_submission("sub-1")
 
-	def test_tabs_follow_discovery_then_read_each_tab(self):
+	def test_tabs_use_configured_register_then_read_each_tab(self):
 		calls = []
 
 		def post(url, **kwargs):
 			payload = kwargs["json"]["request_body"]["request_payload"]
 			calls.append((url, payload))
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if url.endswith("/intake-form-metadata/get_all_intake_forms"):
 				return _Resp(
 					200,
@@ -704,10 +613,9 @@ class TestHttpReadPath(unittest.TestCase):
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
 			tabs = _client().get_tabs("sub-1")
 
-		self.assertEqual(calls[0][1], {})
-		self.assertEqual(calls[1][1], {"register_id": "reg-1"})
-		self.assertEqual(calls[2][1], {"form_id": "form-1"})
-		self.assertEqual(calls[3][1], {"submission_id": "sub-1", "tab_id": "tab-1"})
+		self.assertEqual(calls[0][1], {"register_id": "reg-1"})
+		self.assertEqual(calls[1][1], {"form_id": "form-1"})
+		self.assertEqual(calls[2][1], {"submission_id": "sub-1", "tab_id": "tab-1"})
 		self.assertEqual(
 			tabs, [{"tab_id": "tab-1", "records": [{"section_register_id": "sec-1", "records": []}]}]
 		)
@@ -722,8 +630,6 @@ class TestHttpReadPath(unittest.TestCase):
 			if "search_in_" in url:
 				seen["search_payload"] = payload
 				seen["search_text"] = pagination["search_text"]
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if url.endswith("/intake-form-data/get_intake_form_submission"):
 				raise AssertionError("list must not re-fetch submissions for location")
 			body = _envelope(
@@ -746,8 +652,9 @@ class TestHttpReadPath(unittest.TestCase):
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
 			rows = _client().list_for_farmer("FR-427495614351", source="submission")
 
-		self.assertIn(
-			"https://staff-crop.test/intake-form-data/search_in_intake_form_submissions", seen["urls"]
+		self.assertEqual(
+			seen["urls"],
+			["https://staff-crop.test/intake-form-data/search_in_intake_form_submissions"],
 		)
 		self.assertNotIn("https://staff-crop.test/register-data/search_in_a_register", seen["urls"])
 		self.assertEqual(seen["search_payload"], {"register_id": "reg-1"})
@@ -762,8 +669,6 @@ class TestHttpReadPath(unittest.TestCase):
 		def post(url, **kwargs):
 			seen["urls"].append(url)
 			seen["search_text"].append(kwargs["json"]["request_body"]["pagination_request"]["search_text"])
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if "search_in_intake_form_submissions" in url:
 				return _Resp(
 					200,
@@ -784,12 +689,9 @@ class TestHttpReadPath(unittest.TestCase):
 
 		self.assertEqual(
 			seen["urls"],
-			[
-				"https://staff-crop.test/register-metadata/get_all_registers",
-				"https://staff-crop.test/intake-form-data/search_in_intake_form_submissions",
-			],
+			["https://staff-crop.test/intake-form-data/search_in_intake_form_submissions"],
 		)
-		self.assertEqual(seen["search_text"], ["", "FR-427495614351"])
+		self.assertEqual(seen["search_text"], ["FR-427495614351"])
 		self.assertEqual([row["submission_id"] for row in rows], ["sub-approved"])
 		self.assertNotIn("location", rows[0])
 
@@ -798,8 +700,6 @@ class TestHttpReadPath(unittest.TestCase):
 
 		def post(url, **kwargs):
 			seen["urls"].append(url)
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if "search_in_a_register" in url:
 				return _Resp(
 					200,
@@ -820,10 +720,7 @@ class TestHttpReadPath(unittest.TestCase):
 
 		self.assertEqual(
 			seen["urls"],
-			[
-				"https://staff-crop.test/register-metadata/get_all_registers",
-				"https://staff-crop.test/register-data/search_in_a_register",
-			],
+			["https://staff-crop.test/register-data/search_in_a_register"],
 		)
 		self.assertEqual(rows[0]["internal_record_id"], "crop-2")
 
@@ -833,8 +730,6 @@ class TestHttpReadPath(unittest.TestCase):
 		def post(url, **kwargs):
 			seen["urls"].append(url)
 			payload = kwargs["json"]["request_body"]["request_payload"]
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if url.endswith("/register-data/get_tab_records"):
 				seen["payload"] = payload
 				return _Resp(
@@ -855,10 +750,7 @@ class TestHttpReadPath(unittest.TestCase):
 
 		self.assertEqual(
 			seen["urls"],
-			[
-				"https://staff-crop.test/register-metadata/get_all_registers",
-				"https://staff-crop.test/register-data/get_tab_records",
-			],
+			["https://staff-crop.test/register-data/get_tab_records"],
 		)
 		self.assertEqual(
 			seen["payload"],
@@ -884,11 +776,7 @@ class TestHttpReadPath(unittest.TestCase):
 			self.assertEqual(payload, {"register_id": "crop-reg-fixed"})
 			return _Resp(200, _envelope([]))
 
-		client = HTTPCropRegistryClient(
-			staff_url="https://staff-crop.test",
-			tokens=type("Tokens", (), {"get_token": lambda self: "cached-token"})(),
-			register_id="crop-reg-fixed",
-		)
+		client = _client(register_id="crop-reg-fixed")
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
 			self.assertEqual(client.list_for_farmer("farmer-1", reg_id="FR-1", source="register"), [])
 
@@ -897,13 +785,42 @@ class TestHttpReadPath(unittest.TestCase):
 			["https://staff-crop.test/register-data/search_in_a_register"],
 		)
 
-	def test_ambiguous_register_is_rejected(self):
-		def post(url, **kwargs):
-			return _Resp(200, _envelope([{"register_mnemonic": "Other", "register_id": "reg-x"}]))
+	def test_settings_supply_domain_and_register_id(self):
+		settings = frappe._dict(
+			crop_registry_domain="staff-crop.example.org",
+			crop_registry_form_register_id="settings-reg",
+		)
+		with patch(
+			"da_services.integrations.crop_registry.client.frappe.db.get_value",
+			return_value=settings,
+		):
+			staff_url, register_id = _staff_url_and_register_id()
+		self.assertEqual(staff_url, "https://staff-crop.example.org")
+		self.assertEqual(register_id, "settings-reg")
 
-		with patch("da_services.integrations.crop_registry.http.requests.post", post):
-			with self.assertRaises(CropRegistryClientError):
-				_client().get_tabs("sub-1")
+	def test_factory_fails_closed_without_settings(self):
+		empty = frappe._dict(crop_registry_domain="", crop_registry_form_register_id="")
+		with patch(
+			"da_services.integrations.crop_registry.client.frappe.db.get_value",
+			return_value=empty,
+		):
+			with self.assertRaises(StaffAPIError) as ctx:
+				get_crop_registry_client()
+		self.assertEqual(ctx.exception.kind, "config")
+		self.assertIn("Crop Registry Domain", str(ctx.exception))
+
+	def test_factory_fails_closed_without_register_id(self):
+		partial = frappe._dict(
+			crop_registry_domain="staff-crop.example.org",
+			crop_registry_form_register_id="",
+		)
+		with patch(
+			"da_services.integrations.crop_registry.client.frappe.db.get_value",
+			return_value=partial,
+		):
+			with self.assertRaises(StaffAPIError) as ctx:
+				get_crop_registry_client()
+		self.assertIn("Crop Registry Form Register ID", str(ctx.exception))
 
 
 def _section(**overrides):
@@ -918,6 +835,11 @@ def _section(**overrides):
 
 
 class TestIntakeContract(unittest.TestCase):
+	def setUp(self):
+		self._sso = _patch_sso()
+		self._sso.start()
+		self.addCleanup(self._sso.stop)
+
 	def test_section_register_id_selects_the_section(self):
 		sections = [
 			_section(section_id="section-1", section_register_id="0c0343ca"),
@@ -1134,8 +1056,6 @@ class TestIntakeContract(unittest.TestCase):
 		def post(url, **kwargs):
 			payload = kwargs["json"]["request_body"]["request_payload"]
 			calls.append((url, payload))
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if url.endswith("/intake-form-metadata/get_all_intake_forms"):
 				return _Resp(
 					200,
@@ -1301,6 +1221,11 @@ def _paged(payload, pages):
 
 
 class TestCropRenderContract(unittest.TestCase):
+	def setUp(self):
+		self._sso = _patch_sso()
+		self._sso.start()
+		self.addCleanup(self._sso.stop)
+
 	def test_catalog_reads_every_page(self):
 		seen = []
 
@@ -1319,11 +1244,7 @@ class TestCropRenderContract(unittest.TestCase):
 				)
 			raise AssertionError(url)
 
-		client = HTTPCropRegistryClient(
-			staff_url="https://staff-crop.test",
-			tokens=type("Tokens", (), {"get_token": lambda self: "cached-token"})(),
-			master_data_url="https://master-data.test",
-		)
+		client = _client(master_data_url="https://master-data.test")
 		with patch("da_services.integrations.crop_registry.http.requests.post", post):
 			values = client._attribute_values("CROP_COMMODITY")
 
@@ -1335,8 +1256,6 @@ class TestCropRenderContract(unittest.TestCase):
 
 		def post(url, **kwargs):
 			payload = kwargs["json"]["request_body"]["request_payload"]
-			if url.endswith("/register-metadata/get_all_registers"):
-				return _Resp(200, _envelope([{"register_mnemonic": "CropSown", "register_id": "reg-1"}]))
 			if url.endswith("/intake-form-metadata/get_all_intake_forms"):
 				return _Resp(
 					200,
